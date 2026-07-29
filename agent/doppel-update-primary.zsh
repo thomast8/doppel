@@ -20,9 +20,10 @@ log_message() {
 }
 
 # Any main process from the primary or an instance means the machine is in
-# active use; skip and let the next scheduled run try again.
-if /usr/bin/pgrep -f "Contents/MacOS/ChatGPT" >/dev/null 2>&1; then
-    log_message "Skipped: a ChatGPT instance is running."
+# active use — and a running doppel-engine means a rebuild is copying from the
+# primary right now; skip and let the next scheduled run try again.
+if /usr/bin/pgrep -f "Contents/MacOS/ChatGPT|doppel-engine.zsh" >/dev/null 2>&1; then
+    log_message "Skipped: a ChatGPT instance or an instance rebuild is running."
     exit 0
 fi
 

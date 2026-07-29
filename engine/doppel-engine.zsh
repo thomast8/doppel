@@ -11,7 +11,7 @@
 set -u
 setopt PIPE_FAIL
 
-readonly ENGINE_VERSION="8"
+readonly ENGINE_VERSION="9"
 readonly ASSET_ROOT="${DOPPEL_ASSET_ROOT:-${0:A:h}}"
 readonly CONFIG_FILE="$ASSET_ROOT/instance-config.zsh"
 
@@ -298,7 +298,9 @@ launch_instance() {
 
     validate_primary
     local lock staging timestamp backup_root backup
-    lock="$(acquire_rebuild_lock)"
+    # The exit inside acquire_rebuild_lock only kills the $(...) subshell;
+    # without this status check a concurrent rebuild would proceed unlocked.
+    lock="$(acquire_rebuild_lock)" || exit 1
     timestamp="$(/bin/date '+%Y%m%d-%H%M%S')"
     staging="$STATE_ROOT/Staging/$DOPPEL_DISPLAY_NAME.$version.$timestamp.$$.app"
     build_instance "$staging" "$version" "$executable_hash"
@@ -310,8 +312,14 @@ launch_instance() {
         /bin/mv "$app" "$backup" || fail_closed "The existing instance could not be preserved as a rollback backup."
     fi
     if ! /bin/mv "$staging" "$app"; then
-        [[ -e "$backup" ]] && /bin/mv "$backup" "$app" 2>/dev/null
-        fail_closed "Installing the rebuilt instance failed; the previous app was restored."
+        if [[ -e "$backup" ]]; then
+            if /bin/mv "$backup" "$app" 2>/dev/null; then
+                fail_closed "Installing the rebuilt instance failed; the previous app was restored."
+            else
+                fail_closed "Installing the rebuilt instance failed AND the previous app could not be restored; recover it manually from $backup"
+            fi
+        fi
+        fail_closed "Installing the rebuilt instance failed."
     fi
 
     [[ -e "$backup" ]] && "$LSREGISTER" -u "$backup" >/dev/null 2>&1 || true

@@ -27,7 +27,9 @@ struct MenuContent: View {
         ForEach(store.instances) { instance in
             Menu(instance.name) {
                 Button("Launch") { store.launch(instance) }
+                    .disabled(store.busy.contains(instance.id))
                 Button("Rebuild") { store.rebuild(instance) }
+                    .disabled(store.busy.contains(instance.id))
                 if store.busy.contains(instance.id) {
                     Text("Working…")
                 }
@@ -39,8 +41,8 @@ struct MenuContent: View {
             NSApp.activate(ignoringOtherApps: true)
         }
         Button("Refresh") { store.reload() }
-        if let message = store.lastError {
-            Text(message).foregroundStyle(.red)
+        ForEach(store.errors.sorted(by: { $0.key < $1.key }), id: \.key) { key, message in
+            Text("\(key): \(message)").foregroundStyle(.red)
         }
         Divider()
         Button("Quit Doppel") { NSApplication.shared.terminate(nil) }

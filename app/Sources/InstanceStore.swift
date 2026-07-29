@@ -14,7 +14,9 @@ struct Instance: Identifiable {
 final class InstanceStore: ObservableObject {
     @Published var instances: [Instance] = []
     @Published var busy: Set<String> = []
-    @Published var lastError: String?
+    /// Failures keyed by what failed (instance slug, "create", "list", "cli"),
+    /// so one instance's error is not wiped by starting work on another.
+    @Published var errors: [String: String] = [:]
     @Published var primaryInstalled = false
 
     static let primaryAppPath = "/Applications/ChatGPT.app"
@@ -42,11 +44,12 @@ final class InstanceStore: ObservableObject {
     }
 
     func reload() {
-        lastError = nil
+        errors["list"] = nil
+        errors["cli"] = nil
         primaryInstalled = FileManager.default.fileExists(atPath: Self.primaryAppPath)
         guard let cli = discoveredCLI else {
             instances = []
-            lastError = "doppel CLI not found; set the DOPPEL_CLI environment variable"
+            errors["cli"] = "doppel CLI not found; set the DOPPEL_CLI environment variable"
             return
         }
         Task.detached { [weak self] in
@@ -55,7 +58,7 @@ final class InstanceStore: ObservableObject {
                 guard let self else { return }
                 switch result {
                 case .failure(let message):
-                    self.lastError = message
+                    self.errors["list"] = message
                 case .success(let stdout):
                     self.instances = Self.parsePorcelain(stdout).sorted { $0.name < $1.name }
                 }
@@ -119,19 +122,19 @@ final class InstanceStore: ObservableObject {
     private func runCLI(_ arguments: [String], busyKey: String,
                         completion: (@MainActor (String?) -> Void)? = nil) {
         guard let cli = discoveredCLI else {
-            lastError = "doppel CLI not found; set the DOPPEL_CLI environment variable"
-            completion?(lastError)
+            errors["cli"] = "doppel CLI not found; set the DOPPEL_CLI environment variable"
+            completion?(errors["cli"])
             return
         }
         busy.insert(busyKey)
-        lastError = nil
+        errors[busyKey] = nil
         Task.detached { [weak self] in
             let result = Self.runProcess(cli: cli, arguments: arguments)
             let failure: String?
             if case .failure(let message) = result { failure = message } else { failure = nil }
             await MainActor.run { [weak self] in
                 self?.busy.remove(busyKey)
-                if let failure { self?.lastError = failure }
+                if let failure { self?.errors[busyKey] = failure }
                 completion?(failure)
             }
         }
