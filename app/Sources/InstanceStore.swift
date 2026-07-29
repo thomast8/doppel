@@ -14,6 +14,10 @@ final class InstanceStore: ObservableObject {
     @Published var instances: [Instance] = []
     @Published var busy: Set<String> = []
     @Published var lastError: String?
+    @Published var primaryInstalled = false
+
+    static let primaryAppPath = "/Applications/ChatGPT.app"
+    static let primaryDownloadURL = URL(string: "https://chatgpt.com/features/desktop/")!
 
     private let instancesRoot = FileManager.default
         .homeDirectoryForCurrentUser
@@ -34,6 +38,7 @@ final class InstanceStore: ObservableObject {
 
     func reload() {
         lastError = nil
+        primaryInstalled = FileManager.default.fileExists(atPath: Self.primaryAppPath)
         var found: [Instance] = []
         let dirs = (try? FileManager.default.contentsOfDirectory(
             at: instancesRoot, includingPropertiesForKeys: nil)) ?? []
@@ -57,11 +62,20 @@ final class InstanceStore: ObservableObject {
     }
 
     func launch(_ instance: Instance) {
-        runCLI(["launch", instance.name], for: instance)
+        runCLI(["launch", instance.name], busyKey: instance.id)
     }
 
     func rebuild(_ instance: Instance) {
-        runCLI(["rebuild", instance.name], for: instance)
+        runCLI(["rebuild", instance.name], busyKey: instance.id)
+    }
+
+    /// Creates an instance from just a name and a tint color; the CLI derives
+    /// bundle id, URL scheme, and data directories from the name.
+    func create(name: String, tintHex: String, completion: @escaping (String?) -> Void) {
+        runCLI(["create", "--name", name, "--tint", tintHex], busyKey: "create") { [weak self] failure in
+            if failure == nil { self?.reload() }
+            completion(failure)
+        }
     }
 
     private func firstQuotedValue(for key: String, in text: String) -> String? {
@@ -71,8 +85,9 @@ final class InstanceStore: ObservableObject {
         return nil
     }
 
-    private func runCLI(_ arguments: [String], for instance: Instance) {
-        busy.insert(instance.id)
+    private func runCLI(_ arguments: [String], busyKey: String,
+                        completion: (@MainActor (String?) -> Void)? = nil) {
+        busy.insert(busyKey)
         lastError = nil
         let cli = cliURL
         Task.detached { [weak self] in
@@ -96,8 +111,9 @@ final class InstanceStore: ObservableObject {
             }
             let outcome = failure
             await MainActor.run { [weak self] in
-                self?.busy.remove(instance.id)
+                self?.busy.remove(busyKey)
                 if let outcome { self?.lastError = outcome }
+                completion?(outcome)
             }
         }
     }

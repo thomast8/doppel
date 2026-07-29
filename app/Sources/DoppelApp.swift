@@ -8,11 +8,16 @@ struct DoppelApp: App {
         MenuBarExtra("Doppel", systemImage: "square.on.square") {
             MenuContent(store: store)
         }
+        Window("New Doppel Instance", id: "create-instance") {
+            CreateInstanceView(store: store)
+        }
+        .windowResizability(.contentSize)
     }
 }
 
 struct MenuContent: View {
     @ObservedObject var store: InstanceStore
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         if store.instances.isEmpty {
@@ -29,6 +34,10 @@ struct MenuContent: View {
             }
         }
         Divider()
+        Button("New Instance…") {
+            openWindow(id: "create-instance")
+            NSApp.activate(ignoringOtherApps: true)
+        }
         Button("Refresh") { store.reload() }
         if let message = store.lastError {
             Text(message).foregroundStyle(.red)

@@ -124,13 +124,19 @@ cmd_create() {
             *) die "unknown option: $1" ;;
         esac
     done
-    [[ -n "$name" && -n "$bundle_id" && -n "$scheme" && -n "$profile_root" && -n "$codex_home" ]] || \
-        die "create requires --name, --bundle-id, --scheme, --profile-root, --codex-home"
+    [[ -n "$name" ]] || die "create requires --name"
     [[ -n "$tint" || -n "$icon_override" ]] || die "create requires --tint RRGGBB or --icon path.icns"
 
-    compile_helpers
-    local slug dir
+    # Everything but the name and color can be derived; flags override.
+    local slug
     slug="$(slugify "$name")"
+    [[ -n "$bundle_id" ]] || bundle_id="com.openai.codex.doppel-$slug"
+    [[ -n "$scheme" ]] || scheme="codex-$slug"
+    [[ -n "$profile_root" ]] || profile_root="$HOME/Library/Application Support/$name"
+    [[ -n "$codex_home" ]] || codex_home="$HOME/.codex-$slug"
+
+    compile_helpers
+    local dir
     dir="$(assemble_instance "$slug" "$name" "$bundle_id" "$scheme" "$profile_root" "$codex_home" "$tint" "$icon_override")"
     print -r -- "$install_to" > "$dir/install-root"
     mkdir -p "$install_to"
