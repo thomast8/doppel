@@ -50,6 +50,20 @@ installs the instance into `~/Applications`, and stores the instance definition 
 `~/Library/Application Support/Doppel/instances/`. Requirements: Xcode Command
 Line Tools and [uv](https://docs.astral.sh/uv/) (used once per icon, for Pillow).
 
+### Menu-bar app
+
+```sh
+app/build-app.zsh          # builds and installs ~/Applications/Doppel.app
+open -a ~/Applications/Doppel.app
+```
+
+A menu-bar-only front end (`LSUIElement`, so no Dock icon): list instances,
+launch or rebuild them, and create a new one from a name plus a color picker. It
+shells out to `bin/doppel` for every action, so the CLI stays the single source of
+truth. It finds the CLI via `$DOPPEL_CLI` or a short list of standard locations,
+skipping any that are group- or world-writable. To start it at login, add it under
+System Settings > General > Login Items.
+
 ## Create a local signing identity (recommended, and not only for convenience)
 
 Clones are signed ad hoc by default, which has two consequences.
