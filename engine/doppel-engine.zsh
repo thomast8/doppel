@@ -11,7 +11,17 @@
 set -u
 setopt PIPE_FAIL
 
-readonly ENGINE_VERSION="9"
+readonly ENGINE_VERSION="10"
+
+# When this engine copy runs from inside an installed bundle, environment
+# overrides are ignored: otherwise a same-uid process could point a
+# signature-validated bundle at a config, state dir, or signing identity of its
+# choosing. Overrides remain available for development (DOPPEL_DEV=1).
+if [[ "${0:A}" == */*.app/Contents/Resources/Doppel/* && "${DOPPEL_DEV:-0}" != "1" ]]; then
+    unset DOPPEL_ASSET_ROOT DOPPEL_STATE_ROOT DOPPEL_SIGN_IDENTITY DOPPEL_SIGN_LEAF_SHA1 \
+          DOPPEL_PRIMARY_APP DOPPEL_PRIMARY_BUNDLE_ID DOPPEL_PRIMARY_TEAM_ID DOPPEL_INSTALL_ONLY
+fi
+
 readonly ASSET_ROOT="${DOPPEL_ASSET_ROOT:-${0:A:h}}"
 readonly CONFIG_FILE="$ASSET_ROOT/instance-config.zsh"
 
@@ -39,16 +49,20 @@ readonly LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Framework
 # Ad-hoc signatures change on every rebuild, so keychain "Always Allow" grants
 # die with each vendor update. If the user has created a stable local signing
 # identity (Keychain Access > Certificate Assistant, Code Signing template,
-# named "Doppel Local Signing"), sign with it so grants persist.
+# named "Doppel Local Signing"), sign with it so grants persist. The identity's
+# SHA-1 is captured so the launcher can pin the certificate leaf, which is what
+# makes an attacker's ad-hoc re-seal of a tampered bundle fail.
 detect_sign_identity() {
-    if /usr/bin/security find-identity -v -p codesigning 2>/dev/null | \
-            /usr/bin/grep -q '"Doppel Local Signing"'; then
-        print -r -- "Doppel Local Signing"
-    else
-        print -r -- "-"
-    fi
+    /usr/bin/security find-identity -v -p codesigning 2>/dev/null | \
+        /usr/bin/awk -F'[ "]+' '/"Doppel Local Signing"/ {print $2; exit}'
 }
-readonly SIGN_IDENTITY="${DOPPEL_SIGN_IDENTITY:-$(detect_sign_identity)}"
+SIGN_LEAF_SHA1="${DOPPEL_SIGN_LEAF_SHA1:-$(detect_sign_identity)}"
+if [[ -n "$SIGN_LEAF_SHA1" ]]; then
+    readonly SIGN_IDENTITY="${DOPPEL_SIGN_IDENTITY:-$SIGN_LEAF_SHA1}"
+else
+    readonly SIGN_IDENTITY="${DOPPEL_SIGN_IDENTITY:--}"
+fi
+readonly SIGN_LEAF_SHA1
 
 mkdir -p "$STATE_ROOT"
 
@@ -129,12 +143,16 @@ instance_is_healthy() {
     [[ "$(plist_value "$info" LSEnvironment.CODEX_HOME)" == "$DOPPEL_CODEX_HOME" ]] || return 1
     [[ "$(plist_value "$info" CFBundleURLTypes.0.CFBundleURLSchemes.0)" == "$DOPPEL_URL_SCHEME" ]] || return 1
     [[ -z "$(plist_value "$info" CFBundleURLTypes.0.CFBundleURLSchemes.1)" ]] || return 1
+    [[ "$(plist_value "$info" SUFeedURL)" == "https://doppel.invalid/no-updates.xml" ]] || return 1
     /usr/bin/cmp -s "$app/Contents/Resources/electron.icns" "$ICON_ICNS" || return 1
     /usr/bin/codesign --verify --deep --strict "$app" >/dev/null 2>&1 || return 1
-    if [[ "$SIGN_IDENTITY" != "-" ]]; then
-        # A stable identity is available; an ad-hoc-signed instance should be
-        # rebuilt so keychain grants survive future rebuilds.
-        /usr/bin/codesign -dv "$app" 2>&1 | /usr/bin/grep -q "Authority=$SIGN_IDENTITY" || return 1
+    [[ "$(plist_value "$info" DoppelSigningIdentifier)" == "$DOPPEL_BUNDLE_ID" ]] || return 1
+    if [[ -n "$SIGN_LEAF_SHA1" ]]; then
+        # A stable identity exists: require the bundle to satisfy the pinned
+        # requirement, so an ad-hoc-signed instance gets rebuilt.
+        [[ -n "$(plist_value "$info" DoppelPinnedRequirement)" ]] || return 1
+        /usr/bin/codesign --verify -R "=identifier \"$DOPPEL_BUNDLE_ID\" and certificate leaf H\"$SIGN_LEAF_SHA1\"" \
+            "$app" >/dev/null 2>&1 || return 1
     fi
     return 0
 }
@@ -158,9 +176,22 @@ patch_plist() {
     /usr/bin/plutil -replace CFBundleURLTypes.0.CFBundleURLSchemes -json "[\"$DOPPEL_URL_SCHEME\"]" "$info"
     /usr/bin/plutil -replace LSEnvironment.CODEX_ELECTRON_USER_DATA_PATH -string "$DOPPEL_PROFILE_ROOT" "$info"
     /usr/bin/plutil -replace LSEnvironment.CODEX_HOME -string "$DOPPEL_CODEX_HOME" "$info"
+    # Sparkle must not update an instance: it would replace the bundle with the
+    # vendor's, dropping the launcher and this instance's LSEnvironment profile
+    # keys, which would silently point the icon at the default profile and merge
+    # two accounts. Scheduled checks are disabled and the feed is pointed at an
+    # unresolvable URL so a user-initiated "Check for Updates" also fails.
     /usr/bin/plutil -replace SUEnableAutomaticChecks -bool false "$info"
     /usr/bin/plutil -replace SUAllowsAutomaticUpdates -bool false "$info"
     /usr/bin/plutil -replace SUScheduledCheckInterval -integer 0 "$info"
+    /usr/bin/plutil -replace SUFeedURL -string "https://doppel.invalid/no-updates.xml" "$info"
+    /usr/bin/plutil -replace DoppelSigningIdentifier -string "$DOPPEL_BUNDLE_ID" "$info"
+    if [[ -n "$SIGN_LEAF_SHA1" ]]; then
+        /usr/bin/plutil -replace DoppelPinnedRequirement -string \
+            "identifier \"$DOPPEL_BUNDLE_ID\" and certificate leaf H\"$SIGN_LEAF_SHA1\"" "$info"
+    else
+        /usr/bin/plutil -remove DoppelPinnedRequirement "$info" 2>/dev/null || true
+    fi
     /usr/bin/plutil -replace DoppelEngineVersion -string "$ENGINE_VERSION" "$info"
     /usr/bin/plutil -replace DoppelSourceBundleVersion -string "$version" "$info"
     /usr/bin/plutil -replace DoppelSourceExecutableSHA256 -string "$executable_hash" "$info"
@@ -202,7 +233,14 @@ build_instance() {
     # provisioning profile; under an ad-hoc signature AMFI kills the process at
     # spawn, so they are stripped. Library validation must be disabled because
     # the ad-hoc main binary loads the vendor-signed frameworks.
-    local entitlements="$STATE_ROOT/extracted-entitlements.plist"
+    # The plist lives in a private per-run directory (0700, unpredictable name)
+    # and is re-validated immediately before signing, so it cannot be swapped
+    # between filtering and use.
+    local entitlements_dir entitlements
+    entitlements_dir="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/doppel-ent.XXXXXXXX")" || \
+        fail_closed "Creating the private entitlements directory failed."
+    /bin/chmod 700 "$entitlements_dir"
+    entitlements="$entitlements_dir/entitlements.plist"
     /usr/bin/codesign -d --entitlements - --xml \
         "$target/Contents/MacOS/ChatGPT.real" > "$entitlements" 2>/dev/null || \
         fail_closed "Extracting the vendor entitlements failed."
@@ -232,11 +270,33 @@ PYFILTER
     # and make an otherwise valid staged bundle fail code-signature sealing.
     /usr/bin/xattr -cr "$target" || fail_closed "Removing staging-only filesystem metadata failed."
 
-    /usr/bin/codesign --force --sign "$SIGN_IDENTITY" --options runtime --entitlements "$entitlements" \
+    # Re-assert the filtered key set right before signing: anything that
+    # reintroduced a restricted or dyld-relaxing entitlement in the meantime
+    # must not reach codesign.
+    /usr/bin/python3 - "$entitlements" <<'PYVERIFY' || fail_closed "The entitlements plist changed after filtering; refusing to sign."
+import plistlib, sys
+with open(sys.argv[1], "rb") as f:
+    ent = plistlib.load(f)
+banned = ("com.apple.application-identifier", "com.apple.developer.",
+          "com.apple.security.application-groups", "keychain-access-groups",
+          "com.apple.security.get-task-allow",
+          "com.apple.security.cs.allow-dyld-environment-variables",
+          "com.apple.security.cs.disable-executable-page-protection")
+bad = [k for k in ent if any(k == b or k.startswith(b) for b in banned)]
+if bad or ent.get("com.apple.security.cs.disable-library-validation") is not True:
+    sys.exit(1)
+PYVERIFY
+
+    # -i pins the code-signing identifier to this instance, so each instance has
+    # its own code identity: keychain ACLs and TCC grants no longer transfer
+    # from one instance to another.
+    /usr/bin/codesign --force --sign "$SIGN_IDENTITY" -i "$DOPPEL_BUNDLE_ID" --options runtime \
+        --entitlements "$entitlements" \
         "$target/Contents/MacOS/ChatGPT.real" >/dev/null || fail_closed "Signing the preserved vendor executable failed."
+    /bin/rm -rf "$entitlements_dir"
     /usr/bin/xattr -cr "$target" || fail_closed "Removing intermediate signing metadata failed."
-    /usr/bin/codesign --force --sign "$SIGN_IDENTITY" --options runtime "$target" >/dev/null || \
-        fail_closed "Signing the instance bundle failed."
+    /usr/bin/codesign --force --sign "$SIGN_IDENTITY" -i "$DOPPEL_BUNDLE_ID" --options runtime \
+        "$target" >/dev/null || fail_closed "Signing the instance bundle failed."
     /usr/bin/xattr -cr "$target" || fail_closed "Removing post-signing Finder metadata failed."
     /usr/bin/codesign --verify --deep --strict "$target" >/dev/null 2>&1 || \
         fail_closed "The staged instance bundle failed signature verification."

@@ -18,6 +18,7 @@ readonly DOPPEL_HOME="${DOPPEL_HOME:-$HOME/Library/Application Support/Doppel}"
 readonly INSTANCES_ROOT="$DOPPEL_HOME/instances"
 readonly BUILD_CACHE="$DOPPEL_HOME/build"
 readonly PRIMARY_APP="${DOPPEL_PRIMARY_APP:-/Applications/ChatGPT.app}"
+readonly PRIMARY_SCHEME="${DOPPEL_PRIMARY_SCHEME:-codex}"
 
 die() { print -u2 -r -- "doppel: $1"; exit 1 }
 
@@ -26,15 +27,15 @@ slugify() {
 }
 
 compile_helpers() {
+    # Always recompile from the repo sources: an mtime-based cache would let a
+    # planted binary in the build dir be embedded and signed into a bundle.
     mkdir -p "$BUILD_CACHE"
     local src bin
     for pair in "launcher:doppel-launcher" "alert:doppel-alert"; do
         src="$ENGINE_SRC/${pair%%:*}/main.m"
         bin="$BUILD_CACHE/${pair##*:}"
-        if [[ ! -x "$bin" || "$src" -nt "$bin" ]]; then
-            /usr/bin/clang -fobjc-arc -O2 -framework Cocoa -framework Security -o "$bin" "$src" || \
-                die "compiling ${pair##*:} failed"
-        fi
+        /usr/bin/clang -fobjc-arc -O2 -framework Cocoa -framework Security -o "$bin" "$src" || \
+            die "compiling ${pair##*:} failed"
     done
 }
 
@@ -158,6 +159,17 @@ cmd_create() {
     [[ -n "$scheme" ]] || scheme="codex-$slug"
     [[ -n "$profile_root" ]] || profile_root="$HOME/Library/Application Support/$name"
     [[ -n "$codex_home" ]] || codex_home="$HOME/.codex-$slug"
+
+    # These reach an Info.plist JSON literal and a state-directory path
+    # component, so restrict them to inert characters.
+    [[ "$bundle_id" == [A-Za-z0-9]*([A-Za-z0-9.-]) && "$bundle_id" != *[^A-Za-z0-9.-]* ]] || \
+        die "bundle ids may contain only letters, digits, dots, and hyphens"
+    [[ "$scheme" == [A-Za-z]* && "$scheme" != *[^A-Za-z0-9.+-]* ]] || \
+        die "URL schemes must start with a letter and contain only letters, digits, '+', '-', '.'"
+    [[ "$scheme" != "$PRIMARY_SCHEME" ]] || \
+        die "URL scheme '$scheme' belongs to the primary app; pick another so deep links keep working"
+    [[ "$profile_root" == /* && "$codex_home" == /* ]] || \
+        die "--profile-root and --codex-home must be absolute paths"
 
     # Identity fields must be unique across instances: a shared bundle id
     # confuses Launch Services, a shared profile silently mixes accounts.

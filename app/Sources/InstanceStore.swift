@@ -33,10 +33,20 @@ final class InstanceStore: ObservableObject {
             "/opt/homebrew/bin/doppel",
             "/usr/local/bin/doppel",
         ]
-        for candidate in candidates where FileManager.default.isExecutableFile(atPath: candidate) {
+        for candidate in candidates
+        where FileManager.default.isExecutableFile(atPath: candidate) && !Self.isGroupOrWorldWritable(candidate) {
             return URL(fileURLWithPath: candidate)
         }
         return nil
+    }
+
+    /// A CLI anyone in the admin group can replace is not one to execute
+    /// silently; /opt/homebrew/bin is group-writable on many machines.
+    nonisolated private static func isGroupOrWorldWritable(_ path: String) -> Bool {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let permissions = attrs[.posixPermissions] as? NSNumber
+        else { return true }
+        return permissions.uint16Value & 0o022 != 0
     }
 
     init() {

@@ -35,17 +35,41 @@ int main(int argc, char *argv[]) {
         removexattr(bundlePath.fileSystemRepresentation, "com.apple.FinderInfo", 0);
         removexattr(bundlePath.fileSystemRepresentation, "com.apple.ResourceFork", 0);
 
+        // Validate against a pinned requirement, not just internal
+        // consistency: a NULL requirement would accept any bundle that had been
+        // re-sealed with an arbitrary signature after tampering. The instance's
+        // own signing identifier is pinned here; when the bundle was signed with
+        // a stable identity, DoppelPinnedRequirement adds the certificate leaf.
+        NSDictionary *info = NSBundle.mainBundle.infoDictionary;
+        NSString *expectedIdentifier = info[@"DoppelSigningIdentifier"];
+        if (expectedIdentifier.length == 0) {
+            show_error(@"This bundle does not record its expected signing identifier. No engine code was executed.");
+            return 1;
+        }
+        NSString *requirementText = info[@"DoppelPinnedRequirement"];
+        if (requirementText.length == 0) {
+            requirementText = [NSString stringWithFormat:@"identifier \"%@\"", expectedIdentifier];
+        }
+
+        SecRequirementRef requirement = NULL;
+        OSStatus validationStatus = SecRequirementCreateWithString(
+            (__bridge CFStringRef)requirementText, kSecCSDefaultFlags, &requirement);
         SecStaticCodeRef staticCode = NULL;
-        OSStatus validationStatus = SecStaticCodeCreateWithPath(
-            (__bridge CFURLRef)[NSURL fileURLWithPath:bundlePath],
-            kSecCSDefaultFlags,
-            &staticCode
-        );
         if (validationStatus == errSecSuccess) {
-            validationStatus = SecStaticCodeCheckValidity(staticCode, kSecCSStrictValidate, NULL);
+            validationStatus = SecStaticCodeCreateWithPath(
+                (__bridge CFURLRef)[NSURL fileURLWithPath:bundlePath],
+                kSecCSDefaultFlags,
+                &staticCode
+            );
+        }
+        if (validationStatus == errSecSuccess) {
+            validationStatus = SecStaticCodeCheckValidity(staticCode, kSecCSStrictValidate, requirement);
         }
         if (staticCode != NULL) {
             CFRelease(staticCode);
+        }
+        if (requirement != NULL) {
+            CFRelease(requirement);
         }
         if (validationStatus != errSecSuccess) {
             show_error([NSString stringWithFormat:@"The bundle failed its signature check (error %d). No engine code was executed.", (int)validationStatus]);
