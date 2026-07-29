@@ -11,13 +11,24 @@ setopt PIPE_FAIL
 readonly APP_SRC="${0:A:h}"
 readonly INSTALL_ROOT="${1:-$HOME/Applications}"
 readonly APP="$INSTALL_ROOT/Doppel.app"
+# DOPPEL_UNIVERSAL=1 builds arm64 + x86_64 (used for release artifacts).
+readonly UNIVERSAL="${DOPPEL_UNIVERSAL:-0}"
 
-print -r -- "Building release binary…"
 cd "$APP_SRC"
-swift build -c release
-
-readonly BINARY="$APP_SRC/.build/release/DoppelMenuBar"
+typeset binary
+if [[ "$UNIVERSAL" == "1" ]]; then
+    print -r -- "Building universal release binary (arm64 + x86_64)…"
+    swift build -c release --arch arm64 --arch x86_64
+    binary="$APP_SRC/.build/out/Products/Release/DoppelMenuBar"
+    [[ -x "$binary" ]] || binary="$APP_SRC/.build/apple/Products/Release/DoppelMenuBar"
+else
+    print -r -- "Building release binary…"
+    swift build -c release
+    binary="$APP_SRC/.build/release/DoppelMenuBar"
+fi
+readonly BINARY="$binary"
 [[ -x "$BINARY" ]] || { print -u2 -r -- "build produced no binary at $BINARY"; exit 1 }
+print -r -- "Architectures: $(/usr/bin/lipo -archs "$BINARY" 2>/dev/null || print -r -- unknown)"
 
 print -r -- "Assembling $APP…"
 /bin/rm -rf "$APP"
