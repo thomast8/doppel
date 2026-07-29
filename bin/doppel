@@ -1,0 +1,182 @@
+#!/bin/zsh
+# Doppel CLI: create and manage independent, rebranded instances of a locally
+# installed app (currently: the ChatGPT desktop app).
+#
+#   doppel create --name "ChatGPT Personal" --bundle-id com.openai.codex.secondary \
+#       --scheme codex-secondary --profile-root "$HOME/Library/Application Support/ChatGPT Secondary" \
+#       --codex-home "$HOME/.codex-secondary" --tint F28C28 [--install-to "$HOME/Applications"]
+#   doppel list
+#   doppel launch  <name>
+#   doppel rebuild <name>
+
+set -eu
+setopt PIPE_FAIL
+
+readonly REPO_ROOT="${0:A:h:h}"
+readonly ENGINE_SRC="$REPO_ROOT/engine"
+readonly DOPPEL_HOME="${DOPPEL_HOME:-$HOME/Library/Application Support/Doppel}"
+readonly INSTANCES_ROOT="$DOPPEL_HOME/instances"
+readonly BUILD_CACHE="$DOPPEL_HOME/build"
+readonly PRIMARY_APP="${DOPPEL_PRIMARY_APP:-/Applications/ChatGPT.app}"
+
+die() { print -u2 -r -- "doppel: $1"; exit 1 }
+
+slugify() {
+    print -r -- "$1" | /usr/bin/tr '[:upper:]' '[:lower:]' | /usr/bin/sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g'
+}
+
+compile_helpers() {
+    mkdir -p "$BUILD_CACHE"
+    local src bin
+    for pair in "launcher:doppel-launcher" "alert:doppel-alert"; do
+        src="$ENGINE_SRC/${pair%%:*}/main.m"
+        bin="$BUILD_CACHE/${pair##*:}"
+        if [[ ! -x "$bin" || "$src" -nt "$bin" ]]; then
+            /usr/bin/clang -fobjc-arc -O2 -framework Cocoa -framework Security -o "$bin" "$src" || \
+                die "compiling ${pair##*:} failed"
+        fi
+    done
+}
+
+extract_primary_icon() {
+    # Produces a large PNG of the primary app's current icon at $1.
+    local out="$1" work
+    work="$(/usr/bin/mktemp -d)"
+    /usr/bin/iconutil -c iconset "$PRIMARY_APP/Contents/Resources/electron.icns" -o "$work/icon.iconset" || \
+        die "extracting the primary icon failed"
+    local largest
+    largest="$(ls "$work/icon.iconset" | /usr/bin/sort -t_ -k2 -n | /usr/bin/tail -1)"
+    /bin/cp "$work/icon.iconset/$largest" "$out"
+    /bin/rm -rf "$work"
+}
+
+png_to_icns() {
+    local png="$1" icns="$2" work size
+    work="$(/usr/bin/mktemp -d)"
+    mkdir "$work/icon.iconset"
+    for size in 16 32 128 256 512; do
+        /usr/bin/sips -z $size $size "$png" --out "$work/icon.iconset/icon_${size}x${size}.png" >/dev/null
+        /usr/bin/sips -z $((size * 2)) $((size * 2)) "$png" --out "$work/icon.iconset/icon_${size}x${size}@2x.png" >/dev/null
+    done
+    /usr/bin/iconutil -c icns "$work/icon.iconset" -o "$icns" || die "building the .icns failed"
+    /bin/rm -rf "$work"
+}
+
+assemble_instance() {
+    local slug="$1" name="$2" bundle_id="$3" scheme="$4" profile_root="$5" codex_home="$6" tint="$7" icon_override="$8"
+    local dir="$INSTANCES_ROOT/$slug"
+    mkdir -p "$dir/bin" "$dir/assets"
+
+    /bin/cp "$ENGINE_SRC/doppel-engine.zsh" "$dir/doppel-engine.zsh"
+    /bin/chmod 755 "$dir/doppel-engine.zsh"
+    /bin/cp "$BUILD_CACHE/doppel-launcher" "$BUILD_CACHE/doppel-alert" "$dir/bin/"
+
+    if [[ -n "$icon_override" ]]; then
+        /bin/cp "$icon_override" "$dir/assets/icon.icns"
+        /usr/bin/sips -s format png -Z 1024 "$icon_override" --out "$dir/assets/icon.png" >/dev/null
+    else
+        local source_png="$dir/assets/source.png" tinted_png="$dir/assets/icon.png"
+        extract_primary_icon "$source_png"
+        (cd "$REPO_ROOT" && uv run --quiet --with pillow python engine/icon/tint_icon.py "$source_png" "$tinted_png" "$tint") || \
+            die "tinting the icon failed"
+        png_to_icns "$tinted_png" "$dir/assets/icon.icns"
+        /bin/rm -f "$source_png"
+    fi
+
+    cat > "$dir/instance-config.zsh" <<EOF
+# Doppel instance config. Sourced by doppel-engine.zsh; paths may use \$HOME.
+DOPPEL_DISPLAY_NAME="$name"
+DOPPEL_BUNDLE_ID="$bundle_id"
+DOPPEL_URL_SCHEME="$scheme"
+DOPPEL_PROFILE_ROOT="$profile_root"
+DOPPEL_CODEX_HOME="$codex_home"
+EOF
+    print -r -- "$dir"
+}
+
+instance_dir_for() {
+    local slug
+    slug="$(slugify "$1")"
+    [[ -d "$INSTANCES_ROOT/$slug" ]] || die "no instance named '$1' (looked in $INSTANCES_ROOT/$slug)"
+    print -r -- "$INSTANCES_ROOT/$slug"
+}
+
+app_path_for() {
+    local dir="$1" name
+    name="$(/usr/bin/grep '^DOPPEL_DISPLAY_NAME=' "$dir/instance-config.zsh" | /usr/bin/cut -d'"' -f2)"
+    local install_root
+    install_root="$(cat "$dir/install-root" 2>/dev/null || print -r -- "$HOME/Applications")"
+    print -r -- "$install_root/$name.app"
+}
+
+cmd_create() {
+    local name="" bundle_id="" scheme="" profile_root="" codex_home="" tint="" icon_override="" install_to="$HOME/Applications"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --name) name="$2"; shift 2 ;;
+            --bundle-id) bundle_id="$2"; shift 2 ;;
+            --scheme) scheme="$2"; shift 2 ;;
+            --profile-root) profile_root="$2"; shift 2 ;;
+            --codex-home) codex_home="$2"; shift 2 ;;
+            --tint) tint="$2"; shift 2 ;;
+            --icon) icon_override="$2"; shift 2 ;;
+            --install-to) install_to="$2"; shift 2 ;;
+            *) die "unknown option: $1" ;;
+        esac
+    done
+    [[ -n "$name" && -n "$bundle_id" && -n "$scheme" && -n "$profile_root" && -n "$codex_home" ]] || \
+        die "create requires --name, --bundle-id, --scheme, --profile-root, --codex-home"
+    [[ -n "$tint" || -n "$icon_override" ]] || die "create requires --tint RRGGBB or --icon path.icns"
+
+    compile_helpers
+    local slug dir
+    slug="$(slugify "$name")"
+    dir="$(assemble_instance "$slug" "$name" "$bundle_id" "$scheme" "$profile_root" "$codex_home" "$tint" "$icon_override")"
+    print -r -- "$install_to" > "$dir/install-root"
+    mkdir -p "$install_to"
+    /bin/zsh "$dir/doppel-engine.zsh" install "$install_to/$name.app"
+    print -r -- "created: $install_to/$name.app (instance assets: $dir)"
+}
+
+cmd_list() {
+    [[ -d "$INSTANCES_ROOT" ]] || { print "no instances"; return 0 }
+    local dir
+    for dir in "$INSTANCES_ROOT"/*(N/); do
+        local name app
+        name="$(/usr/bin/grep '^DOPPEL_DISPLAY_NAME=' "$dir/instance-config.zsh" | /usr/bin/cut -d'"' -f2)"
+        app="$(app_path_for "$dir")"
+        if [[ -d "$app" ]]; then
+            print -r -- "$name  ->  $app"
+        else
+            print -r -- "$name  ->  (not installed)"
+        fi
+    done
+}
+
+cmd_launch() {
+    local dir app
+    dir="$(instance_dir_for "$1")"
+    app="$(app_path_for "$dir")"
+    [[ -d "$app" ]] || die "instance app not installed at $app; run: doppel rebuild '$1'"
+    /usr/bin/open -na "$app"
+}
+
+cmd_rebuild() {
+    local dir app
+    dir="$(instance_dir_for "$1")"
+    app="$(app_path_for "$dir")"
+    compile_helpers
+    /bin/cp "$ENGINE_SRC/doppel-engine.zsh" "$dir/doppel-engine.zsh"
+    /bin/chmod 755 "$dir/doppel-engine.zsh"
+    /bin/cp "$BUILD_CACHE/doppel-launcher" "$BUILD_CACHE/doppel-alert" "$dir/bin/"
+    /bin/zsh "$dir/doppel-engine.zsh" install "$app"
+    print -r -- "rebuilt: $app"
+}
+
+case "${1:-}" in
+    create) shift; cmd_create "$@" ;;
+    list) cmd_list ;;
+    launch) [[ $# -eq 2 ]] || die "usage: doppel launch <name>"; cmd_launch "$2" ;;
+    rebuild) [[ $# -eq 2 ]] || die "usage: doppel rebuild <name>"; cmd_rebuild "$2" ;;
+    *) die "usage: doppel {create|list|launch|rebuild} ..." ;;
+esac
