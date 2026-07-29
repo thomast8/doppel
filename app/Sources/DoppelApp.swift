@@ -1,0 +1,39 @@
+import SwiftUI
+
+@main
+struct DoppelApp: App {
+    @StateObject private var store = InstanceStore()
+
+    var body: some Scene {
+        MenuBarExtra("Doppel", systemImage: "square.on.square") {
+            MenuContent(store: store)
+        }
+    }
+}
+
+struct MenuContent: View {
+    @ObservedObject var store: InstanceStore
+
+    var body: some View {
+        if store.instances.isEmpty {
+            Text("No instances yet")
+            Text("Create one with `doppel create`")
+        }
+        ForEach(store.instances) { instance in
+            Menu(instance.name) {
+                Button("Launch") { store.launch(instance) }
+                Button("Rebuild") { store.rebuild(instance) }
+                if store.busy.contains(instance.id) {
+                    Text("Working…")
+                }
+            }
+        }
+        Divider()
+        Button("Refresh") { store.reload() }
+        if let message = store.lastError {
+            Text(message).foregroundStyle(.red)
+        }
+        Divider()
+        Button("Quit Doppel") { NSApplication.shared.terminate(nil) }
+    }
+}
