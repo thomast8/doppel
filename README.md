@@ -43,7 +43,14 @@ bin/doppel create --name "ChatGPT Personal" \
 bin/doppel list
 bin/doppel launch "ChatGPT Personal"
 bin/doppel rebuild "ChatGPT Personal"
+bin/doppel remove "ChatGPT Personal"                # keeps the account data
+bin/doppel remove "ChatGPT Personal" --purge-data    # data to the Trash too
 ```
+
+`remove` never erases anything: the app bundle goes to the Trash, the instance
+definition is preserved under `state/Removed/` so the removal can be undone, and
+account data (profile and `CODEX_HOME`) is left in place unless `--purge-data` is
+given — and even then it is moved to the Trash, not deleted.
 
 `create` clones the primary app, tints its real icon with the color you chose,
 installs the instance into `~/Applications`, and stores the instance definition in
@@ -57,12 +64,16 @@ app/build-app.zsh          # builds and installs ~/Applications/Doppel.app
 open -a ~/Applications/Doppel.app
 ```
 
-A menu-bar-only front end (`LSUIElement`, so no Dock icon): list instances,
-launch or rebuild them, and create a new one from a name plus a color picker. It
-shells out to `bin/doppel` for every action, so the CLI stays the single source of
-truth. It finds the CLI via `$DOPPEL_CLI` or a short list of standard locations,
-skipping any that are group- or world-writable. To start it at login, add it under
-System Settings > General > Login Items.
+A menu-bar-only front end (`LSUIElement`, so no Dock icon): list instances, launch,
+rebuild or remove them, create a new one from a name plus a color picker, and
+toggle **Start at Login**. It shells out to `bin/doppel` for every action, so the
+CLI stays the single source of truth. It finds the CLI via `$DOPPEL_CLI` or a short
+list of standard locations, skipping any that are group- or world-writable, and
+holds an advisory lock so launchd and Finder can never produce two menu-bar icons.
+
+Start at Login installs a user LaunchAgent (`ai.doppel.menubar`) rather than using
+SMAppService, which needs a Developer ID-signed bundle that local ad-hoc builds
+don't have. Turning the toggle off boots the job out and removes the plist.
 
 ## Create a local signing identity (recommended, and not only for convenience)
 

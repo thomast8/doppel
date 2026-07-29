@@ -93,6 +93,26 @@ final class InstanceStore: ObservableObject {
         }
     }
 
+    /// Removes an instance. The CLI moves the app to the Trash and keeps the
+    /// instance definition; account data is only touched with purgeData.
+    func remove(_ instance: Instance, purgeData: Bool) {
+        var arguments = ["remove", instance.name]
+        if purgeData { arguments.append("--purge-data") }
+        runCLI(arguments, busyKey: instance.id) { [weak self] failure in
+            if failure == nil { self?.reload() }
+        }
+    }
+
+    var loginItemEnabled: Bool { LoginItem.isEnabled }
+
+    func setLoginItem(_ enabled: Bool) {
+        errors["login"] = nil
+        if let failure = LoginItem.setEnabled(enabled) {
+            errors["login"] = failure
+        }
+        objectWillChange.send()
+    }
+
     nonisolated private static func parsePorcelain(_ output: String) -> [Instance] {
         output.split(separator: "\n").compactMap { line in
             let fields = line.split(separator: "\t", omittingEmptySubsequences: false)

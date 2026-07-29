@@ -16,6 +16,7 @@ readonly REPO_ROOT="${0:A:h:h}"
 readonly ENGINE_SRC="$REPO_ROOT/engine"
 readonly DOPPEL_HOME="${DOPPEL_HOME:-$HOME/Library/Application Support/Doppel}"
 readonly INSTANCES_ROOT="$DOPPEL_HOME/instances"
+readonly LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 readonly BUILD_CACHE="$DOPPEL_HOME/build"
 readonly PRIMARY_APP="${DOPPEL_PRIMARY_APP:-/Applications/ChatGPT.app}"
 readonly PRIMARY_SCHEME="${DOPPEL_PRIMARY_SCHEME:-codex}"
@@ -225,6 +226,68 @@ cmd_launch() {
     /usr/bin/open -na "$app"
 }
 
+# Removal never deletes: the app bundle goes to the Trash and the instance
+# definition is kept under state/Removed, so a removal can be undone. Account
+# data (profile + CODEX_HOME) is left untouched unless --purge-data is given,
+# and even then it is moved to the Trash rather than erased.
+cmd_remove() {
+    local target="" purge=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --purge-data) purge=1; shift ;;
+            -*) die "unknown option: $1" ;;
+            *) target="$1"; shift ;;
+        esac
+    done
+    [[ -n "$target" ]] || die "usage: doppel remove <name> [--purge-data]"
+
+    local dir app bundle_id profile_root codex_home
+    dir="$(instance_dir_for "$target")"
+    app="$(app_path_for "$dir")"
+    bundle_id="$(config_value "$dir" DOPPEL_BUNDLE_ID)"
+    profile_root="$(config_value "$dir" DOPPEL_PROFILE_ROOT)"
+    codex_home="$(config_value "$dir" DOPPEL_CODEX_HOME)"
+
+    if /usr/bin/pgrep -f "${app}/Contents/MacOS/" >/dev/null 2>&1; then
+        /usr/bin/osascript -e "tell application id \"$bundle_id\" to quit" >/dev/null 2>&1 || true
+        local waited=0
+        while (( waited < 15 )) && /usr/bin/pgrep -f "${app}/Contents/MacOS/" >/dev/null 2>&1; do
+            /bin/sleep 1
+            (( waited++ ))
+        done
+        ! /usr/bin/pgrep -f "${app}/Contents/MacOS/" >/dev/null 2>&1 || \
+            die "'$target' is still running; quit it and try again"
+    fi
+
+    local stamp="$(/bin/date '+%Y%m%d-%H%M%S')"
+    local trash="$HOME/.Trash"
+    mkdir -p "$trash"
+
+    if [[ -d "$app" ]]; then
+        "$LSREGISTER" -u "$app" >/dev/null 2>&1 || true
+        /bin/mv "$app" "$trash/${app:t:r}.$stamp.app" || die "moving the app bundle to the Trash failed"
+        print -r -- "moved to Trash: ${app:t}"
+    fi
+
+    local removed_root="$DOPPEL_HOME/state/Removed"
+    mkdir -p "$removed_root"
+    /bin/mv "$dir" "$removed_root/${dir:t}.$stamp" || die "preserving the instance definition failed"
+    print -r -- "instance definition kept at: $removed_root/${dir:t}.$stamp"
+
+    if (( purge )); then
+        local data
+        for data in "$profile_root" "$codex_home"; do
+            [[ -n "$data" && -d "$data" ]] || continue
+            /bin/mv "$data" "$trash/${data:t}.$stamp" || die "moving $data to the Trash failed"
+            print -r -- "moved to Trash: ${data:t}"
+        done
+    else
+        print -r -- "account data left in place (pass --purge-data to move it to the Trash):"
+        [[ -n "$profile_root" ]] && print -r -- "  $profile_root"
+        [[ -n "$codex_home" ]] && print -r -- "  $codex_home"
+    fi
+}
+
 cmd_rebuild() {
     local dir app
     dir="$(instance_dir_for "$1")"
@@ -240,5 +303,6 @@ case "${1:-}" in
     list) shift; cmd_list "$@" ;;
     launch) [[ $# -eq 2 ]] || die "usage: doppel launch <name>"; cmd_launch "$2" ;;
     rebuild) [[ $# -eq 2 ]] || die "usage: doppel rebuild <name>"; cmd_rebuild "$2" ;;
-    *) die "usage: doppel {create|list|launch|rebuild} ..." ;;
+    remove) shift; cmd_remove "$@" ;;
+    *) die "usage: doppel {create|list|launch|rebuild|remove} ..." ;;
 esac

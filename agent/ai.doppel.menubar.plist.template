@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Starts the Doppel menu-bar app at login. Copy to
+     ~/Library/LaunchAgents/ai.doppel.menubar.plist with __HOME__ replaced by
+     your home directory, then:
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.doppel.menubar.plist
+     To stop starting it at login:
+       launchctl bootout gui/$(id -u)/ai.doppel.menubar
+     KeepAlive is false on purpose: quitting from the menu should stay quit
+     until the next login. -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>ai.doppel.menubar</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>__HOME__/Applications/Doppel.app/Contents/MacOS/Doppel</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<false/>
+	<key>ProcessType</key>
+	<string>Interactive</string>
+	<key>StandardErrorPath</key>
+	<string>__HOME__/Library/Logs/Doppel/menubar.err</string>
+</dict>
+</plist>
