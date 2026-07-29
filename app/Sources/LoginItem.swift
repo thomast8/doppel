@@ -6,6 +6,14 @@ import Foundation
 /// ID-signed bundle; Doppel builds are ad-hoc signed locally, so a plain user
 /// LaunchAgent is what actually works here. KeepAlive stays false so quitting
 /// from the menu stays quit until the next login.
+///
+/// This deliberately never runs `launchctl bootout` or `bootstrap`. launchd
+/// loads agents from ~/Library/LaunchAgents at login by itself, so the plist's
+/// presence alone decides whether Doppel starts — and booting the job out would
+/// terminate this very process whenever the app was started by that job, which
+/// looked exactly like a crash on untick. Writing or removing the plist is the
+/// whole operation, and it takes effect at the next login, which is what the
+/// setting means.
 enum LoginItem {
     static let label = "ai.doppel.menubar"
 
@@ -47,16 +55,13 @@ enum LoginItem {
         } catch {
             return "Could not write the login item: \(error.localizedDescription)"
         }
-        // Replace any previous registration so the path stays current.
-        _ = runLaunchctl(["bootout", "gui/\(getuid())/\(label)"])
-        if let failure = runLaunchctl(["bootstrap", "gui/\(getuid())", plistURL.path]) {
-            return "Could not register the login item: \(failure)"
-        }
+        // Clear any persistent disabled flag from a previous session; without
+        // this, launchd would skip the agent at login despite the plist.
+        _ = runLaunchctl(["enable", "gui/\(getuid())/\(label)"])
         return nil
     }
 
     private static func disable() -> String? {
-        _ = runLaunchctl(["bootout", "gui/\(getuid())/\(label)"])
         do {
             if FileManager.default.fileExists(atPath: plistURL.path) {
                 try FileManager.default.removeItem(at: plistURL)

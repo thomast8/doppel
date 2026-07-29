@@ -5,6 +5,24 @@ struct DoppelApp: App {
     @StateObject private var store = InstanceStore()
 
     init() {
+        // Scriptable hook, also how the login-item path is tested without
+        // driving the menu: Doppel --login-item {on|off|status}
+        let arguments = ProcessInfo.processInfo.arguments
+        if let index = arguments.firstIndex(of: "--login-item") {
+            let action = index + 1 < arguments.count ? arguments[index + 1] : "status"
+            switch action {
+            case "on", "off":
+                if let failure = LoginItem.setEnabled(action == "on") {
+                    FileHandle.standardError.write(Data("\(failure)\n".utf8))
+                    exit(1)
+                }
+                print(LoginItem.isEnabled ? "on" : "off")
+            default:
+                print(LoginItem.isEnabled ? "on" : "off")
+            }
+            exit(0)
+        }
+
         if !SingleInstance.acquire() {
             // Another menu-bar instance is already running; a second icon would
             // just confuse. Leave quietly.
