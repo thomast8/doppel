@@ -140,9 +140,8 @@ cmd_create() {
 
 cmd_list() {
     [[ -d "$INSTANCES_ROOT" ]] || { print "no instances"; return 0 }
-    local dir
+    local dir name app
     for dir in "$INSTANCES_ROOT"/*(N/); do
-        local name app
         name="$(/usr/bin/grep '^DOPPEL_DISPLAY_NAME=' "$dir/instance-config.zsh" | /usr/bin/cut -d'"' -f2)"
         app="$(app_path_for "$dir")"
         if [[ -d "$app" ]]; then
