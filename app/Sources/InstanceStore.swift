@@ -94,9 +94,10 @@ final class InstanceStore: ObservableObject {
             } catch {
                 failure = error.localizedDescription
             }
+            let outcome = failure
             await MainActor.run { [weak self] in
                 self?.busy.remove(instance.id)
-                if let failure { self?.lastError = failure }
+                if let outcome { self?.lastError = outcome }
             }
         }
     }
