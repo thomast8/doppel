@@ -284,7 +284,7 @@ launch_instance() {
     executable_hash="$(source_executable_hash)" || fail_closed "The primary executable could not be fingerprinted."
 
     if instance_is_healthy "$app" "$version" "$executable_hash"; then
-        if [[ "${DOPPEL_NO_EXEC:-0}" == "1" ]]; then
+        if [[ "${DOPPEL_INSTALL_ONLY:-0}" == "1" ]]; then
             log_message "Instance $version is already healthy; nothing to do."
             return 0
         fi
@@ -319,7 +319,7 @@ launch_instance() {
     /usr/bin/touch "$app"
     release_rebuild_lock "$lock"
     log_message "Installed instance $version; rollback preserved at $backup"
-    if [[ "${DOPPEL_TEST_NO_RELAUNCH:-0}" == "1" ]]; then
+    if [[ "${DOPPEL_INSTALL_ONLY:-0}" == "1" ]]; then
         return 0
     fi
     /usr/bin/open -na "$app" || fail_closed "The rebuilt instance was installed but could not be opened."
@@ -336,7 +336,7 @@ case "${1:-}" in
         [[ $# -eq 2 ]] || fail_closed "Usage: doppel-engine.zsh install /path/to/App.app"
         require_engine_assets
         validate_primary
-        DOPPEL_TEST_NO_RELAUNCH=1 DOPPEL_NO_EXEC=1 launch_instance "$2"
+        DOPPEL_INSTALL_ONLY=1 launch_instance "$2"
         ;;
     launch)
         [[ $# -ge 2 ]] || fail_closed "The launcher did not provide its app path."

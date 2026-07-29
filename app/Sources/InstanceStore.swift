@@ -2,13 +2,14 @@ import Foundation
 import AppKit
 
 struct Instance: Identifiable {
-    let id: String        // directory slug
+    let id: String        // stable slug assigned at creation
     let name: String
     let appPath: String
+    let installed: Bool
 }
 
-/// Reads instance definitions written by `doppel create` and shells out to the
-/// CLI for actions, so the menu-bar app and the CLI can never disagree.
+/// All instance knowledge comes from the CLI (`doppel list --porcelain`), so
+/// the menu-bar app and the CLI cannot drift apart on config parsing.
 @MainActor
 final class InstanceStore: ObservableObject {
     @Published var instances: [Instance] = []
@@ -19,17 +20,21 @@ final class InstanceStore: ObservableObject {
     static let primaryAppPath = "/Applications/ChatGPT.app"
     static let primaryDownloadURL = URL(string: "https://chatgpt.com/features/desktop/")!
 
-    private let instancesRoot = FileManager.default
-        .homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Application Support/Doppel/instances")
-
-    /// The CLI location; override with the DOPPEL_CLI environment variable.
-    private var cliURL: URL {
+    /// The CLI location: DOPPEL_CLI overrides, then known install locations.
+    private var discoveredCLI: URL? {
         if let override = ProcessInfo.processInfo.environment["DOPPEL_CLI"] {
             return URL(fileURLWithPath: override)
         }
-        return FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("GitRepos/doppel/bin/doppel")
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let candidates = [
+            home.appendingPathComponent("GitRepos/doppel/bin/doppel").path,
+            "/opt/homebrew/bin/doppel",
+            "/usr/local/bin/doppel",
+        ]
+        for candidate in candidates where FileManager.default.isExecutableFile(atPath: candidate) {
+            return URL(fileURLWithPath: candidate)
+        }
+        return nil
     }
 
     init() {
@@ -39,26 +44,23 @@ final class InstanceStore: ObservableObject {
     func reload() {
         lastError = nil
         primaryInstalled = FileManager.default.fileExists(atPath: Self.primaryAppPath)
-        var found: [Instance] = []
-        let dirs = (try? FileManager.default.contentsOfDirectory(
-            at: instancesRoot, includingPropertiesForKeys: nil)) ?? []
-        for dir in dirs where dir.hasDirectoryPath {
-            let config = dir.appendingPathComponent("instance-config.zsh")
-            guard let text = try? String(contentsOf: config, encoding: .utf8),
-                  let name = firstQuotedValue(for: "DOPPEL_DISPLAY_NAME", in: text)
-            else { continue }
-            let installRootFile = dir.appendingPathComponent("install-root")
-            let installRoot = (try? String(contentsOf: installRootFile, encoding: .utf8))?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                ?? FileManager.default.homeDirectoryForCurrentUser
-                    .appendingPathComponent("Applications").path
-            found.append(Instance(
-                id: dir.lastPathComponent,
-                name: name,
-                appPath: "\(installRoot)/\(name).app"
-            ))
+        guard let cli = discoveredCLI else {
+            instances = []
+            lastError = "doppel CLI not found; set the DOPPEL_CLI environment variable"
+            return
         }
-        instances = found.sorted { $0.name < $1.name }
+        Task.detached { [weak self] in
+            let result = Self.runProcess(cli: cli, arguments: ["list", "--porcelain"])
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                switch result {
+                case .failure(let message):
+                    self.lastError = message
+                case .success(let stdout):
+                    self.instances = Self.parsePorcelain(stdout).sorted { $0.name < $1.name }
+                }
+            }
+        }
     }
 
     func launch(_ instance: Instance) {
@@ -78,43 +80,66 @@ final class InstanceStore: ObservableObject {
         }
     }
 
-    private func firstQuotedValue(for key: String, in text: String) -> String? {
-        for line in text.split(separator: "\n") where line.hasPrefix("\(key)=") {
-            return line.split(separator: "\"").dropFirst().first.map(String.init)
+    nonisolated private static func parsePorcelain(_ output: String) -> [Instance] {
+        output.split(separator: "\n").compactMap { line in
+            let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
+            guard fields.count == 4 else { return nil }
+            return Instance(
+                id: String(fields[0]),
+                name: String(fields[1]),
+                appPath: String(fields[2]),
+                installed: fields[3] == "installed"
+            )
         }
-        return nil
+    }
+
+    nonisolated private static func runProcess(cli: URL, arguments: [String]) -> ProcessResult {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = [cli.path] + arguments
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+        do {
+            try process.run()
+            process.waitUntilExit()
+            let stdout = String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            if process.terminationStatus != 0 {
+                let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                return .failure(stderr?.isEmpty == false ? stderr! : "doppel exited \(process.terminationStatus)")
+            }
+            return .success(stdout)
+        } catch {
+            return .failure(error.localizedDescription)
+        }
     }
 
     private func runCLI(_ arguments: [String], busyKey: String,
                         completion: (@MainActor (String?) -> Void)? = nil) {
+        guard let cli = discoveredCLI else {
+            lastError = "doppel CLI not found; set the DOPPEL_CLI environment variable"
+            completion?(lastError)
+            return
+        }
         busy.insert(busyKey)
         lastError = nil
-        let cli = cliURL
         Task.detached { [weak self] in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            process.arguments = [cli.path] + arguments
-            let stderrPipe = Pipe()
-            process.standardError = stderrPipe
-            process.standardOutput = Pipe()
-            var failure: String?
-            do {
-                try process.run()
-                process.waitUntilExit()
-                if process.terminationStatus != 0 {
-                    let data = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-                    failure = String(data: data, encoding: .utf8)?
-                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? "exit \(process.terminationStatus)"
-                }
-            } catch {
-                failure = error.localizedDescription
-            }
-            let outcome = failure
+            let result = Self.runProcess(cli: cli, arguments: arguments)
+            let failure: String?
+            if case .failure(let message) = result { failure = message } else { failure = nil }
             await MainActor.run { [weak self] in
                 self?.busy.remove(busyKey)
-                if let outcome { self?.lastError = outcome }
-                completion?(outcome)
+                if let failure { self?.lastError = failure }
+                completion?(failure)
             }
         }
     }
+}
+
+/// Swift's Result requires Failure: Error; a plain enum is simpler here.
+enum ProcessResult {
+    case success(String)
+    case failure(String)
 }

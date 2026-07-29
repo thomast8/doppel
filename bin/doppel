@@ -62,14 +62,18 @@ png_to_icns() {
     /bin/rm -rf "$work"
 }
 
-assemble_instance() {
-    local slug="$1" name="$2" bundle_id="$3" scheme="$4" profile_root="$5" codex_home="$6" tint="$7" icon_override="$8"
-    local dir="$INSTANCES_ROOT/$slug"
+install_engine_assets() {
+    local dir="$1"
     mkdir -p "$dir/bin" "$dir/assets"
-
     /bin/cp "$ENGINE_SRC/doppel-engine.zsh" "$dir/doppel-engine.zsh"
     /bin/chmod 755 "$dir/doppel-engine.zsh"
     /bin/cp "$BUILD_CACHE/doppel-launcher" "$BUILD_CACHE/doppel-alert" "$dir/bin/"
+}
+
+assemble_instance() {
+    local slug="$1" name="$2" bundle_id="$3" scheme="$4" profile_root="$5" codex_home="$6" tint="$7" icon_override="$8"
+    local dir="$INSTANCES_ROOT/$slug"
+    install_engine_assets "$dir"
 
     if [[ -n "$icon_override" ]]; then
         /bin/cp "$icon_override" "$dir/assets/icon.icns"
@@ -127,9 +131,17 @@ cmd_create() {
     [[ -n "$name" ]] || die "create requires --name"
     [[ -n "$tint" || -n "$icon_override" ]] || die "create requires --tint RRGGBB or --icon path.icns"
 
+    # The name lands in a sourced config file, an Info.plist JSON fragment, and
+    # a bundle filename; restrict it to characters that are inert in all three.
+    (( ${#name} <= 64 )) || die "instance names are limited to 64 characters"
+    [[ "$name" == [A-Za-z0-9]* && "$name" != *[^A-Za-z0-9\ ._-]* ]] || \
+        die "instance names must start with a letter or digit and use only letters, digits, spaces, dots, hyphens, underscores"
+
     # Everything but the name and color can be derived; flags override.
     local slug
     slug="$(slugify "$name")"
+    [[ ! -d "$INSTANCES_ROOT/$slug" ]] || \
+        die "an instance with slug '$slug' already exists ($INSTANCES_ROOT/$slug); pick another name or remove it first"
     [[ -n "$bundle_id" ]] || bundle_id="com.openai.codex.doppel-$slug"
     [[ -n "$scheme" ]] || scheme="codex-$slug"
     [[ -n "$profile_root" ]] || profile_root="$HOME/Library/Application Support/$name"
@@ -145,12 +157,22 @@ cmd_create() {
 }
 
 cmd_list() {
-    [[ -d "$INSTANCES_ROOT" ]] || { print "no instances"; return 0 }
-    local dir name app
+    # --porcelain: stable machine-readable output, one instance per line:
+    # slug<TAB>name<TAB>app-path<TAB>installed|missing
+    # Instance names cannot contain tabs (create validates them), so tab-
+    # separated fields are unambiguous. The menu-bar app consumes this instead
+    # of parsing config files itself, so the CLI stays the single source of truth.
+    local porcelain=0
+    [[ "${1:-}" == "--porcelain" ]] && porcelain=1
+    [[ -d "$INSTANCES_ROOT" ]] || { (( porcelain )) || print "no instances"; return 0 }
+    local dir name app state
     for dir in "$INSTANCES_ROOT"/*(N/); do
         name="$(/usr/bin/grep '^DOPPEL_DISPLAY_NAME=' "$dir/instance-config.zsh" | /usr/bin/cut -d'"' -f2)"
         app="$(app_path_for "$dir")"
-        if [[ -d "$app" ]]; then
+        [[ -d "$app" ]] && state="installed" || state="missing"
+        if (( porcelain )); then
+            printf '%s\t%s\t%s\t%s\n' "${dir:t}" "$name" "$app" "$state"
+        elif [[ "$state" == "installed" ]]; then
             print -r -- "$name  ->  $app"
         else
             print -r -- "$name  ->  (not installed)"
@@ -171,16 +193,14 @@ cmd_rebuild() {
     dir="$(instance_dir_for "$1")"
     app="$(app_path_for "$dir")"
     compile_helpers
-    /bin/cp "$ENGINE_SRC/doppel-engine.zsh" "$dir/doppel-engine.zsh"
-    /bin/chmod 755 "$dir/doppel-engine.zsh"
-    /bin/cp "$BUILD_CACHE/doppel-launcher" "$BUILD_CACHE/doppel-alert" "$dir/bin/"
+    install_engine_assets "$dir"
     /bin/zsh "$dir/doppel-engine.zsh" install "$app"
     print -r -- "rebuilt: $app"
 }
 
 case "${1:-}" in
     create) shift; cmd_create "$@" ;;
-    list) cmd_list ;;
+    list) shift; cmd_list "$@" ;;
     launch) [[ $# -eq 2 ]] || die "usage: doppel launch <name>"; cmd_launch "$2" ;;
     rebuild) [[ $# -eq 2 ]] || die "usage: doppel rebuild <name>"; cmd_rebuild "$2" ;;
     *) die "usage: doppel {create|list|launch|rebuild} ..." ;;
