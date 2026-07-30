@@ -31,13 +31,32 @@ struct DoppelApp: App {
     }
 
     var body: some Scene {
-        MenuBarExtra("Doppel", systemImage: "square.on.square") {
+        MenuBarExtra {
             MenuContent(store: store)
+        } label: {
+            MenuBarLabel()
         }
         Window("New Doppel Instance", id: "create-instance") {
             CreateInstanceView(store: store)
         }
         .windowResizability(.contentSize)
+        .windowStyle(.hiddenTitleBar)
+    }
+}
+
+/// The menu bar icon. It is also the earliest reliably-rendered view, which is
+/// what --show-create hangs off: the window can be opened at launch without
+/// driving the menu by hand.
+struct MenuBarLabel: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Image(systemName: "square.on.square")
+            .onAppear {
+                guard ProcessInfo.processInfo.arguments.contains("--show-create") else { return }
+                openWindow(id: "create-instance")
+                NSApp.activate(ignoringOtherApps: true)
+            }
     }
 }
 
