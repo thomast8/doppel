@@ -11,10 +11,20 @@ final class CreateForm: ObservableObject {
     @Published var errorMessage: String?
 }
 
+/// Layout follows Apple's Liquid Glass guidance: the window is the content
+/// layer, and glass is reserved for the pieces that float above it — the icon
+/// tile and the action bar. Radii are concentric: an inner shape's radius is
+/// its container's radius minus the padding between them.
 struct CreateInstanceView: View {
     @ObservedObject var store: InstanceStore
     @StateObject private var form = CreateForm()
     @Environment(\.dismiss) private var dismiss
+
+    private enum Radius {
+        static let panel: CGFloat = 20
+        static let field: CGFloat = 12
+        static let tile: CGFloat = 16
+    }
 
     private var trimmedName: String {
         form.name.trimmingCharacters(in: .whitespaces)
@@ -25,123 +35,139 @@ struct CreateInstanceView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 22) {
             header
-
-            if !store.primaryInstalled {
-                missingPrimaryNotice
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Name")
-                    .font(.callout.weight(.medium))
-                    .foregroundStyle(.secondary)
-                TextField("", text: $form.name, prompt: Text("ChatGPT Personal"))
-                    .textFieldStyle(.plain)
-                    .font(.title3)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 9)
-                    .background(
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .fill(.quaternary.opacity(0.5)))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .strokeBorder(.separator, lineWidth: 0.5))
-                    .onSubmit { if canCreate { create() } }
-            }
-
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Icon colour")
-                    .font(.callout.weight(.medium))
-                    .foregroundStyle(.secondary)
-                TintPicker(color: $form.color, customHue: $form.customHue)
-            }
-
-            Text("The instance gets its own icon, Dock identity and data. Everything else is derived from the name.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            if let errorMessage = form.errorMessage {
-                Text(errorMessage)
-                    .font(.callout)
-                    .foregroundStyle(.red)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Divider().opacity(0.5)
-
-            HStack(spacing: 10) {
-                Spacer()
-                cancelButton
-                createButton
-            }
+            if !store.primaryInstalled { missingPrimaryNotice }
+            nameField
+            colourSection
+            if let errorMessage = form.errorMessage { errorRow(errorMessage) }
+            Spacer(minLength: 4)
+            actionBar
         }
-        .padding(24)
-        .frame(width: 460)
-        .background(WindowMaterial())
+        .padding(28)
+        .frame(width: 440)
+        .background(WindowStyler())
+        .background(
+            GlassBackground(cornerRadius: 0, clearStyle: false, fallbackMaterial: .underWindowBackground)
+                .ignoresSafeArea()
+        )
     }
 
+    // MARK: - Sections
+
     private var header: some View {
-        HStack(spacing: 14) {
-            IconPreview(color: form.color, name: trimmedName.isEmpty ? "ChatGPT Personal" : trimmedName)
-            VStack(alignment: .leading, spacing: 3) {
+        HStack(alignment: .center, spacing: 16) {
+            IconTile(color: form.color, name: trimmedName, radius: Radius.tile)
+            VStack(alignment: .leading, spacing: 4) {
                 Text("New instance")
-                    .font(.title2.weight(.semibold))
-                Text("A separate app, with its own account and history.")
-                    .font(.callout)
+                    .font(.system(size: 21, weight: .semibold))
+                Text("Its own app, account and history.")
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
         }
     }
 
+    private var nameField: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            fieldLabel("Name")
+            TextField("", text: $form.name, prompt: Text("ChatGPT Personal").foregroundStyle(.tertiary))
+                .textFieldStyle(.plain)
+                .font(.system(size: 15))
+                .padding(.horizontal, 13)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: Radius.field, style: .continuous)
+                        .fill(.black.opacity(0.06)))
+                .overlay(
+                    RoundedRectangle(cornerRadius: Radius.field, style: .continuous)
+                        .strokeBorder(.white.opacity(0.14), lineWidth: 0.5))
+                .onSubmit { if canCreate { create() } }
+        }
+    }
+
+    private var colourSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            fieldLabel("Icon colour")
+            TintPicker(color: $form.color, customHue: $form.customHue)
+        }
+    }
+
+    private var actionBar: some View {
+        HStack(spacing: 12) {
+            Text(store.primaryInstalled
+                 ? "Everything else is derived from the name."
+                 : "Install ChatGPT first.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+            Spacer(minLength: 8)
+            glassButton("Cancel", prominent: false) { dismiss() }
+                .keyboardShortcut(.cancelAction)
+            glassButton(form.creating ? "Creating…" : "Create", prominent: true) { create() }
+                .keyboardShortcut(.defaultAction)
+                .disabled(!canCreate)
+        }
+    }
+
+    private func errorRow(_ message: String) -> some View {
+        Text(message)
+            .font(.callout)
+            .foregroundStyle(.red)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
     private var missingPrimaryNotice: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("The ChatGPT app isn't installed yet", systemImage: "exclamationmark.triangle.fill")
+            Label("ChatGPT isn't installed", systemImage: "exclamationmark.triangle.fill")
                 .font(.callout.weight(.medium))
-            Text("Instances are built from your own local copy, so install it first, then come back here.")
+            Text("Instances are built from your own copy. Install it, then come back.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            HStack {
-                Button("Get ChatGPT…") { NSWorkspace.shared.open(InstanceStore.primaryDownloadURL) }
-                Button("Check again") { store.reload() }
+            HStack(spacing: 10) {
+                glassButton("Get ChatGPT", prominent: false) {
+                    NSWorkspace.shared.open(InstanceStore.primaryDownloadURL)
+                }
+                glassButton("Check again", prominent: false) { store.reload() }
             }
         }
-        .padding(12)
+        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(.yellow.opacity(0.12)))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(.yellow.opacity(0.35), lineWidth: 0.5))
+            RoundedRectangle(cornerRadius: Radius.field, style: .continuous)
+                .fill(.orange.opacity(0.14)))
     }
 
-    @ViewBuilder
-    private var cancelButton: some View {
-        let button = Button("Cancel") { dismiss() }
-            .keyboardShortcut(.cancelAction)
-            .controlSize(.large)
-        if #available(macOS 26.0, *) {
-            button.buttonStyle(.glass)
-        } else {
-            button.buttonStyle(.bordered)
-        }
+    // MARK: - Pieces
+
+    private func fieldLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(.secondary)
+            .textCase(.none)
     }
 
+    /// Large macOS controls are capsules under Liquid Glass, so both buttons
+    /// take the same shape; only the tint separates primary from secondary.
     @ViewBuilder
-    private var createButton: some View {
-        let button = Button(form.creating ? "Creating…" : "Create") { create() }
-            .keyboardShortcut(.defaultAction)
+    private func glassButton(_ title: String, prominent: Bool, action: @escaping () -> Void) -> some View {
+        let button = Button(title, action: action)
             .controlSize(.large)
-            .disabled(!canCreate)
+            .buttonBorderShape(.capsule)
         if #available(macOS 26.0, *) {
-            button.buttonStyle(.glassProminent)
+            if prominent {
+                button.buttonStyle(.glassProminent)
+            } else {
+                button.buttonStyle(.glass)
+            }
         } else {
-            button.buttonStyle(.borderedProminent)
+            if prominent {
+                button.buttonStyle(.borderedProminent)
+            } else {
+                button.buttonStyle(.bordered)
+            }
         }
     }
 
@@ -156,6 +182,30 @@ struct CreateInstanceView: View {
                 dismiss()
             }
         }
+    }
+}
+
+/// The icon preview is the one place the chosen colour becomes a real object:
+/// tinted glass, showing what the instance's icon will pick up.
+struct IconTile: View {
+    let color: Color
+    let name: String
+    let radius: CGFloat
+
+    private var initials: String {
+        let letters = name.split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined()
+        return letters.isEmpty ? "C" : letters.uppercased()
+    }
+
+    var body: some View {
+        ZStack {
+            GlassBackground(cornerRadius: radius, tint: color, interactive: true)
+            Text(initials)
+                .font(.system(size: 21, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
+        }
+        .frame(width: 58, height: 58)
     }
 }
 
