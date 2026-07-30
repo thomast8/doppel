@@ -100,7 +100,7 @@ struct CreateInstanceView: View {
                  ? "Everything else is derived from the name."
                  : "Install ChatGPT first.")
                 .font(.caption)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
             Spacer(minLength: 8)
             glassButton("Cancel", prominent: false) { dismiss() }
                 .keyboardShortcut(.cancelAction)
@@ -151,24 +151,32 @@ struct CreateInstanceView: View {
 
     /// Large macOS controls are capsules under Liquid Glass, so both buttons
     /// take the same shape; only the tint separates primary from secondary.
+    ///
+    /// buttonBorderShape alone is not enough: a disabled prominent button drops
+    /// its glass for a plain rounded rectangle, which then sits next to the
+    /// enabled capsule. Clipping pins the shape in every state, and is a no-op
+    /// when the style already draws a capsule.
     @ViewBuilder
     private func glassButton(_ title: String, prominent: Bool, action: @escaping () -> Void) -> some View {
         let button = Button(title, action: action)
             .controlSize(.large)
             .buttonBorderShape(.capsule)
-        if #available(macOS 26.0, *) {
-            if prominent {
-                button.buttonStyle(.glassProminent)
+        Group {
+            if #available(macOS 26.0, *) {
+                if prominent {
+                    button.buttonStyle(.glassProminent)
+                } else {
+                    button.buttonStyle(.glass)
+                }
             } else {
-                button.buttonStyle(.glass)
-            }
-        } else {
-            if prominent {
-                button.buttonStyle(.borderedProminent)
-            } else {
-                button.buttonStyle(.bordered)
+                if prominent {
+                    button.buttonStyle(.borderedProminent)
+                } else {
+                    button.buttonStyle(.bordered)
+                }
             }
         }
+        .clipShape(Capsule(style: .continuous))
     }
 
     private func create() {
