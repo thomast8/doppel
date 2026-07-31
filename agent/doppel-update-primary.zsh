@@ -57,6 +57,20 @@ log_message "Opening primary $version_before hidden for its update check."
 
 /bin/sleep "$SOAK_SECONDS"
 
+# We opened the primary hidden. If it is no longer hidden, somebody started
+# using it during the soak, and quitting it now would close an app out from
+# under them. The update simply waits for the next run.
+primary_in_use() {
+    local visible
+    visible="$(/usr/bin/osascript -e 'tell application "System Events" to return visible of process "ChatGPT"' 2>/dev/null)"
+    [[ "$visible" == "true" ]]
+}
+
+if primary_in_use; then
+    log_message "Skipped the quit: the primary is in use. It will be tried again next run."
+    exit 0
+fi
+
 # The bundle id is passed as an argument rather than interpolated into the
 # script text, so it cannot alter the AppleScript.
 /usr/bin/osascript - "$PRIMARY_BUNDLE_ID" >/dev/null 2>&1 <<'APPLESCRIPT'
