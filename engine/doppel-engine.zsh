@@ -18,8 +18,9 @@ readonly ENGINE_VERSION="11"
 # signature-validated bundle at a config, state dir, or signing identity of its
 # choosing. Overrides remain available for development (DOPPEL_DEV=1).
 if [[ "${0:A}" == */*.app/Contents/Resources/Doppel/* && "${DOPPEL_DEV:-0}" != "1" ]]; then
-    unset DOPPEL_ASSET_ROOT DOPPEL_STATE_ROOT DOPPEL_SIGN_IDENTITY DOPPEL_SIGN_LEAF_SHA1 \
-          DOPPEL_PRIMARY_APP DOPPEL_PRIMARY_BUNDLE_ID DOPPEL_PRIMARY_TEAM_ID DOPPEL_INSTALL_ONLY
+    unset DOPPEL_ASSET_ROOT DOPPEL_STATE_ROOT DOPPEL_PIN_ROOT DOPPEL_SIGN_IDENTITY \
+          DOPPEL_SIGN_LEAF_SHA1 DOPPEL_PRIMARY_APP DOPPEL_PRIMARY_BUNDLE_ID \
+          DOPPEL_PRIMARY_TEAM_ID DOPPEL_INSTALL_ONLY
 fi
 
 readonly ASSET_ROOT="${DOPPEL_ASSET_ROOT:-${0:A:h}}"
@@ -39,6 +40,13 @@ readonly PRIMARY_APP="${DOPPEL_PRIMARY_APP:-/Applications/ChatGPT.app}"
 readonly PRIMARY_BUNDLE_ID="${DOPPEL_PRIMARY_BUNDLE_ID:-com.openai.codex}"
 readonly PRIMARY_TEAM_ID="${DOPPEL_PRIMARY_TEAM_ID:-2DC432GLL2}"
 readonly STATE_ROOT="${DOPPEL_STATE_ROOT:-$HOME/Library/Application Support/Doppel/state/$DOPPEL_BUNDLE_ID}"
+# Where the launcher looks up the requirement a bundle at a given path has to
+# satisfy. Keyed by install path rather than by anything inside the bundle:
+# the launcher used to read the requirement out of the very Info.plist it was
+# checking, so deleting that one key and re-sealing ad hoc satisfied the
+# weaker fallback. The path is the one thing the person launching the app
+# chooses and a tampered bundle cannot restate.
+readonly PIN_ROOT="${DOPPEL_PIN_ROOT:-$HOME/Library/Application Support/Doppel/pins}"
 readonly LAUNCHER="$ASSET_ROOT/bin/doppel-launcher"
 readonly ALERT_HELPER="$ASSET_ROOT/bin/doppel-alert"
 readonly ICON_ICNS="$ASSET_ROOT/assets/icon.icns"
@@ -91,6 +99,58 @@ plist_value() {
 
 sha256_file() {
     /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'
+}
+
+pin_file_for() {
+    local app="${1:A}" digest
+    digest="$(print -rn -- "$app" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')"
+    print -r -- "$PIN_ROOT/$digest"
+}
+
+# Records, outside the bundle, what a bundle installed at this path must
+# satisfy. Removed again when there is no signing identity, so that dropping
+# the identity does not leave every instance refusing to start.
+record_pinned_requirement() {
+    local app="$1" pin
+    pin="$(pin_file_for "$app")"
+    if [[ -z "$SIGN_LEAF_SHA1" ]]; then
+        /bin/rm -f "$pin" 2>/dev/null || true
+        return 0
+    fi
+    mkdir -p "$PIN_ROOT"
+    print -r -- "identifier \"$DOPPEL_BUNDLE_ID\" and certificate leaf H\"$SIGN_LEAF_SHA1\"" > "$pin" || \
+        fail_closed "Recording the pinned requirement failed."
+    /bin/chmod 600 "$pin"
+}
+
+# A rollback is a whole copy of the app. One is kept every time an instance is
+# rebuilt, and a vendor update rebuilds on its own, so without this they piled
+# up unbounded — tens of gigabytes on a machine with a couple of instances.
+prune_state() {
+    local keep="${DOPPEL_KEEP_BACKUPS:-1}" index
+    local -a rollbacks
+    rollbacks=("$STATE_ROOT/Backups"/*.rollback(N/om))
+    for (( index = keep + 1; index <= ${#rollbacks}; index++ )); do
+        /bin/rm -rf "${rollbacks[$index]}" 2>/dev/null || true
+    done
+    # Nothing else can be building: this runs while the rebuild lock is held,
+    # so anything still in Staging is debris from a build that died.
+    local staged
+    for staged in "$STATE_ROOT/Staging"/*(N/); do
+        /bin/rm -rf "$staged" 2>/dev/null || true
+    done
+    return 0
+}
+
+# Doppel installs by replacing whatever is at the target path, keeping the old
+# copy as a rollback. That is right for its own bundle and wrong for anybody
+# else's, which would vanish into a state directory nobody thinks to look in.
+is_doppel_instance() {
+    local app="$1"
+    [[ -e "$app" ]] || return 0
+    [[ -x "$app/Contents/MacOS/ChatGPT.real" ]] && return 0
+    [[ -n "$(plist_value "$app/Contents/Info.plist" DoppelSigningIdentifier)" ]] && return 0
+    return 1
 }
 
 require_engine_assets() {
@@ -367,6 +427,7 @@ restyle_instance() {
     executable_hash="$(source_executable_hash)"
     instance_is_healthy "$app" "$version" "$executable_hash" || \
         fail_closed "The restyled bundle failed its health check."
+    record_pinned_requirement "$app"
     log_message "Restyled instance in place (no rebuild)"
 }
 
@@ -409,8 +470,16 @@ launch_instance() {
     executable_hash="$(source_executable_hash)" || fail_closed "The primary executable could not be fingerprinted."
 
     if instance_is_healthy "$app" "$version" "$executable_hash"; then
+        # An instance built before pins existed has none recorded, and would
+        # otherwise keep falling back to what its own Info.plist claims. The
+        # health check above already proved it satisfies the leaf, so this is
+        # the safe moment to write one down.
+        record_pinned_requirement "$app"
         if [[ "${DOPPEL_INSTALL_ONLY:-0}" == "1" ]]; then
             log_message "Instance $version is already healthy; nothing to do."
+            # The caller reports this to the user, so a no-op is not described
+            # as a rebuild.
+            print -r -- "doppel-engine: already-healthy"
             return 0
         fi
         mkdir -p "$DOPPEL_PROFILE_ROOT" "$DOPPEL_CODEX_HOME"
@@ -420,6 +489,9 @@ launch_instance() {
         exec "$app/Contents/MacOS/ChatGPT.real" --user-data-dir="$DOPPEL_PROFILE_ROOT" "$@"
         fail_closed "The preserved vendor executable could not be started."
     fi
+
+    is_doppel_instance "$app" || \
+        fail_closed "There is already an app at $app and it is not a Doppel instance. Move it aside first; Doppel will not replace it."
 
     validate_primary
     local lock staging timestamp backup_root backup
@@ -450,6 +522,8 @@ launch_instance() {
     [[ -e "$backup" ]] && "$LSREGISTER" -u "$backup" >/dev/null 2>&1 || true
     "$LSREGISTER" -f "$app" >/dev/null 2>&1 || true
     /usr/bin/touch "$app"
+    record_pinned_requirement "$app"
+    prune_state
     release_rebuild_lock "$lock"
     log_message "Installed instance $version; rollback preserved at $backup"
     if [[ "${DOPPEL_INSTALL_ONLY:-0}" == "1" ]]; then

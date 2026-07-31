@@ -129,8 +129,10 @@ generate_icon() {
     fi
     compile_helpers
     if [[ -n "$icon_override" ]]; then
-        /bin/cp "$icon_override" "$dir/assets/icon.icns"
-        /usr/bin/sips -s format png -Z 1024 "$icon_override" --out "$dir/assets/icon.png" >/dev/null
+        [[ -f "$icon_override" ]] || die "no icon file at $icon_override"
+        /bin/cp "$icon_override" "$dir/assets/icon.icns" || die "copying $icon_override failed"
+        /usr/bin/sips -s format png -Z 1024 "$icon_override" --out "$dir/assets/icon.png" >/dev/null 2>&1 || \
+            die "$icon_override is not an image macOS can read; pass an .icns or .png file"
     else
         local source_png="$dir/assets/source.png" tinted_png="$dir/assets/icon.png"
         extract_primary_icon "$source_png"
@@ -152,10 +154,32 @@ assemble_instance() {
     print -r -- "$dir"
 }
 
-# Resolves an instance by its directory slug or by its current display name.
-# The slug is fixed when an instance is created and never changes, so after a
-# rename the two no longer agree — looking up only by re-slugified name would
-# make a renamed instance unreachable.
+# Asks a running instance to quit, twice across 40 seconds. Electron apps can
+# take a while to wind down, especially one that has just been relaunched, and
+# a single impatient attempt turns an ordinary edit or removal into a failure.
+quit_instance() {
+    local app="$1" bundle_id="$2" label="$3"
+    /usr/bin/pgrep -f "${app}/Contents/MacOS/" >/dev/null 2>&1 || return 0
+
+    local quit_error waited attempt
+    for attempt in 1 2; do
+        quit_error="$(/usr/bin/osascript -e "tell application id \"$bundle_id\" to quit" 2>&1)" || true
+        waited=0
+        while (( waited < 20 )) && /usr/bin/pgrep -f "${app}/Contents/MacOS/" >/dev/null 2>&1; do
+            /bin/sleep 1
+            waited=$(( waited + 1 ))
+        done
+        /usr/bin/pgrep -f "${app}/Contents/MacOS/" >/dev/null 2>&1 || return 0
+    done
+
+    # -128 is "user cancelled": the app refused, which normally means a dialog
+    # is waiting for an answer.
+    if [[ "$quit_error" == *-128* ]]; then
+        die "'$label' would not quit — it has a dialog open (a keychain prompt, for example). Answer or dismiss it, then try again."
+    fi
+    die "'$label' would not quit after 40 seconds. Quit it yourself, then try again."
+}
+
 # Replacing electron.icns is not enough on its own: Finder and the Dock keep
 # their own caches, so a recoloured instance can keep showing the old icon
 # until something invalidates them.
@@ -172,30 +196,95 @@ refresh_icon_caches() {
     return 0
 }
 
+# A directory only counts as an instance once its config is there to read. A
+# create that failed part way through leaves the directory without one, and
+# treating that as an instance used to abort every later command.
+is_instance_dir() {
+    [[ -r "$1/instance-config.zsh" ]]
+}
+
+# Reads one variable from an instance config by sourcing it in a subshell —
+# the same parser the engine uses, so the two can't disagree. Safe because
+# create writes %q-escaped values.
+#
+# This never reports failure. It used to: an unreadable config made the
+# subshell exit 127, and `name="$(config_value ...)"` then took that status and
+# killed the whole command under set -e, printing nothing at all.
+config_value() {
+    local dir="$1" var="$2"
+    is_instance_dir "$dir" || return 0
+    # ${(P)var:-} rather than ${(P)var}: a config written before a field existed
+    # must read as empty, not abort the caller under set -u.
+    ( source "$dir/instance-config.zsh" 2>/dev/null || true; print -r -- "${(P)var:-}" )
+}
+
+# Resolves an instance by its current display name, falling back to its
+# directory slug.
+#
+# Display name first, and that order matters. The slug is fixed at creation, so
+# after a rename the two no longer agree; and because several names slugify the
+# same way ("QA One" and "QA-One" both give qa-one), matching the slug first
+# resolved a renamed instance to a different one and quietly acted on the wrong
+# account.
 instance_dir_for() {
     local wanted="$1" slug dir
-    slug="$(slugify "$wanted")"
-    if [[ -n "$slug" && -d "$INSTANCES_ROOT/$slug" ]]; then
-        print -r -- "$INSTANCES_ROOT/$slug"
-        return 0
-    fi
     for dir in "$INSTANCES_ROOT"/*(N/); do
         if [[ "$(config_value "$dir" DOPPEL_DISPLAY_NAME)" == "$wanted" ]]; then
             print -r -- "$dir"
             return 0
         fi
     done
+    slug="$(slugify "$wanted")"
+    if [[ -n "$slug" ]] && is_instance_dir "$INSTANCES_ROOT/$slug"; then
+        print -r -- "$INSTANCES_ROOT/$slug"
+        return 0
+    fi
     die "no instance named '$wanted'"
 }
 
-# Reads one variable from an instance config by sourcing it in a subshell —
-# the same parser the engine uses, so the two can't disagree. Safe because
-# create writes %q-escaped values.
-config_value() {
-    local dir="$1" var="$2"
-    # ${(P)var:-} rather than ${(P)var}: a config written before a field existed
-    # must read as empty, not abort the caller under set -u.
-    ( source "$dir/instance-config.zsh" 2>/dev/null && print -r -- "${(P)var:-}" )
+# The data directories the primary app and the Codex CLI use when nothing
+# redirects them. An instance may legitimately be pointed at these to adopt an
+# existing account, which makes them exactly the paths --purge-data must never
+# move to the Trash.
+primary_data_paths() {
+    print -r -- "$HOME/Library/Application Support/Codex"
+    print -r -- "$HOME/.codex"
+    local product
+    product="$(/usr/bin/plutil -extract CFBundleName raw "$PRIMARY_APP/Contents/Info.plist" 2>/dev/null)" || product=""
+    [[ -n "$product" ]] && print -r -- "$HOME/Library/Application Support/$product"
+    return 0
+}
+
+# True when a path is something --purge-data must refuse to touch: a home
+# directory, one of its standard folders, somewhere outside the home directory
+# entirely, or data the primary app is still using.
+protected_data_path() {
+    local path="${1:A}" home="${HOME:A}" guarded primary
+    [[ -n "$path" ]] || return 1
+    [[ "$path" != "/" ]] || return 0
+    [[ "$path" != "$home" ]] || return 0
+    [[ "$path" == "$home"/* ]] || return 0
+    for guarded in Library "Library/Application Support" "Library/Preferences" \
+                   "Library/Containers" "Library/Caches" Applications Documents \
+                   Desktop Downloads Movies Music Pictures Public .config .ssh .gnupg; do
+        [[ "$path" != "$home/$guarded" ]] || return 0
+    done
+    while read -r primary; do
+        [[ -n "$primary" ]] || continue
+        [[ "$path" != "${primary:A}" ]] || return 0
+    done < <(primary_data_paths)
+    return 1
+}
+
+# True when another instance is pointed at the same data.
+data_shared_with_other_instance() {
+    local path="$1" self="$2" other
+    for other in "$INSTANCES_ROOT"/*(N/); do
+        [[ "$other" != "$self" ]] || continue
+        [[ "$(config_value "$other" DOPPEL_PROFILE_ROOT)" != "$path" ]] || return 0
+        [[ "$(config_value "$other" DOPPEL_CODEX_HOME)" != "$path" ]] || return 0
+    done
+    return 1
 }
 
 app_path_for() {
@@ -232,8 +321,16 @@ cmd_create() {
     local slug
     slug="$(slugify "$name")"
     [[ -n "$slug" ]] || die "the name produces an empty identifier; include at least one letter or digit"
-    [[ ! -d "$INSTANCES_ROOT/$slug" ]] || \
-        die "an instance with slug '$slug' already exists ($INSTANCES_ROOT/$slug); pick another name or remove it first"
+    if [[ -d "$INSTANCES_ROOT/$slug" ]]; then
+        is_instance_dir "$INSTANCES_ROOT/$slug" && \
+            die "an instance with slug '$slug' already exists ($INSTANCES_ROOT/$slug); pick another name or remove it first"
+        die "an earlier create left an incomplete directory at $INSTANCES_ROOT/$slug; delete it and try again"
+    fi
+    # Installing over whatever happens to sit at the target path would move a
+    # stranger's app into Doppel's own backup directory, where nobody would
+    # think to look for it.
+    [[ ! -e "$install_to/$name.app" ]] || \
+        die "an app already exists at $install_to/$name.app; pick another name or move that app aside first"
     [[ -n "$bundle_id" ]] || bundle_id="com.openai.codex.doppel-$slug"
     [[ -n "$scheme" ]] || scheme="codex-$slug"
     [[ -n "$profile_root" ]] || profile_root="$HOME/Library/Application Support/$name"
@@ -263,12 +360,28 @@ cmd_create() {
     done
 
     compile_helpers
+    # Anything that goes wrong from here leaves a half-built instance
+    # directory. One without a config used to wedge the slug and take every
+    # later command down with it, so the partial directory is cleaned up
+    # instead of left to be discovered later.
+    PARTIAL_INSTANCE_DIR="$INSTANCES_ROOT/$slug"
+    trap 'remove_partial_instance' EXIT INT TERM
+
     local dir
     dir="$(assemble_instance "$slug" "$name" "$bundle_id" "$scheme" "$profile_root" "$codex_home" "$tint" "$icon_override")"
     print -r -- "$install_to" > "$dir/install-root"
     mkdir -p "$install_to"
     /bin/zsh "$dir/doppel-engine.zsh" install "$install_to/$name.app"
+
+    PARTIAL_INSTANCE_DIR=""
     print -r -- "created: $install_to/$name.app (instance assets: $dir)"
+}
+
+typeset -g PARTIAL_INSTANCE_DIR=""
+remove_partial_instance() {
+    [[ -n "$PARTIAL_INSTANCE_DIR" && -d "$PARTIAL_INSTANCE_DIR" ]] || return 0
+    /bin/rm -rf "$PARTIAL_INSTANCE_DIR"
+    print -u2 -r -- "doppel: cleaned up the partly created instance at $PARTIAL_INSTANCE_DIR"
 }
 
 cmd_list() {
@@ -327,16 +440,22 @@ cmd_remove() {
     profile_root="$(config_value "$dir" DOPPEL_PROFILE_ROOT)"
     codex_home="$(config_value "$dir" DOPPEL_CODEX_HOME)"
 
-    if /usr/bin/pgrep -f "${app}/Contents/MacOS/" >/dev/null 2>&1; then
-        /usr/bin/osascript -e "tell application id \"$bundle_id\" to quit" >/dev/null 2>&1 || true
-        local waited=0
-        while (( waited < 15 )) && /usr/bin/pgrep -f "${app}/Contents/MacOS/" >/dev/null 2>&1; do
-            /bin/sleep 1
-            waited=$(( waited + 1 ))
+    # An instance can be pointed at any directory, including one it does not
+    # own: the primary app's own profile, a shared CODEX_HOME, or a home
+    # directory. Purging is checked before anything at all is moved, so a
+    # refusal costs nothing and the answer is never "half of it went".
+    if (( purge )); then
+        local data
+        for data in "$profile_root" "$codex_home"; do
+            [[ -n "$data" ]] || continue
+            ! protected_data_path "$data" || \
+                die "refusing to purge $data: it is a shared or system location, not a directory this instance owns. Remove '$target' without --purge-data, then delete anything you actually want gone yourself."
+            ! data_shared_with_other_instance "$data" "$dir" || \
+                die "refusing to purge $data: another instance is using it. Remove '$target' without --purge-data."
         done
-        ! /usr/bin/pgrep -f "${app}/Contents/MacOS/" >/dev/null 2>&1 || \
-            die "'$target' is still running; quit it and try again"
     fi
+
+    quit_instance "$app" "$bundle_id" "$target"
 
     local stamp="$(/bin/date '+%Y%m%d-%H%M%S')"
     local trash="$HOME/.Trash"
@@ -345,6 +464,7 @@ cmd_remove() {
     if [[ -d "$app" ]]; then
         "$LSREGISTER" -u "$app" >/dev/null 2>&1 || true
         /bin/mv "$app" "$trash/${app:t:r}.$stamp.app" || die "moving the app bundle to the Trash failed"
+        forget_pinned_requirement "$app"
         print -r -- "moved to Trash: ${app:t}"
     fi
 
@@ -354,7 +474,6 @@ cmd_remove() {
     print -r -- "instance definition kept at: $removed_root/${dir:t}.$stamp"
 
     if (( purge )); then
-        local data
         for data in "$profile_root" "$codex_home"; do
             [[ -n "$data" && -d "$data" ]] || continue
             /bin/mv "$data" "$trash/${data:t}.$stamp" || die "moving $data to the Trash failed"
@@ -392,44 +511,38 @@ cmd_edit() {
     old_app="$(app_path_for "$dir")"
     bundle_id="$(config_value "$dir" DOPPEL_BUNDLE_ID)"
 
+    # Everything that can refuse the rename is checked here, before a single
+    # byte changes. Deciding halfway through used to leave the config renamed
+    # and the bundle not, which read as an instance that had lost its app.
+    local new_app="$old_app"
     if [[ -n "$new_name" ]]; then
         validate_name "$new_name"
-        local existing existing_name
+        local existing existing_name new_slug
+        new_slug="$(slugify "$new_name")"
+        [[ -n "$new_slug" ]] || die "the name produces an empty identifier; include at least one letter or digit"
         for existing in "$INSTANCES_ROOT"/*(N/); do
             [[ "$existing" != "$dir" ]] || continue
             existing_name="$(config_value "$existing" DOPPEL_DISPLAY_NAME)"
             [[ "$existing_name" != "$new_name" ]] || \
                 die "another instance is already called '$new_name'"
+            # Names that differ but slugify the same are indistinguishable to
+            # every command that takes a name, so one of the two would become
+            # unreachable.
+            [[ "${existing:t}" != "$new_slug" ]] || \
+                die "'$new_name' is too close to '$existing_name'; they would share the identifier '$new_slug'"
         done
+        local install_root
+        install_root="$(cat "$dir/install-root" 2>/dev/null || print -r -- "$HOME/Applications")"
+        new_app="$install_root/$new_name.app"
+        [[ "$new_app" == "$old_app" || ! -e "$new_app" ]] || \
+            die "an app already exists at $new_app; pick another name or move that app aside first"
     fi
 
     # The bundle is replaced in place, so the running copy has to go first. It
-    # is reopened afterwards, so the new name and icon appear straight away.
+    # is reopened afterwards only if it was open to begin with.
     local was_running=0
-    if /usr/bin/pgrep -f "${old_app}/Contents/MacOS/" >/dev/null 2>&1; then
-        was_running=1
-        # Ask twice over 40 seconds: a busy Electron app can take a while to
-        # wind down, and one missed request should not abandon the edit.
-        local quit_error waited=0 attempt
-        for attempt in 1 2; do
-            quit_error="$(/usr/bin/osascript -e "tell application id \"$bundle_id\" to quit" 2>&1)" || true
-            waited=0
-            while (( waited < 20 )) && /usr/bin/pgrep -f "${old_app}/Contents/MacOS/" >/dev/null 2>&1; do
-                /bin/sleep 1
-                waited=$(( waited + 1 ))
-            done
-            /usr/bin/pgrep -f "${old_app}/Contents/MacOS/" >/dev/null 2>&1 || break
-        done
-        if /usr/bin/pgrep -f "${old_app}/Contents/MacOS/" >/dev/null 2>&1; then
-            # -128 is "user cancelled": the app refused to quit, which normally
-            # means a dialog is waiting for an answer.
-            if [[ "$quit_error" == *-128* ]]; then
-                die "'$target' would not quit — it has a dialog open (a keychain prompt, for example). Answer or dismiss it, then try again."
-            fi
-            die "'$target' would not quit after 40 seconds. Quit it yourself, then try again."
-        fi
-    fi
-
+    /usr/bin/pgrep -f "${old_app}/Contents/MacOS/" >/dev/null 2>&1 && was_running=1
+    quit_instance "$old_app" "$bundle_id" "$target"
     if [[ -n "$tint" || -n "$icon_override" ]]; then
         generate_icon "$dir" "$tint" "$icon_override"
     fi
@@ -447,12 +560,10 @@ cmd_edit() {
         "$(config_value "$dir" DOPPEL_CODEX_HOME)" \
         "$effective_tint"
 
-    local new_app
-    new_app="$(app_path_for "$dir")"
     if [[ "$new_app" != "$old_app" && -d "$old_app" ]]; then
-        [[ ! -e "$new_app" ]] || die "an app already exists at $new_app"
         "$LSREGISTER" -u "$old_app" >/dev/null 2>&1 || true
         /bin/mv "$old_app" "$new_app" || die "renaming the app bundle failed"
+        forget_pinned_requirement "$old_app"
     fi
 
     # A rename or recolour only touches metadata and artwork, so the bundle is
@@ -473,23 +584,93 @@ cmd_edit() {
         /bin/zsh "$dir/doppel-engine.zsh" install "$new_app"
     fi
     refresh_icon_caches "$new_app"
-    if [[ "${DOPPEL_RELAUNCH:-1}" != "0" ]]; then
+    if (( was_running )) && [[ "${DOPPEL_RELAUNCH:-1}" != "0" ]]; then
         /usr/bin/open -na "$new_app" || print -u2 -r -- "note: could not reopen $new_app"
     fi
     print -r -- "updated: $new_app"
 }
 
 cmd_rebuild() {
-    local dir app was_running=0
+    local dir app was_running=0 engine_output
     dir="$(instance_dir_for "$1")"
     app="$(app_path_for "$dir")"
     /usr/bin/pgrep -f "${app}/Contents/MacOS/" >/dev/null 2>&1 && was_running=1
     compile_helpers
     install_engine_assets "$dir"
-    /bin/zsh "$dir/doppel-engine.zsh" install "$app"
+    engine_output="$(/bin/zsh "$dir/doppel-engine.zsh" install "$app")"
     refresh_icon_caches "$app"
     (( was_running )) && /usr/bin/open -na "$app" >/dev/null 2>&1 || true
-    print -r -- "rebuilt: $app"
+    # A rebuild of a bundle that is already in step does nothing, and saying
+    # "rebuilt" anyway made a no-op look like a repair.
+    if [[ "$engine_output" == *already-healthy* ]]; then
+        print -r -- "already up to date: $app"
+    else
+        print -r -- "rebuilt: $app"
+    fi
+}
+
+# Rollback copies are whole app bundles, about 1.4GB each, and one is kept
+# every time an instance is rebuilt — which a vendor update does on its own.
+# Nothing used to remove them, so they simply accumulated.
+cmd_prune() {
+    # Declared once: `local x` on a name that is already local in the same
+    # scope makes zsh print it, which turned a loop into pages of debug output.
+    local keep="${DOPPEL_KEEP_BACKUPS:-1}"
+    local state_root="$DOPPEL_HOME/state" before after instance_state staged index only=""
+    local -a targets rollbacks
+
+    # With a name, only that instance's copies are touched. Without one,
+    # everything, which is what reclaims space left by older versions.
+    if [[ -n "${1:-}" ]]; then
+        local dir
+        # Resolved in its own step: nesting this inside another substitution
+        # let the "no such instance" message be followed by a second one.
+        dir="$(instance_dir_for "$1")"
+        only="$(config_value "$dir" DOPPEL_BUNDLE_ID)"
+        [[ -n "$only" ]] || die "'$1' has no bundle identifier to prune"
+    fi
+
+    [[ -d "$state_root" ]] || { print -r -- "nothing to prune"; return 0 }
+    if [[ -n "$only" ]]; then
+        targets=("$state_root/$only"(N/))
+    else
+        targets=("$state_root"/*(N/))
+    fi
+    before="$(/usr/bin/du -sk "$state_root" 2>/dev/null | /usr/bin/awk '{print $1}')"
+    for instance_state in $targets; do
+        [[ "${instance_state:t}" != "Removed" ]] || continue
+        rollbacks=("$instance_state/Backups"/*.rollback(N/om))
+        for (( index = keep + 1; index <= ${#rollbacks}; index++ )); do
+            /bin/rm -rf "${rollbacks[$index]}"
+        done
+        # Staging only ever holds a build in flight; anything left is debris
+        # from one that failed.
+        for staged in "$instance_state/Staging"/*(N/); do
+            /bin/rm -rf "$staged"
+        done
+    done
+    after="$(/usr/bin/du -sk "$state_root" 2>/dev/null | /usr/bin/awk '{print $1}')"
+    printf 'pruned: %s -> %s (keeping %s rollback(s) per instance)\n' \
+        "$(format_size "$before")" "$(format_size "$after")" "$keep"
+}
+
+format_size() {
+    local kilobytes="${1:-0}"
+    if (( kilobytes >= 1048576 )); then
+        printf '%.1fGB' "$(( kilobytes / 1048576.0 ))"
+    elif (( kilobytes >= 1024 )); then
+        printf '%dMB' "$(( kilobytes / 1024 ))"
+    else
+        printf '%dKB' "$kilobytes"
+    fi
+}
+
+# The pin an instance's launcher checks is keyed by the bundle's own path, so a
+# bundle that moves or goes away leaves a record behind.
+forget_pinned_requirement() {
+    local app="$1" digest
+    digest="$(print -rn -- "${app:A}" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')"
+    /bin/rm -f "$DOPPEL_HOME/pins/$digest" 2>/dev/null || true
 }
 
 case "${1:-}" in
@@ -499,5 +680,6 @@ case "${1:-}" in
     rebuild) [[ $# -eq 2 ]] || die "usage: doppel rebuild <name>"; cmd_rebuild "$2" ;;
     edit) shift; cmd_edit "$@" ;;
     remove) shift; cmd_remove "$@" ;;
-    *) die "usage: doppel {create|list|launch|rebuild|edit|remove} ..." ;;
+    prune) shift; [[ $# -le 1 ]] || die "usage: doppel prune [<name>]"; cmd_prune "${1:-}" ;;
+    *) die "usage: doppel {create|list|launch|rebuild|edit|remove|prune} ..." ;;
 esac

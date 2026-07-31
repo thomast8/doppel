@@ -46,18 +46,37 @@ bin/doppel rebuild "ChatGPT Personal"
 bin/doppel edit "ChatGPT Personal" --rename "ChatGPT Home" --tint 3B82F6
 bin/doppel remove "ChatGPT Personal"                # keeps the account data
 bin/doppel remove "ChatGPT Personal" --purge-data    # data to the Trash too
+bin/doppel prune                                     # drop old rollback copies
+bin/doppel prune "ChatGPT Personal"                  # just this instance's
 ```
 
 `edit` renames an instance, changes its icon colour, or both, and reopens the
-instance afterwards if it was running, so the change is visible immediately. Identity and data
-stay put — the bundle identifier, URL scheme and data directories are fixed when
-an instance is created — so a rename never separates an account from its chats.
-Instances can be referred to by their current name at any time.
+instance afterwards if it was running, so the change is visible immediately.
+Identity and data stay put — the bundle identifier, URL scheme and data
+directories are fixed when an instance is created — so a rename never separates
+an account from its chats. Instances can be referred to by their current name at
+any time; a name that would end up sharing another instance's identifier is
+refused, because one of the two would then be unreachable.
 
 `remove` never erases anything: the app bundle goes to the Trash, the instance
 definition is preserved under `state/Removed/` so the removal can be undone, and
 account data (profile and `CODEX_HOME`) is left in place unless `--purge-data` is
 given — and even then it is moved to the Trash, not deleted.
+
+`--purge-data` also refuses to touch anything that is not clearly the
+instance's own: a home directory or one of its standard folders, a path outside
+the home directory, data another instance is using, and the directories the
+primary app and the Codex CLI use by default. An instance can legitimately be
+pointed at those to adopt an existing account, which is exactly why removing it
+must not take them with it. The refusal happens before anything is moved, so a
+refused purge leaves the instance intact; remove it without the flag and delete
+what you actually want gone yourself.
+
+Every rebuild keeps the previous bundle as a rollback, and a vendor update
+rebuilds on its own, so `prune` exists to drop the ones you no longer need. It
+keeps the most recent rollback per instance (`DOPPEL_KEEP_BACKUPS` to change
+that) and clears any staging left by a build that died. Rebuilds prune as they
+go, so this is only needed to reclaim what earlier versions left behind.
 
 `create` clones the primary app, tints its real icon with the colour you chose,
 installs the instance into `~/Applications`, and stores the instance definition in
@@ -125,6 +144,15 @@ difference. With a stable identity the launcher pins the certificate leaf, and a
 attacker's ad-hoc re-seal no longer satisfies it (verified: an ad-hoc bundle fails
 any `certificate leaf` requirement).
 
+The requirement the launcher checks is kept outside the bundle, under
+`Doppel/pins/`, keyed by the bundle's install path. That matters more than it
+sounds: the launcher used to read the requirement out of the same `Info.plist`
+it was about to validate, so deleting one key and re-sealing ad hoc dropped it
+to a much weaker identifier-only check that the re-seal then satisfied. The
+install path is chosen by whoever launches the app, and a tampered bundle
+cannot restate it. Read the limits of this below — it is not a boundary against
+something already running as you, only one more thing that has to be got right.
+
 `doppel-signing setup` generates a code-signing certificate with OpenSSL and
 imports it into your login keychain, granting `codesign` access to the key so
 signing stays silent. No administrator rights and no trust prompt: the
@@ -156,11 +184,13 @@ otherwise ask `codesign` to sign with it.
   entitlement is not granted, so `DYLD_INSERT_LIBRARIES` injection is still
   blocked (verified empirically against the built clones).
 - **Doppel's boundary is your user account, not the OS.** Every input it builds
-  from — the repo, the instance directory, the build cache — is writable by your
-  own user, so a process already running as you can influence a rebuild. Without
-  a local signing identity (above) nothing detects that; with one, tampering
-  fails the pinned requirement. Treat Doppel as protecting against accidents and
-  drift, not against local malware.
+  from — the repo, the instance directory, the build cache, the recorded pins —
+  is writable by your own user, so a process already running as you can
+  influence a rebuild. Without a local signing identity (above) nothing detects
+  that. With one, tampering fails the pinned requirement, and the pin cannot be
+  removed from inside the bundle; but the same user can still delete the pin
+  record itself, and nothing stops that. Treat Doppel as protecting against
+  accidents and drift, not against local malware.
 - **Notification and service containers are still shared.** Isolation covers the
   Electron profile and `CODEX_HOME`. Helper processes inside the clone keep the
   vendor's signature and its app-group entitlements, so app-group containers

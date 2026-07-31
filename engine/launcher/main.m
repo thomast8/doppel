@@ -1,5 +1,6 @@
 #import <Cocoa/Cocoa.h>
 #import <Security/Security.h>
+#include <CommonCrypto/CommonDigest.h>
 #include <sys/xattr.h>
 #include <unistd.h>
 
@@ -24,6 +25,32 @@ static void show_error(NSString *message) {
     [alert runModal];
 }
 
+// The requirement recorded for a bundle installed at this exact path, or nil.
+//
+// It is deliberately not read from the bundle's own Info.plist. Doing that made
+// the pin self-defeating: whoever could tamper with the bundle could also
+// delete the DoppelPinnedRequirement key, re-seal ad hoc, and be checked
+// against the far weaker identifier-only fallback. The install path is chosen
+// by the person launching the app, so a tampered bundle cannot restate it.
+static NSString *recorded_requirement(NSString *bundlePath) {
+    const char *utf8 = bundlePath.fileSystemRepresentation;
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(utf8, (CC_LONG)strlen(utf8), digest);
+    NSMutableString *hex = [NSMutableString stringWithCapacity:CC_SHA256_DIGEST_LENGTH * 2];
+    for (int index = 0; index < CC_SHA256_DIGEST_LENGTH; index++) {
+        [hex appendFormat:@"%02x", digest[index]];
+    }
+
+    NSString *path = [NSString pathWithComponents:@[
+        NSHomeDirectory(), @"Library", @"Application Support", @"Doppel", @"pins", hex]];
+    NSString *contents = [NSString stringWithContentsOfFile:path
+                                                   encoding:NSUTF8StringEncoding
+                                                      error:NULL];
+    contents = [contents stringByTrimmingCharactersInSet:
+        NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    return contents.length > 0 ? contents : nil;
+}
+
 int main(int argc, char *argv[]) {
     @autoreleasepool {
         NSString *bundlePath = NSBundle.mainBundle.bundlePath;
@@ -37,18 +64,24 @@ int main(int argc, char *argv[]) {
 
         // Validate against a pinned requirement, not just internal
         // consistency: a NULL requirement would accept any bundle that had been
-        // re-sealed with an arbitrary signature after tampering. The instance's
-        // own signing identifier is pinned here; when the bundle was signed with
-        // a stable identity, DoppelPinnedRequirement adds the certificate leaf.
+        // re-sealed with an arbitrary signature after tampering.
+        //
+        // The requirement recorded outside the bundle wins. Only when there is
+        // none — an instance built before pins existed, or one signed ad hoc
+        // because no local identity exists — does this fall back to what the
+        // bundle says about itself.
         NSDictionary *info = NSBundle.mainBundle.infoDictionary;
-        NSString *expectedIdentifier = info[@"DoppelSigningIdentifier"];
-        if (expectedIdentifier.length == 0) {
-            show_error(@"This bundle does not record its expected signing identifier. No engine code was executed.");
-            return 1;
-        }
-        NSString *requirementText = info[@"DoppelPinnedRequirement"];
-        if (requirementText.length == 0) {
-            requirementText = [NSString stringWithFormat:@"identifier \"%@\"", expectedIdentifier];
+        NSString *requirementText = recorded_requirement(bundlePath);
+        if (requirementText == nil) {
+            NSString *expectedIdentifier = info[@"DoppelSigningIdentifier"];
+            if (expectedIdentifier.length == 0) {
+                show_error(@"This bundle does not record its expected signing identifier. No engine code was executed.");
+                return 1;
+            }
+            requirementText = info[@"DoppelPinnedRequirement"];
+            if (requirementText.length == 0) {
+                requirementText = [NSString stringWithFormat:@"identifier \"%@\"", expectedIdentifier];
+            }
         }
 
         SecRequirementRef requirement = NULL;
