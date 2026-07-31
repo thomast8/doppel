@@ -97,6 +97,20 @@ final class InstanceStore: ObservableObject {
         }
     }
 
+    /// Renames an instance and/or changes its tint. Identity and account data
+    /// are fixed at creation, so neither is touched here.
+    func edit(_ instance: Instance, newName: String?, tintHex: String?,
+              completion: @escaping (String?) -> Void) {
+        var arguments = ["edit", instance.name]
+        if let newName, newName != instance.name { arguments += ["--rename", newName] }
+        if let tintHex { arguments += ["--tint", tintHex] }
+        guard arguments.count > 2 else { completion(nil); return }
+        runCLI(arguments, busyKey: instance.id) { [weak self] failure in
+            if failure == nil { self?.reload() }
+            completion(failure)
+        }
+    }
+
     /// Removes an instance. The CLI moves the app to the Trash and keeps the
     /// instance definition; account data is only touched with purgeData.
     func remove(_ instance: Instance, purgeData: Bool) {

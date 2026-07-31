@@ -17,8 +17,12 @@ final class CreateForm: ObservableObject {
 /// its container's radius minus the padding between them.
 struct CreateInstanceView: View {
     @ObservedObject var store: InstanceStore
+    /// When set, the window edits that instance instead of creating one.
+    var editing: Instance?
     @StateObject private var form = CreateForm()
     @Environment(\.dismiss) private var dismiss
+
+    private var isEditing: Bool { editing != nil }
 
     private enum Radius {
         static let panel: CGFloat = 20
@@ -31,13 +35,13 @@ struct CreateInstanceView: View {
     }
 
     private var canCreate: Bool {
-        !trimmedName.isEmpty && !form.creating && store.primaryInstalled
+        !trimmedName.isEmpty && !form.creating && (store.primaryInstalled || isEditing)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             header
-            if !store.primaryInstalled { missingPrimaryNotice }
+            if !store.primaryInstalled && !isEditing { missingPrimaryNotice }
             nameField
             colourSection
             if let errorMessage = form.errorMessage { errorRow(errorMessage) }
@@ -46,6 +50,9 @@ struct CreateInstanceView: View {
         }
         .padding(28)
         .frame(width: 440)
+        .onAppear {
+            if let editing, form.name.isEmpty { form.name = editing.name }
+        }
         .background(WindowStyler())
         .background(
             GlassBackground(cornerRadius: 0, clearStyle: false, fallbackMaterial: .underWindowBackground)
@@ -59,9 +66,11 @@ struct CreateInstanceView: View {
         HStack(alignment: .center, spacing: 16) {
             IconTile(color: form.color, name: trimmedName, radius: Radius.tile)
             VStack(alignment: .leading, spacing: 4) {
-                Text("New instance")
+                Text(isEditing ? "Edit instance" : "New instance")
                     .font(.system(size: 21, weight: .semibold))
-                Text("Its own app, account and history.")
+                Text(isEditing
+                     ? "Renaming keeps this instance's account and chats."
+                     : "Its own app, account and history.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -83,7 +92,7 @@ struct CreateInstanceView: View {
                 .overlay(
                     RoundedRectangle(cornerRadius: Radius.field, style: .continuous)
                         .strokeBorder(.white.opacity(0.14), lineWidth: 0.5))
-                .onSubmit { if canCreate { create() } }
+                .onSubmit { if canCreate { submit() } }
         }
     }
 
@@ -96,15 +105,19 @@ struct CreateInstanceView: View {
 
     private var actionBar: some View {
         HStack(spacing: 12) {
-            Text(store.primaryInstalled
-                 ? "Everything else is derived from the name."
-                 : "Install ChatGPT first.")
+            Text(isEditing
+                 ? "The app is rebuilt with the new name and colour."
+                 : (store.primaryInstalled
+                    ? "Everything else is derived from the name."
+                    : "Install ChatGPT first."))
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer(minLength: 8)
             glassButton("Cancel", prominent: false) { dismiss() }
                 .keyboardShortcut(.cancelAction)
-            glassButton(form.creating ? "Creating…" : "Create", prominent: true) { create() }
+            glassButton(form.creating ? (isEditing ? "Saving…" : "Creating…")
+                                      : (isEditing ? "Save" : "Create"),
+                        prominent: true) { submit() }
                 .keyboardShortcut(.defaultAction)
                 .disabled(!canCreate)
         }
@@ -179,16 +192,21 @@ struct CreateInstanceView: View {
         .clipShape(Capsule(style: .continuous))
     }
 
-    private func create() {
+    private func submit() {
         form.creating = true
         form.errorMessage = nil
-        store.create(name: trimmedName, tintHex: form.color.rgbHex) { [form] failure in
+        let finish: (String?) -> Void = { [form] failure in
             form.creating = false
             if let failure {
                 form.errorMessage = failure
             } else {
                 dismiss()
             }
+        }
+        if let editing {
+            store.edit(editing, newName: trimmedName, tintHex: form.color.rgbHex, completion: finish)
+        } else {
+            store.create(name: trimmedName, tintHex: form.color.rgbHex, completion: finish)
         }
     }
 }

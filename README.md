@@ -43,9 +43,15 @@ bin/doppel create --name "ChatGPT Personal" \
 bin/doppel list
 bin/doppel launch "ChatGPT Personal"
 bin/doppel rebuild "ChatGPT Personal"
+bin/doppel edit "ChatGPT Personal" --rename "ChatGPT Home" --tint 3B82F6
 bin/doppel remove "ChatGPT Personal"                # keeps the account data
 bin/doppel remove "ChatGPT Personal" --purge-data    # data to the Trash too
 ```
+
+`edit` renames an instance, changes its icon colour, or both. Identity and data
+stay put — the bundle identifier, URL scheme and data directories are fixed when
+an instance is created — so a rename never separates an account from its chats.
+Instances can be referred to by their current name at any time.
 
 `remove` never erases anything: the app bundle goes to the Trash, the instance
 definition is preserved under `state/Removed/` so the removal can be undone, and
@@ -65,8 +71,8 @@ open -a ~/Applications/Doppel.app
 ```
 
 A menu-bar-only front end (`LSUIElement`, so no Dock icon): list instances, launch,
-rebuild or remove them, create a new one from a name plus a color picker, and
-toggle **Start at Login**. It shells out to `bin/doppel` for every action, so the
+rebuild, rename, recolour or remove them, create a new one from a name plus a
+colour picker, and toggle **Start at Login**. It shells out to `bin/doppel` for every action, so the
 CLI stays the single source of truth. It finds the CLI via `$DOPPEL_CLI` or a short
 list of standard locations, skipping any that are group- or world-writable, and
 holds an advisory lock so launchd and Finder can never produce two menu-bar icons.

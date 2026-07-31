@@ -11,7 +11,7 @@
 set -u
 setopt PIPE_FAIL
 
-readonly ENGINE_VERSION="10"
+readonly ENGINE_VERSION="11"
 
 # When this engine copy runs from inside an installed bundle, environment
 # overrides are ignored: otherwise a same-uid process could point a
@@ -140,6 +140,7 @@ instance_is_healthy() {
     /usr/bin/xattr -d com.apple.FinderInfo "$app" 2>/dev/null || true
     /usr/bin/xattr -d com.apple.ResourceFork "$app" 2>/dev/null || true
     [[ "$(plist_value "$info" CFBundleIdentifier)" == "$DOPPEL_BUNDLE_ID" ]] || return 1
+    [[ "$(plist_value "$info" CFBundleDisplayName)" == "$DOPPEL_DISPLAY_NAME" ]] || return 1
     [[ "$(plist_value "$info" DoppelEngineVersion)" == "$ENGINE_VERSION" ]] || return 1
     [[ "$(plist_value "$info" DoppelSourceBundleVersion)" == "$expected_version" ]] || return 1
     [[ "$(plist_value "$info" DoppelSourceExecutableSHA256)" == "$expected_hash" ]] || return 1

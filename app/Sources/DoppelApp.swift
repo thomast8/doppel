@@ -41,6 +41,14 @@ struct DoppelApp: App {
         }
         .windowResizability(.contentSize)
         .windowStyle(.hiddenTitleBar)
+
+        WindowGroup(id: "edit-instance", for: String.self) { $slug in
+            if let slug, let instance = store.instances.first(where: { $0.id == slug }) {
+                CreateInstanceView(store: store, editing: instance)
+            }
+        }
+        .windowResizability(.contentSize)
+        .windowStyle(.hiddenTitleBar)
     }
 }
 
@@ -75,6 +83,11 @@ struct MenuContent: View {
                     .disabled(store.busy.contains(instance.id))
                 Button("Rebuild") { store.rebuild(instance) }
                     .disabled(store.busy.contains(instance.id))
+                Button("Rename or Recolour…") {
+                    openWindow(id: "edit-instance", value: instance.id)
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+                .disabled(store.busy.contains(instance.id))
                 Divider()
                 Button("Remove…") { confirmRemove(instance) }
                     .disabled(store.busy.contains(instance.id))
