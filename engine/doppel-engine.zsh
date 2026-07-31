@@ -330,6 +330,22 @@ restyle_instance() {
     require_engine_assets
 
     local info="$app/Contents/Info.plist"
+
+    # The bundle carries its own copy of the config, engine and icons, and the
+    # launcher self-heals against them on every start. Leaving them stale makes
+    # the instance decide it is wrong on the next launch and rebuild itself back
+    # to the previous name and colour — undoing the edit that just happened.
+    local embedded="$app/Contents/Resources/Doppel"
+    if [[ -d "$embedded" ]]; then
+        /bin/mkdir -p "$embedded/assets"
+        /bin/cp "$CONFIG_FILE" "$embedded/instance-config.zsh" || \
+            fail_closed "Updating the embedded config failed."
+        /bin/cp "$ASSET_ROOT/doppel-engine.zsh" "$embedded/doppel-engine.zsh" 2>/dev/null || true
+        /bin/cp "$ICON_ICNS" "$embedded/assets/icon.icns" || fail_closed "Updating the embedded icon failed."
+        /bin/cp "$ICON_PNG" "$embedded/assets/icon.png" || fail_closed "Updating the embedded icon failed."
+        /bin/chmod 755 "$embedded/doppel-engine.zsh" 2>/dev/null || true
+    fi
+
     /bin/cp "$ICON_ICNS" "$app/Contents/Resources/electron.icns" || fail_closed "Replacing the icon failed."
     /bin/cp "$ICON_ICNS" "$app/Contents/Resources/icon-chatgpt.icns" || fail_closed "Replacing the icon failed."
     /bin/cp "$ICON_PNG" "$app/Contents/Resources/icon-chatgpt.png" || fail_closed "Replacing the icon failed."
