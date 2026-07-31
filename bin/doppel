@@ -408,12 +408,17 @@ cmd_edit() {
     local was_running=0
     if /usr/bin/pgrep -f "${old_app}/Contents/MacOS/" >/dev/null 2>&1; then
         was_running=1
-        local quit_error
-        quit_error="$(/usr/bin/osascript -e "tell application id \"$bundle_id\" to quit" 2>&1)" || true
-        local waited=0
-        while (( waited < 20 )) && /usr/bin/pgrep -f "${old_app}/Contents/MacOS/" >/dev/null 2>&1; do
-            /bin/sleep 1
-            waited=$(( waited + 1 ))
+        # Ask twice over 40 seconds: a busy Electron app can take a while to
+        # wind down, and one missed request should not abandon the edit.
+        local quit_error waited=0 attempt
+        for attempt in 1 2; do
+            quit_error="$(/usr/bin/osascript -e "tell application id \"$bundle_id\" to quit" 2>&1)" || true
+            waited=0
+            while (( waited < 20 )) && /usr/bin/pgrep -f "${old_app}/Contents/MacOS/" >/dev/null 2>&1; do
+                /bin/sleep 1
+                waited=$(( waited + 1 ))
+            done
+            /usr/bin/pgrep -f "${old_app}/Contents/MacOS/" >/dev/null 2>&1 || break
         done
         if /usr/bin/pgrep -f "${old_app}/Contents/MacOS/" >/dev/null 2>&1; then
             # -128 is "user cancelled": the app refused to quit, which normally
@@ -421,7 +426,7 @@ cmd_edit() {
             if [[ "$quit_error" == *-128* ]]; then
                 die "'$target' would not quit — it has a dialog open (a keychain prompt, for example). Answer or dismiss it, then try again."
             fi
-            die "'$target' is still running; quit it and try again"
+            die "'$target' would not quit after 40 seconds. Quit it yourself, then try again."
         fi
     fi
 
@@ -456,13 +461,19 @@ cmd_edit() {
     # permissions to code identity. Compiling helpers is only needed if that
     # fails and a full rebuild has to run.
     /bin/cp "$ENGINE_SRC/doppel-engine.zsh" "$dir/doppel-engine.zsh" 2>/dev/null || true
-    if ! /bin/zsh "$dir/doppel-engine.zsh" restyle "$new_app" 2>/dev/null; then
+    # DOPPEL_NO_ALERT: a restyle that cannot apply is a normal outcome — the
+    # bundle predates the current engine, say — and must not raise a dialog.
+    local restyle_error
+    if restyle_error="$(DOPPEL_NO_ALERT=1 /bin/zsh "$dir/doppel-engine.zsh" restyle "$new_app" 2>&1)"; then
+        :
+    else
+        print -r -- "rebuilding instead of restyling: ${restyle_error##*: }"
         compile_helpers
         install_engine_assets "$dir"
         /bin/zsh "$dir/doppel-engine.zsh" install "$new_app"
     fi
     refresh_icon_caches "$new_app"
-    if (( was_running )) || [[ "${DOPPEL_RELAUNCH:-1}" == "force" ]]; then
+    if [[ "${DOPPEL_RELAUNCH:-1}" != "0" ]]; then
         /usr/bin/open -na "$new_app" || print -u2 -r -- "note: could not reopen $new_app"
     fi
     print -r -- "updated: $new_app"
