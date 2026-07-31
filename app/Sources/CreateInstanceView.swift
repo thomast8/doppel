@@ -8,6 +8,7 @@ final class CreateForm: ObservableObject {
     @Published var color = Color(hex: "F28C28")
     @Published var customHue: Double = 0.08
     @Published var creating = false
+    @Published var loaded = false
     @Published var errorMessage: String?
 }
 
@@ -51,7 +52,15 @@ struct CreateInstanceView: View {
         .padding(28)
         .frame(width: 440)
         .onAppear {
-            if let editing, form.name.isEmpty { form.name = editing.name }
+            // Load what the instance actually is, so the form never misreports
+            // its colour or name back to the user.
+            guard let editing, !form.loaded else { return }
+            form.loaded = true
+            form.name = editing.name
+            if !editing.tint.isEmpty {
+                form.color = Color(hex: editing.tint)
+                form.customHue = Color(hex: editing.tint).hueComponent
+            }
         }
         .background(WindowStyler())
         .background(

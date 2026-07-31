@@ -75,6 +75,14 @@ private struct Swatch: View {
 }
 
 extension Color {
+    /// Hue in 0...1, used to place the custom slider on an existing colour.
+    var hueComponent: Double {
+        let srgb = NSColor(self).usingColorSpace(.sRGB) ?? .orange
+        var hue: CGFloat = 0, saturation: CGFloat = 0, brightness: CGFloat = 0, alpha: CGFloat = 0
+        srgb.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
+        return Double(hue)
+    }
+
     init(hex: String) {
         let cleaned = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
         var value: UInt64 = 0

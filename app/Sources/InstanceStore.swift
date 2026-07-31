@@ -6,6 +6,8 @@ struct Instance: Identifiable {
     let name: String
     let appPath: String
     let installed: Bool
+    /// RRGGBB the icon was tinted with; empty for a custom .icns.
+    let tint: String
 }
 
 /// All instance knowledge comes from the CLI (`doppel list --porcelain`), so
@@ -166,12 +168,14 @@ final class InstanceStore: ObservableObject {
     nonisolated private static func parsePorcelain(_ output: String) -> [Instance] {
         output.split(separator: "\n").compactMap { line in
             let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
-            guard fields.count == 4 else { return nil }
+            // The tint field was added later; older output stays readable.
+            guard fields.count >= 4 else { return nil }
             return Instance(
                 id: String(fields[0]),
                 name: String(fields[1]),
                 appPath: String(fields[2]),
-                installed: fields[3] == "installed"
+                installed: fields[3] == "installed",
+                tint: fields.count > 4 ? String(fields[4]) : ""
             )
         }
     }
