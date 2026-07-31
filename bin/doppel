@@ -427,9 +427,17 @@ cmd_edit() {
         /bin/mv "$old_app" "$new_app" || die "renaming the app bundle failed"
     fi
 
-    compile_helpers
-    install_engine_assets "$dir"
-    /bin/zsh "$dir/doppel-engine.zsh" install "$new_app"
+    # A rename or recolour only touches metadata and artwork, so the bundle is
+    # restyled in place: no 200MB copy, and the vendor executable is left
+    # byte-identical, which matters because macOS binds keychain and privacy
+    # permissions to code identity. Compiling helpers is only needed if that
+    # fails and a full rebuild has to run.
+    /bin/cp "$ENGINE_SRC/doppel-engine.zsh" "$dir/doppel-engine.zsh" 2>/dev/null || true
+    if ! /bin/zsh "$dir/doppel-engine.zsh" restyle "$new_app" 2>/dev/null; then
+        compile_helpers
+        install_engine_assets "$dir"
+        /bin/zsh "$dir/doppel-engine.zsh" install "$new_app"
+    fi
     refresh_icon_caches "$new_app"
     if (( was_running )) || [[ "${DOPPEL_RELAUNCH:-1}" == "force" ]]; then
         /usr/bin/open -na "$new_app" || print -u2 -r -- "note: could not reopen $new_app"

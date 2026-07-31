@@ -150,14 +150,19 @@ instance_is_healthy() {
     [[ -z "$(plist_value "$info" CFBundleURLTypes.0.CFBundleURLSchemes.1)" ]] || return 1
     [[ "$(plist_value "$info" SUFeedURL)" == "https://doppel.invalid/no-updates.xml" ]] || return 1
     /usr/bin/cmp -s "$app/Contents/Resources/electron.icns" "$ICON_ICNS" || return 1
-    /usr/bin/codesign --verify --deep --strict "$app" >/dev/null 2>&1 || return 1
     [[ "$(plist_value "$info" DoppelSigningIdentifier)" == "$DOPPEL_BUNDLE_ID" ]] || return 1
+
+    # This runs on every launch, so it is one verification rather than two, and
+    # not --deep: the bundle seal already covers every nested file, so tampering
+    # with a framework breaks this check too. The deep walk is kept for the
+    # build and restyle paths, where code has actually just been written.
     if [[ -n "$SIGN_LEAF_SHA1" ]]; then
-        # A stable identity exists: require the bundle to satisfy the pinned
-        # requirement, so an ad-hoc-signed instance gets rebuilt.
         [[ -n "$(plist_value "$info" DoppelPinnedRequirement)" ]] || return 1
-        /usr/bin/codesign --verify -R "=identifier \"$DOPPEL_BUNDLE_ID\" and certificate leaf H\"$SIGN_LEAF_SHA1\"" \
+        /usr/bin/codesign --verify --strict \
+            -R "=identifier \"$DOPPEL_BUNDLE_ID\" and certificate leaf H\"$SIGN_LEAF_SHA1\"" \
             "$app" >/dev/null 2>&1 || return 1
+    else
+        /usr/bin/codesign --verify --strict "$app" >/dev/null 2>&1 || return 1
     fi
     return 0
 }
@@ -310,6 +315,45 @@ PYVERIFY
     log_message "Built and verified instance $version"
 }
 
+# Applies a new name or icon to an existing bundle without rebuilding it.
+#
+# A full rebuild copies the whole vendor app, re-signs every nested binary and
+# takes half a minute; for a rename or a recolour none of that is needed. The
+# preserved vendor executable is not touched at all here, only the bundle's own
+# metadata and artwork, which keeps the change quick and leaves the inner binary
+# byte-identical.
+restyle_instance() {
+    local app="$1"
+    [[ -d "$app" ]] || fail_closed "There is no bundle to restyle at $app"
+    [[ -x "$app/Contents/MacOS/ChatGPT.real" ]] || \
+        fail_closed "The bundle at $app is not a Doppel instance."
+    require_engine_assets
+
+    local info="$app/Contents/Info.plist"
+    /bin/cp "$ICON_ICNS" "$app/Contents/Resources/electron.icns" || fail_closed "Replacing the icon failed."
+    /bin/cp "$ICON_ICNS" "$app/Contents/Resources/icon-chatgpt.icns" || fail_closed "Replacing the icon failed."
+    /bin/cp "$ICON_PNG" "$app/Contents/Resources/icon-chatgpt.png" || fail_closed "Replacing the icon failed."
+    /usr/bin/plutil -replace CFBundleDisplayName -string "$DOPPEL_DISPLAY_NAME" "$info"
+    /usr/bin/plutil -replace CFBundleName -string "$DOPPEL_DISPLAY_NAME" "$info"
+    /usr/bin/plutil -replace CFBundleAlternateNames.0 -string "$DOPPEL_DISPLAY_NAME" "$info"
+    /usr/bin/plutil -replace CFBundleURLTypes.0.CFBundleURLName -string "$DOPPEL_DISPLAY_NAME" "$info"
+
+    /usr/bin/xattr -cr "$app" || fail_closed "Removing filesystem metadata failed."
+    /usr/bin/codesign --force --sign "$SIGN_IDENTITY" -i "$DOPPEL_BUNDLE_ID" --options runtime \
+        "$app" >/dev/null || fail_closed "Re-signing the restyled bundle failed."
+    /usr/bin/xattr -cr "$app" || true
+    /usr/bin/codesign --verify --deep --strict "$app" >/dev/null 2>&1 || \
+        fail_closed "The restyled bundle failed signature verification."
+
+
+    local version executable_hash
+    version="$(source_version)"
+    executable_hash="$(source_executable_hash)"
+    instance_is_healthy "$app" "$version" "$executable_hash" || \
+        fail_closed "The restyled bundle failed its health check."
+    log_message "Restyled instance in place (no rebuild)"
+}
+
 acquire_rebuild_lock() {
     local lock="$STATE_ROOT/Rebuild.lock"
     if /bin/mkdir "$lock" 2>/dev/null; then
@@ -404,6 +448,10 @@ case "${1:-}" in
         require_engine_assets
         validate_primary
         build_instance "$2" "$(source_version)" "$(source_executable_hash)"
+        ;;
+    restyle)
+        [[ $# -eq 2 ]] || fail_closed "Usage: doppel-engine.zsh restyle /path/to/App.app"
+        restyle_instance "$2"
         ;;
     install)
         [[ $# -eq 2 ]] || fail_closed "Usage: doppel-engine.zsh install /path/to/App.app"
