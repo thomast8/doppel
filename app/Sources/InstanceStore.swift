@@ -23,10 +23,17 @@ final class InstanceStore: ObservableObject {
     static let primaryAppPath = "/Applications/ChatGPT.app"
     static let primaryDownloadURL = URL(string: "https://chatgpt.com/features/desktop/")!
 
-    /// The CLI location: DOPPEL_CLI overrides, then known install locations.
+    /// The CLI location. The copy inside this bundle comes first: it ships with
+    /// the app, is covered by the app's signature, and means a downloaded
+    /// Doppel needs no repository checkout at all.
     private var discoveredCLI: URL? {
         if let override = ProcessInfo.processInfo.environment["DOPPEL_CLI"] {
             return URL(fileURLWithPath: override)
+        }
+        if let bundled = Bundle.main.resourceURL?
+            .appendingPathComponent("doppel/bin/doppel"),
+           FileManager.default.isExecutableFile(atPath: bundled.path) {
+            return bundled
         }
         let home = FileManager.default.homeDirectoryForCurrentUser
         let candidates = [

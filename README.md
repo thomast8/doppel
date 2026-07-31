@@ -59,13 +59,18 @@ definition is preserved under `state/Removed/` so the removal can be undone, and
 account data (profile and `CODEX_HOME`) is left in place unless `--purge-data` is
 given — and even then it is moved to the Trash, not deleted.
 
-`create` clones the primary app, tints its real icon with the color you chose,
+`create` clones the primary app, tints its real icon with the colour you chose,
 installs the instance into `~/Applications`, and stores the instance definition in
-`~/Library/Application Support/Doppel/instances/`. Requirements: Xcode Command
-Line Tools and [uv](https://docs.astral.sh/uv/) (used once per icon, for Pillow).
-uv is located explicitly rather than assumed to be on `PATH`, because a
-GUI-launched process inherits launchd's minimal one; set `DOPPEL_UV` if yours
-lives somewhere unusual.
+`~/Library/Application Support/Doppel/instances/`.
+
+### Dependencies
+
+There are none beyond macOS. Icon tinting, the instance launcher and the error
+helper are all compiled binaries that ship inside `Doppel.app`; everything else
+Doppel calls — `codesign`, `security`, `sips`, `iconutil`, `lsregister` — is part
+of the system. Running the CLI from a checkout instead compiles those three
+helpers on demand, which is the only case that wants the Xcode Command Line
+Tools.
 
 ### Menu-bar app
 
@@ -76,10 +81,16 @@ open -a ~/Applications/Doppel.app
 
 A menu-bar-only front end (`LSUIElement`, so no Dock icon): list instances, launch,
 rebuild, rename, recolour or remove them, create a new one from a name plus a
-colour picker, and toggle **Start at Login**. It shells out to `bin/doppel` for every action, so the
-CLI stays the single source of truth. It finds the CLI via `$DOPPEL_CLI` or a short
-list of standard locations, skipping any that are group- or world-writable, and
-holds an advisory lock so launchd and Finder can never produce two menu-bar icons.
+colour picker, and toggle **Start at Login**.
+
+The app is self-contained. The CLI, the engine and the compiled helpers all ship
+inside `Contents/Resources/doppel`, sealed by the app's own signature, so a
+downloaded copy works on its own — no checkout, no package manager, no developer
+tools. Every action still goes through that bundled CLI, so the two can never
+disagree. `$DOPPEL_CLI` overrides the choice; a checkout at a standard location
+is used when the app is run from source, skipping any path that is group- or
+world-writable. An advisory lock stops launchd and Finder producing two menu-bar
+icons.
 
 Start at Login installs a user LaunchAgent (`ai.doppel.menubar`) rather than using
 SMAppService, which needs a Developer ID-signed bundle that local ad-hoc builds

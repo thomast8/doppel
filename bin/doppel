@@ -18,6 +18,9 @@ readonly DOPPEL_HOME="${DOPPEL_HOME:-$HOME/Library/Application Support/Doppel}"
 readonly INSTANCES_ROOT="$DOPPEL_HOME/instances"
 readonly LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 readonly BUILD_CACHE="$DOPPEL_HOME/build"
+# Inside an installed app the helpers ship prebuilt and sealed by the bundle's
+# signature; from a repo checkout they are compiled on demand.
+readonly PREBUILT_DIR="$REPO_ROOT/prebuilt"
 readonly PRIMARY_APP="${DOPPEL_PRIMARY_APP:-/Applications/ChatGPT.app}"
 readonly PRIMARY_SCHEME="${DOPPEL_PRIMARY_SCHEME:-codex}"
 
@@ -27,7 +30,19 @@ slugify() {
     print -r -- "$1" | /usr/bin/tr '[:upper:]' '[:lower:]' | /usr/bin/sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g'
 }
 
+# Where the instance helpers come from: the bundled, signature-sealed copies
+# when running inside Doppel.app, otherwise freshly compiled sources.
+helper_dir() {
+    if [[ -x "$PREBUILT_DIR/doppel-launcher" ]]; then
+        print -r -- "$PREBUILT_DIR"
+    else
+        print -r -- "$BUILD_CACHE"
+    fi
+}
+
 compile_helpers() {
+    # Nothing to build when the app shipped them.
+    [[ -x "$PREBUILT_DIR/doppel-launcher" ]] && return 0
     # Always recompile from the repo sources: an mtime-based cache would let a
     # planted binary in the build dir be embedded and signed into a bundle.
     mkdir -p "$BUILD_CACHE"
@@ -38,6 +53,8 @@ compile_helpers() {
         /usr/bin/clang -fobjc-arc -O2 -framework Cocoa -framework Security -o "$bin" "$src" || \
             die "compiling ${pair##*:} failed"
     done
+    /usr/bin/swiftc -O "$ENGINE_SRC/icon/main.swift" -o "$BUILD_CACHE/doppel-icon" 2>/dev/null || \
+        die "compiling doppel-icon failed"
 }
 
 extract_primary_icon() {
@@ -69,7 +86,8 @@ install_engine_assets() {
     mkdir -p "$dir/bin" "$dir/assets"
     /bin/cp "$ENGINE_SRC/doppel-engine.zsh" "$dir/doppel-engine.zsh"
     /bin/chmod 755 "$dir/doppel-engine.zsh"
-    /bin/cp "$BUILD_CACHE/doppel-launcher" "$BUILD_CACHE/doppel-alert" "$dir/bin/"
+    local helpers; helpers="$(helper_dir)"
+    /bin/cp "$helpers/doppel-launcher" "$helpers/doppel-alert" "$dir/bin/"
 }
 
 # The name lands in a sourced config file, an Info.plist JSON fragment, and a
@@ -96,29 +114,17 @@ write_config() {
     } > "$dir/instance-config.zsh"
 }
 
-# A GUI-launched process inherits launchd's minimal PATH, which does not
-# include Homebrew or ~/.local/bin, so uv has to be located explicitly rather
-# than assumed to be on PATH.
-find_uv() {
-    local candidate
-    for candidate in "${DOPPEL_UV:-}" "$(command -v uv 2>/dev/null)" \
-        /opt/homebrew/bin/uv /usr/local/bin/uv "$HOME/.local/bin/uv" "$HOME/.cargo/bin/uv"; do
-        [[ -n "$candidate" && -x "$candidate" ]] && { print -r -- "$candidate"; return 0 }
-    done
-    return 1
-}
-
 generate_icon() {
     local dir="$1" tint="$2" icon_override="$3"
     mkdir -p "$dir/assets"
+    compile_helpers
     if [[ -n "$icon_override" ]]; then
         /bin/cp "$icon_override" "$dir/assets/icon.icns"
         /usr/bin/sips -s format png -Z 1024 "$icon_override" --out "$dir/assets/icon.png" >/dev/null
     else
-        local source_png="$dir/assets/source.png" tinted_png="$dir/assets/icon.png" uv
-        uv="$(find_uv)" || die "uv is required to tint icons but was not found; install it from https://docs.astral.sh/uv/ or set DOPPEL_UV to its path"
+        local source_png="$dir/assets/source.png" tinted_png="$dir/assets/icon.png"
         extract_primary_icon "$source_png"
-        (cd "$REPO_ROOT" && "$uv" run --quiet --with pillow python engine/icon/tint_icon.py "$source_png" "$tinted_png" "$tint") || \
+        "$(helper_dir)/doppel-icon" "$source_png" "$tinted_png" "$tint" || \
             die "tinting the icon failed"
         png_to_icns "$tinted_png" "$dir/assets/icon.icns"
         /bin/rm -f "$source_png"
