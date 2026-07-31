@@ -10,6 +10,8 @@ import AppKit
 struct TintPicker: View {
     @Binding var color: Color
     @Binding var customHue: Double
+    /// True when the instance should keep the app's own artwork untinted.
+    @Binding var useOriginal: Bool
 
     private static let swatches: [(name: String, hex: String)] = [
         ("Orange", "F28C28"), ("Red", "EF4444"), ("Pink", "EC4899"), ("Purple", "A855F7"),
@@ -22,12 +24,16 @@ struct TintPicker: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 0) {
+                OriginalSwatch(isSelected: useOriginal) { useOriginal = true }
+                    .frame(maxWidth: .infinity)
                 ForEach(Self.swatches, id: \.hex) { swatch in
                     Swatch(
                         color: Color(hex: swatch.hex),
-                        isSelected: selectedHex.caseInsensitiveCompare(swatch.hex) == .orderedSame,
+                        isSelected: !useOriginal
+                            && selectedHex.caseInsensitiveCompare(swatch.hex) == .orderedSame,
                         label: swatch.name
                     ) {
+                        useOriginal = false
                         color = Color(hex: swatch.hex)
                     }
                     .frame(maxWidth: .infinity)
@@ -35,9 +41,38 @@ struct TintPicker: View {
             }
 
             HueSlider(hue: $customHue) { hue in
+                useOriginal = false
                 color = Color(hue: hue, saturation: 0.78, brightness: 0.92)
             }
         }
+    }
+}
+
+/// Keeps the app's own icon. Drawn as the untinted artwork would read: a light
+/// disc, distinct from every colour beside it.
+private struct OriginalSwatch: View {
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Circle()
+                .fill(Color(white: 0.97))
+                .overlay(Circle().strokeBorder(.black.opacity(0.18), lineWidth: 0.5))
+                .overlay {
+                    Image(systemName: isSelected ? "checkmark" : "circle.slash")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                }
+                .frame(height: 26)
+                .padding(2)
+                .overlay {
+                    if isSelected { Circle().strokeBorder(Color.accentColor, lineWidth: 2) }
+                }
+        }
+        .buttonStyle(.plain)
+        .help("Original — the app's own icon, untinted")
+        .accessibilityLabel("Original icon")
     }
 }
 

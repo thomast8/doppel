@@ -120,6 +120,13 @@ write_config() {
 generate_icon() {
     local dir="$1" tint="$2" icon_override="$3"
     mkdir -p "$dir/assets"
+    if [[ "$tint" == "original" ]]; then
+        # The vendor's own icon, copied untouched: no tint, no recolouring.
+        /bin/cp "$PRIMARY_APP/Contents/Resources/electron.icns" "$dir/assets/icon.icns" || \
+            die "copying the original icon failed"
+        extract_primary_icon "$dir/assets/icon.png"
+        return 0
+    fi
     compile_helpers
     if [[ -n "$icon_override" ]]; then
         /bin/cp "$icon_override" "$dir/assets/icon.icns"
@@ -154,10 +161,15 @@ assemble_instance() {
 # until something invalidates them.
 refresh_icon_caches() {
     local app="$1"
-    /usr/bin/touch "$app"
+    # $USER is absent from the environment launchd gives a GUI app, and under
+    # set -u referencing it aborts the whole command — after the work has
+    # already succeeded, which reads as a failure that isn't one.
+    local user; user="$(/usr/bin/id -un)"
+    /usr/bin/touch "$app" 2>/dev/null || true
     "$LSREGISTER" -f "$app" >/dev/null 2>&1 || true
-    /usr/bin/killall -u "$USER" Dock >/dev/null 2>&1 || true
-    /usr/bin/killall -u "$USER" Finder >/dev/null 2>&1 || true
+    /usr/bin/killall -u "$user" Dock >/dev/null 2>&1 || true
+    /usr/bin/killall -u "$user" Finder >/dev/null 2>&1 || true
+    return 0
 }
 
 instance_dir_for() {
@@ -204,13 +216,15 @@ cmd_create() {
             --profile-root) profile_root="$2"; shift 2 ;;
             --codex-home) codex_home="$2"; shift 2 ;;
             --tint) tint="$2"; shift 2 ;;
+            --original-icon) tint="original"; shift ;;
             --icon) icon_override="$2"; shift 2 ;;
             --install-to) install_to="$2"; shift 2 ;;
             *) die "unknown option: $1" ;;
         esac
     done
     [[ -n "$name" ]] || die "create requires --name"
-    [[ -n "$tint" || -n "$icon_override" ]] || die "create requires --tint RRGGBB or --icon path.icns"
+    [[ -n "$tint" || -n "$icon_override" ]] || \
+        die "create requires --tint RRGGBB, --original-icon, or --icon path.icns"
 
     validate_name "$name"
 
@@ -318,7 +332,7 @@ cmd_remove() {
         local waited=0
         while (( waited < 15 )) && /usr/bin/pgrep -f "${app}/Contents/MacOS/" >/dev/null 2>&1; do
             /bin/sleep 1
-            (( waited++ ))
+            waited=$(( waited + 1 ))
         done
         ! /usr/bin/pgrep -f "${app}/Contents/MacOS/" >/dev/null 2>&1 || \
             die "'$target' is still running; quit it and try again"
@@ -362,14 +376,16 @@ cmd_edit() {
         case "$1" in
             --rename) new_name="$2"; shift 2 ;;
             --tint) tint="$2"; shift 2 ;;
+            --original-icon) tint="original"; shift ;;
             --icon) icon_override="$2"; shift 2 ;;
             -*) die "unknown option: $1" ;;
             *) target="$1"; shift ;;
         esac
     done
-    [[ -n "$target" ]] || die "usage: doppel edit <name> [--rename <new name>] [--tint RRGGBB] [--icon path.icns]"
+    [[ -n "$target" ]] || \
+        die "usage: doppel edit <name> [--rename <new name>] [--tint RRGGBB|--original-icon] [--icon path.icns]"
     [[ -n "$new_name" || -n "$tint" || -n "$icon_override" ]] || \
-        die "nothing to change; pass --rename, --tint or --icon"
+        die "nothing to change; pass --rename, --tint, --original-icon or --icon"
 
     local dir old_app bundle_id
     dir="$(instance_dir_for "$target")"
@@ -392,14 +408,21 @@ cmd_edit() {
     local was_running=0
     if /usr/bin/pgrep -f "${old_app}/Contents/MacOS/" >/dev/null 2>&1; then
         was_running=1
-        /usr/bin/osascript -e "tell application id \"$bundle_id\" to quit" >/dev/null 2>&1 || true
+        local quit_error
+        quit_error="$(/usr/bin/osascript -e "tell application id \"$bundle_id\" to quit" 2>&1)" || true
         local waited=0
-        while (( waited < 15 )) && /usr/bin/pgrep -f "${old_app}/Contents/MacOS/" >/dev/null 2>&1; do
+        while (( waited < 20 )) && /usr/bin/pgrep -f "${old_app}/Contents/MacOS/" >/dev/null 2>&1; do
             /bin/sleep 1
-            (( waited++ ))
+            waited=$(( waited + 1 ))
         done
-        ! /usr/bin/pgrep -f "${old_app}/Contents/MacOS/" >/dev/null 2>&1 || \
+        if /usr/bin/pgrep -f "${old_app}/Contents/MacOS/" >/dev/null 2>&1; then
+            # -128 is "user cancelled": the app refused to quit, which normally
+            # means a dialog is waiting for an answer.
+            if [[ "$quit_error" == *-128* ]]; then
+                die "'$target' would not quit — it has a dialog open (a keychain prompt, for example). Answer or dismiss it, then try again."
+            fi
             die "'$target' is still running; quit it and try again"
+        fi
     fi
 
     if [[ -n "$tint" || -n "$icon_override" ]]; then
@@ -454,7 +477,7 @@ cmd_rebuild() {
     install_engine_assets "$dir"
     /bin/zsh "$dir/doppel-engine.zsh" install "$app"
     refresh_icon_caches "$app"
-    (( was_running )) && /usr/bin/open -na "$app" >/dev/null 2>&1
+    (( was_running )) && /usr/bin/open -na "$app" >/dev/null 2>&1 || true
     print -r -- "rebuilt: $app"
 }
 

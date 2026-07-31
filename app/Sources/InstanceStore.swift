@@ -100,7 +100,8 @@ final class InstanceStore: ObservableObject {
     /// Creates an instance from just a name and a tint color; the CLI derives
     /// bundle id, URL scheme, and data directories from the name.
     func create(name: String, tintHex: String, completion: @escaping (String?) -> Void) {
-        runCLI(["create", "--name", name, "--tint", tintHex], busyKey: "create") { [weak self] failure in
+        let tintArguments = tintHex == "original" ? ["--original-icon"] : ["--tint", tintHex]
+        runCLI(["create", "--name", name] + tintArguments, busyKey: "create") { [weak self] failure in
             if failure == nil { self?.reload() }
             completion(failure)
         }
@@ -112,7 +113,9 @@ final class InstanceStore: ObservableObject {
               completion: @escaping (String?) -> Void) {
         var arguments = ["edit", instance.name]
         if let newName, newName != instance.name { arguments += ["--rename", newName] }
-        if let tintHex { arguments += ["--tint", tintHex] }
+        if let tintHex {
+            arguments += tintHex == "original" ? ["--original-icon"] : ["--tint", tintHex]
+        }
         guard arguments.count > 2 else { completion(nil); return }
         runCLI(arguments, busyKey: instance.id) { [weak self] failure in
             if failure == nil { self?.reload() }

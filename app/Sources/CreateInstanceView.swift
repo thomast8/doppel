@@ -7,6 +7,7 @@ final class CreateForm: ObservableObject {
     @Published var name = ""
     @Published var color = Color(hex: "F28C28")
     @Published var customHue: Double = 0.08
+    @Published var useOriginal = false
     @Published var creating = false
     @Published var loaded = false
     @Published var errorMessage: String?
@@ -57,7 +58,9 @@ struct CreateInstanceView: View {
             guard let editing, !form.loaded else { return }
             form.loaded = true
             form.name = editing.name
-            if !editing.tint.isEmpty {
+            if editing.tint == "original" {
+                form.useOriginal = true
+            } else if !editing.tint.isEmpty {
                 form.color = Color(hex: editing.tint)
                 form.customHue = Color(hex: editing.tint).hueComponent
             }
@@ -73,7 +76,8 @@ struct CreateInstanceView: View {
 
     private var header: some View {
         HStack(alignment: .center, spacing: 16) {
-            IconTile(color: form.color, name: trimmedName, radius: Radius.tile)
+            IconTile(color: form.useOriginal ? Color(white: 0.97) : form.color,
+                     name: trimmedName, radius: Radius.tile)
             VStack(alignment: .leading, spacing: 4) {
                 Text(isEditing ? "Edit instance" : "New instance")
                     .font(.system(size: 21, weight: .semibold))
@@ -108,7 +112,7 @@ struct CreateInstanceView: View {
     private var colourSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             fieldLabel("Icon colour")
-            TintPicker(color: $form.color, customHue: $form.customHue)
+            TintPicker(color: $form.color, customHue: $form.customHue, useOriginal: $form.useOriginal)
         }
     }
 
@@ -212,10 +216,11 @@ struct CreateInstanceView: View {
                 dismiss()
             }
         }
+        let tint = form.useOriginal ? "original" : form.color.rgbHex
         if let editing {
-            store.edit(editing, newName: trimmedName, tintHex: form.color.rgbHex, completion: finish)
+            store.edit(editing, newName: trimmedName, tintHex: tint, completion: finish)
         } else {
-            store.create(name: trimmedName, tintHex: form.color.rgbHex, completion: finish)
+            store.create(name: trimmedName, tintHex: tint, completion: finish)
         }
     }
 }
