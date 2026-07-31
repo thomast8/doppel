@@ -34,7 +34,12 @@ struct TintPicker: View {
                         label: swatch.name
                     ) {
                         useOriginal = false
-                        color = Color(hex: swatch.hex)
+                        let picked = Color(hex: swatch.hex)
+                        color = picked
+                        // Otherwise the slider keeps pointing at whatever hue
+                        // was chosen before, contradicting the swatch that is
+                        // now ticked.
+                        customHue = picked.hueComponent
                     }
                     .frame(maxWidth: .infinity)
                 }

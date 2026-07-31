@@ -23,6 +23,16 @@ struct DoppelApp: App {
             exit(0)
         }
 
+        // Renders the window to a PNG without a screen or any capture
+        // permission, so the UI can be reviewed as part of QA:
+        //   Doppel --render-ui <path.png> [edit]
+        if let index = arguments.firstIndex(of: "--render-ui") {
+            let path = index + 1 < arguments.count ? arguments[index + 1] : "/tmp/doppel-ui.png"
+            let editing = arguments.contains("edit")
+            UIRenderer.render(to: URL(fileURLWithPath: path), editing: editing)
+            exit(0)
+        }
+
         if !SingleInstance.acquire() {
             // Another menu-bar instance is already running; a second icon would
             // just confuse. Leave quietly.
@@ -42,7 +52,7 @@ struct DoppelApp: App {
         .windowResizability(.contentSize)
         .windowStyle(.hiddenTitleBar)
 
-        WindowGroup(id: "edit-instance", for: String.self) { $slug in
+        WindowGroup("Edit Doppel Instance", id: "edit-instance", for: String.self) { $slug in
             if let slug, let instance = store.instances.first(where: { $0.id == slug }) {
                 CreateInstanceView(store: store, editing: instance)
             }
@@ -112,9 +122,6 @@ struct MenuContent: View {
             get: { store.loginItemEnabled },
             set: { store.setLoginItem($0) }
         ))
-        ForEach(store.errors.sorted(by: { $0.key < $1.key }), id: \.key) { key, message in
-            Text("\(key): \(message)").foregroundStyle(.red)
-        }
         Divider()
         Button("Quit Doppel") { NSApplication.shared.terminate(nil) }
     }
@@ -135,6 +142,13 @@ struct MenuContent: View {
         alert.accessoryView = purge
         alert.addButton(withTitle: "Remove")
         alert.addButton(withTitle: "Cancel")
+        // Keep Remove where a destructive action belongs, on the right, but
+        // move the Return key to Cancel: a dialog that appears over whatever
+        // else you were doing should not delete an account because you were
+        // mid-keystroke.
+        alert.buttons[0].keyEquivalent = ""
+        alert.buttons[0].hasDestructiveAction = true
+        alert.buttons[1].keyEquivalent = "\r"
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         store.remove(instance, purgeData: purge.state == .on)
     }

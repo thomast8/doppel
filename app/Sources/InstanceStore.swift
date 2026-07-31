@@ -16,11 +16,13 @@ struct Instance: Identifiable {
 final class InstanceStore: ObservableObject {
     @Published var instances: [Instance] = []
     @Published var busy: Set<String> = []
-    /// Failures keyed by what failed (instance slug, "create", "list", "cli"),
-    /// so one instance's error is not wiped by starting work on another.
-    @Published var errors: [String: String] = [:]
     @Published var primaryInstalled = false
     @Published var signingReady = false
+
+    /// The last failure already reported for a given piece of work, so a
+    /// condition that persists across reloads is raised once rather than after
+    /// every refresh.
+    private var reported: [String: String] = [:]
 
     static let primaryAppPath = "/Applications/ChatGPT.app"
     static let primaryDownloadURL = URL(string: "https://chatgpt.com/features/desktop/")!
@@ -64,25 +66,25 @@ final class InstanceStore: ObservableObject {
     }
 
     func reload() {
-        errors["list"] = nil
-        errors["cli"] = nil
         primaryInstalled = FileManager.default.fileExists(atPath: Self.primaryAppPath)
         if let cli = discoveredCLI {
             signingReady = SigningIdentity.status(cli: cli).isPresent
         }
         guard let cli = discoveredCLI else {
             instances = []
-            errors["cli"] = "doppel CLI not found; set the DOPPEL_CLI environment variable"
+            report(Self.missingCLIMessage, for: "cli")
             return
         }
+        clearReport(for: "cli")
         Task.detached { [weak self] in
             let result = Self.runProcess(cli: cli, arguments: ["list", "--porcelain"])
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 switch result {
                 case .failure(let message):
-                    self.errors["list"] = message
+                    self.report(message, for: "list")
                 case .success(let stdout):
+                    self.clearReport(for: "list")
                     self.instances = Self.parsePorcelain(stdout).sorted { $0.name < $1.name }
                 }
             }
@@ -101,7 +103,10 @@ final class InstanceStore: ObservableObject {
     /// bundle id, URL scheme, and data directories from the name.
     func create(name: String, tintHex: String, completion: @escaping (String?) -> Void) {
         let tintArguments = tintHex == "original" ? ["--original-icon"] : ["--tint", tintHex]
-        runCLI(["create", "--name", name] + tintArguments, busyKey: "create") { [weak self] failure in
+        // As with edit: the window is still on screen and shows the failure
+        // itself.
+        runCLI(["create", "--name", name] + tintArguments, busyKey: "create",
+               reportFailure: false) { [weak self] failure in
             if failure == nil { self?.reload() }
             completion(failure)
         }
@@ -117,7 +122,9 @@ final class InstanceStore: ObservableObject {
             arguments += tintHex == "original" ? ["--original-icon"] : ["--tint", tintHex]
         }
         guard arguments.count > 2 else { completion(nil); return }
-        runCLI(arguments, busyKey: instance.id) { [weak self] failure in
+        // The edit window shows its own failure inline, so this one is not
+        // raised as an alert on top of it.
+        runCLI(arguments, busyKey: instance.id, reportFailure: false) { [weak self] failure in
             if failure == nil { self?.reload() }
             completion(failure)
         }
@@ -137,10 +144,9 @@ final class InstanceStore: ObservableObject {
     /// they adopt it — the rebuild is the half users would otherwise forget.
     func setUpSigning() {
         guard let cli = discoveredCLI else {
-            errors["signing"] = "doppel CLI not found; set the DOPPEL_CLI environment variable"
+            report(Self.missingCLIMessage, for: "cli")
             return
         }
-        errors["signing"] = nil
         busy.insert("signing")
         let instanceNames = instances.map(\.name)
         Task.detached { [weak self] in
@@ -152,7 +158,7 @@ final class InstanceStore: ObservableObject {
             }
             await MainActor.run { [weak self] in
                 self?.busy.remove("signing")
-                if let failure { self?.errors["signing"] = failure }
+                if let failure { self?.report(failure, for: "signing") }
                 self?.reload()
             }
         }
@@ -161,11 +167,34 @@ final class InstanceStore: ObservableObject {
     var loginItemEnabled: Bool { LoginItem.isEnabled }
 
     func setLoginItem(_ enabled: Bool) {
-        errors["login"] = nil
         if let failure = LoginItem.setEnabled(enabled) {
-            errors["login"] = failure
+            report(failure, for: "login")
         }
         objectWillChange.send()
+    }
+
+    // MARK: - Reporting failures
+
+    static let missingCLIMessage = "The doppel command-line tool could not be found. Set DOPPEL_CLI to its path."
+
+    /// Failures are raised as an alert when they happen. The menu stays a list
+    /// of instances and the things you can do to them — never a log of what
+    /// went wrong earlier, which outlived the problem it described and kept
+    /// describing it long after the user had moved on.
+    private func report(_ message: String, for key: String) {
+        guard reported[key] != message else { return }
+        reported[key] = message
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Doppel could not finish that"
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    private func clearReport(for key: String) {
+        reported[key] = nil
     }
 
     nonisolated private static func parsePorcelain(_ output: String) -> [Instance] {
@@ -213,22 +242,29 @@ final class InstanceStore: ObservableObject {
         }
     }
 
+    /// reportFailure is false for the work the create/edit window drives: that
+    /// window is still on screen and shows the message itself.
     private func runCLI(_ arguments: [String], busyKey: String,
+                        reportFailure: Bool = true,
                         completion: (@MainActor (String?) -> Void)? = nil) {
         guard let cli = discoveredCLI else {
-            errors["cli"] = "doppel CLI not found; set the DOPPEL_CLI environment variable"
-            completion?(errors["cli"])
+            if reportFailure { report(Self.missingCLIMessage, for: "cli") }
+            completion?(Self.missingCLIMessage)
             return
         }
         busy.insert(busyKey)
-        errors[busyKey] = nil
         Task.detached { [weak self] in
             let result = Self.runProcess(cli: cli, arguments: arguments)
             let failure: String?
             if case .failure(let message) = result { failure = message } else { failure = nil }
             await MainActor.run { [weak self] in
-                self?.busy.remove(busyKey)
-                if let failure { self?.errors[busyKey] = failure }
+                guard let self else { return }
+                self.busy.remove(busyKey)
+                if let failure {
+                    if reportFailure { self.report(failure, for: busyKey) }
+                } else {
+                    self.clearReport(for: busyKey)
+                }
                 completion?(failure)
             }
         }

@@ -106,6 +106,9 @@ struct CreateInstanceView: View {
                     RoundedRectangle(cornerRadius: Radius.field, style: .continuous)
                         .strokeBorder(.white.opacity(0.14), lineWidth: 0.5))
                 .onSubmit { if canCreate { submit() } }
+                // The "Name" caption above is a separate Text, so without this
+                // the field announces as an unlabelled text field.
+                .accessibilityLabel("Name")
         }
     }
 
@@ -119,7 +122,7 @@ struct CreateInstanceView: View {
     private var actionBar: some View {
         HStack(spacing: 12) {
             Text(isEditing
-                 ? "The app is rebuilt with the new name and colour."
+                 ? "The account and its chats stay where they are."
                  : (store.primaryInstalled
                     ? "Everything else is derived from the name."
                     : "Install ChatGPT first."))
@@ -128,6 +131,7 @@ struct CreateInstanceView: View {
             Spacer(minLength: 8)
             glassButton("Cancel", prominent: false) { dismiss() }
                 .keyboardShortcut(.cancelAction)
+                .disabled(form.creating)
             glassButton(form.creating ? (isEditing ? "Saving…" : "Creating…")
                                       : (isEditing ? "Save" : "Create"),
                         prominent: true) { submit() }
@@ -203,6 +207,9 @@ struct CreateInstanceView: View {
             }
         }
         .clipShape(Capsule(style: .continuous))
+        // The clip wraps the button in a plain container, which leaves the
+        // control with no accessible name of its own.
+        .accessibilityLabel(title)
     }
 
     private func submit() {

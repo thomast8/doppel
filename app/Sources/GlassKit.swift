@@ -142,5 +142,30 @@ struct HueSlider: View {
             )
         }
         .frame(height: knobSize)
+        // A drag gesture on a shape is invisible to VoiceOver and unreachable
+        // from the keyboard, which left the custom hues available only to a
+        // mouse. Adjustable makes it behave like the slider it looks like.
+        .accessibilityElement()
+        .accessibilityLabel("Custom icon colour")
+        .accessibilityValue(Text(hueDescription))
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAdjustableAction { direction in
+            let step = 1.0 / 24.0
+            switch direction {
+            case .increment: setHue(min(hue + step, 1))
+            case .decrement: setHue(max(hue - step, 0))
+            @unknown default: break
+            }
+        }
+    }
+
+    private func setHue(_ value: Double) {
+        hue = value
+        onChange(value)
+    }
+
+    /// Degrees around the wheel: "0" and "1" would tell a listener nothing.
+    private var hueDescription: String {
+        "\(Int((hue * 360).rounded())) degrees"
     }
 }
