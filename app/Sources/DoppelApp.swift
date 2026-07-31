@@ -89,6 +89,12 @@ struct MenuContent: View {
             NSApp.activate(ignoringOtherApps: true)
         }
         Button("Refresh") { store.reload() }
+        if !store.signingReady {
+            Button(store.busy.contains("signing")
+                   ? "Setting up secure signing…"
+                   : "Set Up Secure Signing…") { store.setUpSigning() }
+                .disabled(store.busy.contains("signing"))
+        }
         Toggle("Start at Login", isOn: Binding(
             get: { store.loginItemEnabled },
             set: { store.setLoginItem($0) }

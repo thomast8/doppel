@@ -52,9 +52,13 @@ readonly LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Framework
 # named "Doppel Local Signing"), sign with it so grants persist. The identity's
 # SHA-1 is captured so the launcher can pin the certificate leaf, which is what
 # makes an attacker's ad-hoc re-seal of a tampered bundle fail.
+# find-identity -v is not usable here: it lists only identities with a trusted
+# chain, and a locally created self-signed certificate is untrusted by design.
+# codesign signs with it anyway, so the certificate itself is what is looked up.
 detect_sign_identity() {
-    /usr/bin/security find-identity -v -p codesigning 2>/dev/null | \
-        /usr/bin/awk -F'[ "]+' '/"Doppel Local Signing"/ {print $2; exit}'
+    /usr/bin/security find-certificate -c "${DOPPEL_SIGN_IDENTITY_NAME:-Doppel Local Signing}" -Z \
+        "$HOME/Library/Keychains/login.keychain-db" 2>/dev/null | \
+        /usr/bin/awk '/^SHA-1 hash:/ {print $3; exit}'
 }
 SIGN_LEAF_SHA1="${DOPPEL_SIGN_LEAF_SHA1:-$(detect_sign_identity)}"
 if [[ -n "$SIGN_LEAF_SHA1" ]]; then

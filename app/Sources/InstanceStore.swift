@@ -18,6 +18,7 @@ final class InstanceStore: ObservableObject {
     /// so one instance's error is not wiped by starting work on another.
     @Published var errors: [String: String] = [:]
     @Published var primaryInstalled = false
+    @Published var signingReady = false
 
     static let primaryAppPath = "/Applications/ChatGPT.app"
     static let primaryDownloadURL = URL(string: "https://chatgpt.com/features/desktop/")!
@@ -57,6 +58,9 @@ final class InstanceStore: ObservableObject {
         errors["list"] = nil
         errors["cli"] = nil
         primaryInstalled = FileManager.default.fileExists(atPath: Self.primaryAppPath)
+        if let cli = discoveredCLI {
+            signingReady = SigningIdentity.status(cli: cli).isPresent
+        }
         guard let cli = discoveredCLI else {
             instances = []
             errors["cli"] = "doppel CLI not found; set the DOPPEL_CLI environment variable"
@@ -100,6 +104,31 @@ final class InstanceStore: ObservableObject {
         if purgeData { arguments.append("--purge-data") }
         runCLI(arguments, busyKey: instance.id) { [weak self] failure in
             if failure == nil { self?.reload() }
+        }
+    }
+
+    /// Creates the local signing identity, then rebuilds every instance so
+    /// they adopt it — the rebuild is the half users would otherwise forget.
+    func setUpSigning() {
+        guard let cli = discoveredCLI else {
+            errors["signing"] = "doppel CLI not found; set the DOPPEL_CLI environment variable"
+            return
+        }
+        errors["signing"] = nil
+        busy.insert("signing")
+        let instanceNames = instances.map(\.name)
+        Task.detached { [weak self] in
+            let failure = SigningIdentity.setUp(cli: cli)
+            if failure == nil {
+                for name in instanceNames {
+                    _ = Self.runProcess(cli: cli, arguments: ["rebuild", name])
+                }
+            }
+            await MainActor.run { [weak self] in
+                self?.busy.remove("signing")
+                if let failure { self?.errors["signing"] = failure }
+                self?.reload()
+            }
         }
     }
 

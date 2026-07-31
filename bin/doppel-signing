@@ -1,0 +1,121 @@
+#!/bin/zsh
+# Creates the local code-signing identity Doppel uses for instances, without
+# making the user drive Keychain Access.
+#
+# Why an identity at all: an ad-hoc signature pins nothing. Keychain grants are
+# bound to the signature, so they reset on every rebuild, and any process
+# running as you can modify an instance and re-sign it ad hoc — a plain
+# signature check cannot tell the difference. Signing with a stable identity
+# fixes both: grants persist, and the launcher pins the certificate leaf, which
+# an ad-hoc re-seal cannot satisfy.
+#
+#   doppel-signing status
+#   doppel-signing setup
+#   doppel-signing remove
+
+set -eu
+setopt PIPE_FAIL
+
+readonly IDENTITY_NAME="${DOPPEL_SIGN_IDENTITY_NAME:-Doppel Local Signing}"
+typeset work=""
+readonly KEYCHAIN="${DOPPEL_SIGN_KEYCHAIN:-$HOME/Library/Keychains/login.keychain-db}"
+
+die() { print -u2 -r -- "doppel-signing: $1"; exit 1 }
+
+# The SHA-1 of the identity's certificate, empty when it does not exist.
+#
+# Deliberately not `find-identity -v`: that lists only identities with a
+# trusted chain, and a locally created self-signed certificate is untrusted by
+# design (trusting it would need an admin prompt). codesign signs with it
+# regardless, so the certificate's presence is the real test.
+identity_sha1() {
+    /usr/bin/security find-certificate -c "$IDENTITY_NAME" -Z "$KEYCHAIN" 2>/dev/null | \
+        /usr/bin/awk '/^SHA-1 hash:/ {print $3; exit}'
+}
+
+cmd_status() {
+    local sha
+    sha="$(identity_sha1)"
+    if [[ -n "$sha" ]]; then
+        print -r -- "identity: present"
+        print -r -- "sha1: $sha"
+    else
+        print -r -- "identity: absent"
+    fi
+}
+
+cmd_setup() {
+    local existing
+    existing="$(identity_sha1)"
+    if [[ -n "$existing" ]]; then
+        print -r -- "already set up (sha1 $existing)"
+        return 0
+    fi
+
+    work="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/doppel-signing.XXXXXXXX")"
+    /bin/chmod 700 "$work"
+    trap '[[ -n "${work:-}" ]] && /bin/rm -rf "$work"' EXIT
+
+    # A code-signing certificate: not a CA, signing use only. Ten years, since
+    # an expired identity would silently send instances back to ad-hoc signing.
+    /usr/bin/openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+        -keyout "$work/key.pem" -out "$work/cert.pem" \
+        -subj "/CN=$IDENTITY_NAME/O=Doppel/OU=Local code signing" \
+        -addext "basicConstraints=critical,CA:FALSE" \
+        -addext "keyUsage=critical,digitalSignature" \
+        -addext "extendedKeyUsage=critical,codeSigning" >/dev/null 2>&1 || \
+        die "generating the certificate failed"
+
+    # macOS Security cannot read OpenSSL 3's default PKCS#12 encryption, so the
+    # legacy algorithms are requested explicitly.
+    local passphrase
+    passphrase="$(/usr/bin/openssl rand -hex 16)"
+    /usr/bin/openssl pkcs12 -export -inkey "$work/key.pem" -in "$work/cert.pem" \
+        -out "$work/identity.p12" -passout "pass:$passphrase" -name "$IDENTITY_NAME" \
+        -macalg sha1 -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES >/dev/null 2>&1 || \
+        die "packaging the identity failed"
+
+    # -T grants codesign access to the key so signing does not prompt each time.
+    /usr/bin/security import "$work/identity.p12" -k "$KEYCHAIN" -P "$passphrase" \
+        -T /usr/bin/codesign >/dev/null 2>&1 || die "importing into the keychain failed"
+
+    # Without a partition list macOS prompts for the keychain password on every
+    # use of the key. This call is what makes signing silent afterwards; it may
+    # ask for the login password once.
+    /usr/bin/security set-key-partition-list -S apple-tool:,apple: -s \
+        -k "" "$KEYCHAIN" >/dev/null 2>&1 || \
+        print -u2 -r -- "note: could not set the key partition list; macOS may ask for your keychain password the first time an instance is rebuilt"
+
+    local sha
+    sha="$(identity_sha1)"
+    [[ -n "$sha" ]] || die "the identity was imported but is not visible to codesign"
+
+    # Prove it can actually sign before reporting success.
+    local probe="$work/probe"
+    /bin/cp /bin/echo "$probe"
+    /usr/bin/codesign -f -s "$sha" "$probe" >/dev/null 2>&1 || \
+        die "the identity was created but cannot sign; leaving it in place for inspection"
+    /usr/bin/codesign --verify -R "=certificate leaf H\"$sha\"" "$probe" >/dev/null 2>&1 || \
+        die "the identity signed, but the pinned requirement did not verify"
+
+    print -r -- "created: $IDENTITY_NAME"
+    print -r -- "sha1: $sha"
+    print -r -- "rebuild each instance to adopt it"
+}
+
+cmd_remove() {
+    local sha
+    sha="$(identity_sha1)"
+    [[ -n "$sha" ]] || { print -r -- "nothing to remove"; return 0 }
+    /usr/bin/security delete-identity -Z "$sha" "$KEYCHAIN" >/dev/null 2>&1 || \
+        die "removing the identity failed"
+    print -r -- "removed: $IDENTITY_NAME"
+    print -r -- "instances fall back to ad-hoc signing on their next rebuild"
+}
+
+case "${1:-status}" in
+    status) cmd_status ;;
+    setup) cmd_setup ;;
+    remove) cmd_remove ;;
+    *) die "usage: doppel-signing {status|setup|remove}" ;;
+esac

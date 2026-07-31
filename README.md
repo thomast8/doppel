@@ -75,7 +75,21 @@ Start at Login installs a user LaunchAgent (`ai.doppel.menubar`) rather than usi
 SMAppService, which needs a Developer ID-signed bundle that local ad-hoc builds
 don't have. Turning the toggle off boots the job out and removes the plist.
 
-## Create a local signing identity (recommended, and not only for convenience)
+## Secure signing
+
+Doppel can create its own local code-signing identity — in the menu bar, **Set
+Up Secure Signing**, or from the CLI:
+
+```sh
+bin/doppel-signing status
+bin/doppel-signing setup     # creates the identity, no Keychain Access needed
+bin/doppel-signing remove
+```
+
+The menu-bar route also rebuilds every instance afterwards, which is the step
+that actually makes them adopt the identity.
+
+### Why it matters
 
 Clones are signed ad hoc by default, which has two consequences.
 
@@ -90,12 +104,16 @@ difference. With a stable identity the launcher pins the certificate leaf, and a
 attacker's ad-hoc re-seal no longer satisfies it (verified: an ad-hoc bundle fails
 any `certificate leaf` requirement).
 
-So create a self-signed code-signing certificate named exactly `Doppel Local
-Signing` (Keychain Access > Certificate Assistant > Create a Certificate, type
-"Code Signing"), then run `bin/doppel rebuild <name>` for each instance. The
-engine finds it by name, records its SHA-1, signs with it, and writes the pinned
-requirement into each bundle. Keep the private key in a keychain you lock; any
-process running as you can otherwise ask `codesign` to sign with it.
+`doppel-signing setup` generates a code-signing certificate with OpenSSL and
+imports it into your login keychain, granting `codesign` access to the key so
+signing stays silent. No administrator rights and no trust prompt: the
+certificate is deliberately left untrusted, because `codesign` signs with it
+regardless and trusting it would need an admin authorisation. That also means
+`security find-identity -v` will not list it — look for the certificate itself,
+which is what Doppel does.
+
+Keep the private key in a keychain you lock; any process running as you can
+otherwise ask `codesign` to sign with it.
 
 ## Honest limitations
 
