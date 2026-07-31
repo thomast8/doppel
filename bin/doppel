@@ -96,6 +96,18 @@ write_config() {
     } > "$dir/instance-config.zsh"
 }
 
+# A GUI-launched process inherits launchd's minimal PATH, which does not
+# include Homebrew or ~/.local/bin, so uv has to be located explicitly rather
+# than assumed to be on PATH.
+find_uv() {
+    local candidate
+    for candidate in "${DOPPEL_UV:-}" "$(command -v uv 2>/dev/null)" \
+        /opt/homebrew/bin/uv /usr/local/bin/uv "$HOME/.local/bin/uv" "$HOME/.cargo/bin/uv"; do
+        [[ -n "$candidate" && -x "$candidate" ]] && { print -r -- "$candidate"; return 0 }
+    done
+    return 1
+}
+
 generate_icon() {
     local dir="$1" tint="$2" icon_override="$3"
     mkdir -p "$dir/assets"
@@ -103,9 +115,10 @@ generate_icon() {
         /bin/cp "$icon_override" "$dir/assets/icon.icns"
         /usr/bin/sips -s format png -Z 1024 "$icon_override" --out "$dir/assets/icon.png" >/dev/null
     else
-        local source_png="$dir/assets/source.png" tinted_png="$dir/assets/icon.png"
+        local source_png="$dir/assets/source.png" tinted_png="$dir/assets/icon.png" uv
+        uv="$(find_uv)" || die "uv is required to tint icons but was not found; install it from https://docs.astral.sh/uv/ or set DOPPEL_UV to its path"
         extract_primary_icon "$source_png"
-        (cd "$REPO_ROOT" && uv run --quiet --with pillow python engine/icon/tint_icon.py "$source_png" "$tinted_png" "$tint") || \
+        (cd "$REPO_ROOT" && "$uv" run --quiet --with pillow python engine/icon/tint_icon.py "$source_png" "$tinted_png" "$tint") || \
             die "tinting the icon failed"
         png_to_icns "$tinted_png" "$dir/assets/icon.icns"
         /bin/rm -f "$source_png"
@@ -351,8 +364,11 @@ cmd_edit() {
         done
     fi
 
-    # The bundle is replaced in place, so the running copy has to go first.
+    # The bundle is replaced in place, so the running copy has to go first. It
+    # is reopened afterwards, so the new name and icon appear straight away.
+    local was_running=0
     if /usr/bin/pgrep -f "${old_app}/Contents/MacOS/" >/dev/null 2>&1; then
+        was_running=1
         /usr/bin/osascript -e "tell application id \"$bundle_id\" to quit" >/dev/null 2>&1 || true
         local waited=0
         while (( waited < 15 )) && /usr/bin/pgrep -f "${old_app}/Contents/MacOS/" >/dev/null 2>&1; do
@@ -386,16 +402,21 @@ cmd_edit() {
     install_engine_assets "$dir"
     /bin/zsh "$dir/doppel-engine.zsh" install "$new_app"
     "$LSREGISTER" -f "$new_app" >/dev/null 2>&1 || true
+    if (( was_running )) || [[ "${DOPPEL_RELAUNCH:-1}" == "force" ]]; then
+        /usr/bin/open -na "$new_app" || print -u2 -r -- "note: could not reopen $new_app"
+    fi
     print -r -- "updated: $new_app"
 }
 
 cmd_rebuild() {
-    local dir app
+    local dir app was_running=0
     dir="$(instance_dir_for "$1")"
     app="$(app_path_for "$dir")"
+    /usr/bin/pgrep -f "${app}/Contents/MacOS/" >/dev/null 2>&1 && was_running=1
     compile_helpers
     install_engine_assets "$dir"
     /bin/zsh "$dir/doppel-engine.zsh" install "$app"
+    (( was_running )) && /usr/bin/open -na "$app" >/dev/null 2>&1
     print -r -- "rebuilt: $app"
 }
 

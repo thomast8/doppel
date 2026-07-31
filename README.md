@@ -48,7 +48,8 @@ bin/doppel remove "ChatGPT Personal"                # keeps the account data
 bin/doppel remove "ChatGPT Personal" --purge-data    # data to the Trash too
 ```
 
-`edit` renames an instance, changes its icon colour, or both. Identity and data
+`edit` renames an instance, changes its icon colour, or both, and reopens the
+instance afterwards if it was running, so the change is visible immediately. Identity and data
 stay put — the bundle identifier, URL scheme and data directories are fixed when
 an instance is created — so a rename never separates an account from its chats.
 Instances can be referred to by their current name at any time.
@@ -62,6 +63,9 @@ given — and even then it is moved to the Trash, not deleted.
 installs the instance into `~/Applications`, and stores the instance definition in
 `~/Library/Application Support/Doppel/instances/`. Requirements: Xcode Command
 Line Tools and [uv](https://docs.astral.sh/uv/) (used once per icon, for Pillow).
+uv is located explicitly rather than assumed to be on `PATH`, because a
+GUI-launched process inherits launchd's minimal one; set `DOPPEL_UV` if yours
+lives somewhere unusual.
 
 ### Menu-bar app
 

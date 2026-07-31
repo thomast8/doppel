@@ -182,9 +182,16 @@ final class InstanceStore: ObservableObject {
             process.waitUntilExit()
             let stdout = String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
             if process.terminationStatus != 0 {
+                // Fall back through stderr, then stdout: a bare "exited 1" tells
+                // the user nothing about what actually went wrong.
                 let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                return .failure(stderr?.isEmpty == false ? stderr! : "doppel exited \(process.terminationStatus)")
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let detail = !stderr.isEmpty
+                    ? stderr
+                    : stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+                return .failure(detail.isEmpty
+                                ? "doppel exited \(process.terminationStatus)"
+                                : detail)
             }
             return .success(stdout)
         } catch {
