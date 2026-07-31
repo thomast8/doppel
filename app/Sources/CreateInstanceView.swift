@@ -213,8 +213,6 @@ struct CreateInstanceView: View {
     }
 
     private func submit() {
-        form.creating = true
-        form.errorMessage = nil
         let finish: (String?) -> Void = { [form] failure in
             form.creating = false
             if let failure {
@@ -224,9 +222,21 @@ struct CreateInstanceView: View {
             }
         }
         let tint = form.useOriginal ? "original" : form.color.rgbHex
+
         if let editing {
-            store.edit(editing, newName: trimmedName, tintHex: tint, completion: finish)
+            // Only what actually differs is sent. Saving an untouched form used
+            // to quit the instance, re-sign the bundle and reopen it to arrive
+            // back where it started, which made a stray Return on a window left
+            // open a twenty-second operation on a real account.
+            let renamed = trimmedName != editing.name ? trimmedName : nil
+            let recoloured = tint.caseInsensitiveCompare(editing.tint) != .orderedSame ? tint : nil
+            guard renamed != nil || recoloured != nil else { dismiss(); return }
+            form.creating = true
+            form.errorMessage = nil
+            store.edit(editing, newName: renamed, tintHex: recoloured, completion: finish)
         } else {
+            form.creating = true
+            form.errorMessage = nil
             store.create(name: trimmedName, tintHex: tint, completion: finish)
         }
     }
