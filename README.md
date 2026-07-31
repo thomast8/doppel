@@ -82,6 +82,18 @@ go, so this is only needed to reclaim what earlier versions left behind.
 installs the instance into `~/Applications`, and stores the instance definition in
 `~/Library/Application Support/Doppel/instances/`.
 
+### Permissions for managed apps
+
+macOS grants privacy permissions to each app identity separately. A new Doppel
+instance therefore does not inherit Accessibility or Screen & System Audio
+Recording access from the primary Codex app (or from another instance). Every
+instance checks those permissions when it starts. If either is missing, it
+explains which capabilities are unavailable and, after you choose **Allow
+Permissions**, invokes the standard macOS consent prompts. Choosing **Not Now**
+still launches the instance, but features that need to see or interact with
+other apps may not work. Doppel never resets a denial or changes the privacy
+database itself; permissions remain under your control in System Settings.
+
 ### Dependencies
 
 There are none beyond macOS. Icon tinting, the instance launcher and the error

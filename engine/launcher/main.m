@@ -1,4 +1,5 @@
 #import <Cocoa/Cocoa.h>
+#import <ApplicationServices/ApplicationServices.h>
 #import <Security/Security.h>
 #include <CommonCrypto/CommonDigest.h>
 #include <sys/xattr.h>
@@ -23,6 +24,50 @@ static void show_error(NSString *message) {
     alert.alertStyle = NSAlertStyleCritical;
     [alert addButtonWithTitle:@"OK"];
     [alert runModal];
+}
+
+// TCC grants belong to a code identity, not to the vendor app an instance was
+// copied from. Consequently every Doppel bundle has to ask for the capabilities
+// Codex uses to see and work with other apps. Do this in the bundle executable
+// before handing off to the engine: macOS then attributes both requests to the
+// managed instance rather than to Doppel, zsh, or the preserved vendor binary.
+static void request_missing_permissions(void) {
+    BOOL needsAccessibility = !AXIsProcessTrusted();
+    BOOL needsScreenCapture = !CGPreflightScreenCaptureAccess();
+    if (!needsAccessibility && !needsScreenCapture) {
+        return;
+    }
+
+    NSMutableArray<NSString *> *missing = [NSMutableArray array];
+    if (needsAccessibility) {
+        [missing addObject:@"Accessibility (to work with other apps)"];
+    }
+    if (needsScreenCapture) {
+        [missing addObject:@"Screen & System Audio Recording (to see on-screen content)"];
+    }
+
+    [NSApplication sharedApplication];
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = [NSString stringWithFormat:@"%@ needs permission", instance_name()];
+    alert.informativeText = [NSString stringWithFormat:
+        @"This managed Codex app is missing:\n\n• %@\n\nmacOS keeps permission separate for every Doppel instance. You can continue without it, but features that use other apps may not work.",
+        [missing componentsJoinedByString:@"\n• "]];
+    alert.alertStyle = NSAlertStyleInformational;
+    [alert addButtonWithTitle:@"Allow Permissions"];
+    [alert addButtonWithTitle:@"Not Now"];
+    if ([alert runModal] != NSAlertFirstButtonReturn) {
+        return;
+    }
+
+    // These are Apple's own consent flows. They deliberately run only after a
+    // user action; denied grants are never modified or reset behind their back.
+    if (needsAccessibility) {
+        NSDictionary *options = @{(__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES};
+        AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options);
+    }
+    if (needsScreenCapture) {
+        CGRequestScreenCaptureAccess();
+    }
 }
 
 // The requirement recorded for a bundle installed at this exact path, or nil.
@@ -112,6 +157,14 @@ int main(int argc, char *argv[]) {
         if (![[NSFileManager defaultManager] isExecutableFileAtPath:enginePath]) {
             show_error([NSString stringWithFormat:@"The self-healing engine is missing:\n%@", enginePath]);
             return 1;
+        }
+
+        // The engine invokes this mode only after its health check (and any
+        // rebuild) has completed. Requesting against the old ad-hoc signature
+        // immediately before a rebuild would make the new grant stale.
+        if (argc == 2 && strcmp(argv[1], "--doppel-request-permissions") == 0) {
+            request_missing_permissions();
+            return 0;
         }
 
         char **engineArgv = calloc((size_t)argc + 4, sizeof(char *));

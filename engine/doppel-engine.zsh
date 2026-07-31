@@ -11,7 +11,7 @@
 set -u
 setopt PIPE_FAIL
 
-readonly ENGINE_VERSION="11"
+readonly ENGINE_VERSION="12"
 
 # When this engine copy runs from inside an installed bundle, environment
 # overrides are ignored: otherwise a same-uid process could point a
@@ -485,6 +485,12 @@ launch_instance() {
         mkdir -p "$DOPPEL_PROFILE_ROOT" "$DOPPEL_CODEX_HOME"
         export CODEX_ELECTRON_USER_DATA_PATH="$DOPPEL_PROFILE_ROOT"
         export CODEX_HOME="$DOPPEL_CODEX_HOME"
+        # Ask only after the bundle is known healthy. With ad-hoc signing, a
+        # rebuild changes the TCC identity, so prompting from the launcher that
+        # was about to be replaced would grant access to stale code and then
+        # immediately ask the user again.
+        "$app/Contents/MacOS/ChatGPT" --doppel-request-permissions || \
+            log_message "The permission check could not be shown; continuing launch"
         log_message "Launching healthy instance $version"
         exec "$app/Contents/MacOS/ChatGPT.real" --user-data-dir="$DOPPEL_PROFILE_ROOT" "$@"
         fail_closed "The preserved vendor executable could not be started."

@@ -50,7 +50,8 @@ compile_helpers() {
     for pair in "launcher:doppel-launcher" "alert:doppel-alert"; do
         src="$ENGINE_SRC/${pair%%:*}/main.m"
         bin="$BUILD_CACHE/${pair##*:}"
-        /usr/bin/clang -fobjc-arc -O2 -framework Cocoa -framework Security -o "$bin" "$src" || \
+        /usr/bin/clang -fobjc-arc -O2 -framework Cocoa -framework ApplicationServices \
+            -framework Security -o "$bin" "$src" || \
             die "compiling ${pair##*:} failed"
     done
     /usr/bin/swiftc -O "$ENGINE_SRC/icon/main.swift" -o "$BUILD_CACHE/doppel-icon" 2>/dev/null || \

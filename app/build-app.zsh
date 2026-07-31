@@ -55,7 +55,7 @@ if [[ "$UNIVERSAL" == "1" ]]; then
 else
     arch_flags=()
 fi
-/usr/bin/clang -fobjc-arc -O2 $arch_flags -framework Cocoa -framework Security \
+/usr/bin/clang -fobjc-arc -O2 $arch_flags -framework Cocoa -framework ApplicationServices -framework Security \
     -o "$PAYLOAD/prebuilt/doppel-launcher" "$REPO_ROOT/engine/launcher/main.m"
 /usr/bin/clang -fobjc-arc -O2 $arch_flags -framework Cocoa \
     -o "$PAYLOAD/prebuilt/doppel-alert" "$REPO_ROOT/engine/alert/main.m"
