@@ -72,6 +72,23 @@ else
 fi
 /bin/chmod 755 "$PAYLOAD/prebuilt/"*
 
+# The app's own icon is drawn rather than checked in: it is a couple of rounded
+# rectangles, and the generator is easier to read and to adjust than a binary
+# would be. Host architecture only — this one runs here, it does not ship.
+print -r -- "Drawing the app icon…"
+typeset ICON_WORK
+ICON_WORK="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/doppel-appicon.XXXXXXXX")"
+/usr/bin/swiftc -O "$APP_SRC/icon/main.swift" -o "$ICON_WORK/doppel-appicon" || {
+    print -u2 -r -- "compiling the icon generator failed"; exit 1
+}
+"$ICON_WORK/doppel-appicon" "$ICON_WORK/Doppel.iconset" >/dev/null || {
+    print -u2 -r -- "drawing the app icon failed"; exit 1
+}
+/usr/bin/iconutil -c icns "$ICON_WORK/Doppel.iconset" -o "$APP/Contents/Resources/Doppel.icns" || {
+    print -u2 -r -- "building Doppel.icns failed"; exit 1
+}
+/bin/rm -rf "$ICON_WORK"
+
 /bin/cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -84,6 +101,8 @@ fi
 	<key>CFBundleName</key>
 	<string>Doppel</string>
 	<key>CFBundleDisplayName</key>
+	<string>Doppel</string>
+	<key>CFBundleIconFile</key>
 	<string>Doppel</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
