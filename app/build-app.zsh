@@ -73,9 +73,8 @@ else
 fi
 /bin/chmod 755 "$PAYLOAD/prebuilt/"*
 
-# The app's own icon is drawn rather than checked in: it is a couple of rounded
-# rectangles, and the generator is easier to read and to adjust than a binary
-# would be. Host architecture only — this one runs here, it does not ship.
+# Doppel's original paired-bubble mark is drawn rather than checked in. The
+# generator is host architecture only — it runs here and does not ship.
 print -r -- "Drawing the app icon…"
 typeset ICON_WORK
 ICON_WORK="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/doppel-appicon.XXXXXXXX")"

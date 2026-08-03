@@ -70,9 +70,12 @@ struct MenuBarLabel: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Image(systemName: store.permissionIssues.isEmpty
-              ? "square.on.square"
-              : "exclamationmark.square.fill")
+        // MenuBarExtra reliably promotes a direct Image into the status item.
+        // Wrapping a custom Shape in a Group produced an empty slot on macOS.
+        Image(nsImage: store.permissionIssues.isEmpty
+              ? DoppelMenuBarMark.image
+              : DoppelMenuBarMark.warningImage)
+            .renderingMode(.template)
             .accessibilityLabel(store.permissionIssues.isEmpty
                                 ? "Doppel"
                                 : "Doppel: managed app permissions need attention")
@@ -81,6 +84,80 @@ struct MenuBarLabel: View {
                 openWindow(id: "create-instance")
                 NSApp.activate(ignoringOtherApps: true)
             }
+    }
+}
+
+/// Doppel's original mark at menu-bar scale: two asymmetric conversation
+/// bubbles, offset on the same diagonal as the app artwork. Keeping the geometry
+/// local means this identity has no dependency on another app's trademark.
+private enum DoppelMenuBarMark {
+    /// NSImage's drawing handler is resolution-independent, so this stays sharp
+    /// on Retina displays while presenting MenuBarExtra with the direct image it
+    /// expects. `isTemplate` lets macOS supply the correct light/dark tint.
+    static let image: NSImage = {
+        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+            guard let context = NSGraphicsContext.current?.cgContext else { return false }
+            context.setLineCap(.round)
+            context.setLineJoin(.round)
+            context.setLineWidth(1.45)
+            context.setStrokeColor(NSColor.black.cgColor)
+
+            context.saveGState()
+            context.setAlpha(0.46)
+            context.addPath(bubblePath(in: CGRect(x: 0.5, y: 6.8,
+                                                  width: 12.2, height: 9.4)))
+            context.strokePath()
+            context.restoreGState()
+
+            context.addPath(bubblePath(in: CGRect(x: 5.3, y: 1.4,
+                                                  width: 12.2, height: 9.4)))
+            context.strokePath()
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }()
+
+    static let warningImage: NSImage = {
+        let image = NSImage(systemSymbolName: "exclamationmark.bubble.fill",
+                            accessibilityDescription: nil)
+            ?? NSImage(systemSymbolName: "exclamationmark.triangle.fill",
+                       accessibilityDescription: nil)!
+        image.isTemplate = true
+        return image
+    }()
+
+    private static func bubblePath(in rect: CGRect) -> CGPath {
+        let path = CGMutablePath()
+        let tailHeight = rect.height * 0.20
+        let bodyBottom = rect.minY + tailHeight
+        let radius = min(rect.width * 0.16, (rect.height - tailHeight) * 0.30)
+        let tailStart = rect.minX + rect.width * 0.22
+        let tailTip = CGPoint(x: rect.minX + rect.width * 0.09, y: rect.minY)
+        let tailEnd = rect.minX + rect.width * 0.41
+
+        path.move(to: CGPoint(x: rect.minX + radius, y: bodyBottom))
+        path.addLine(to: CGPoint(x: tailStart, y: bodyBottom))
+        path.addQuadCurve(to: tailTip,
+                          control: CGPoint(x: tailStart - rect.width * 0.035,
+                                           y: bodyBottom - tailHeight * 0.48))
+        path.addQuadCurve(to: CGPoint(x: tailEnd, y: bodyBottom),
+                          control: CGPoint(x: tailTip.x + rect.width * 0.16,
+                                           y: tailTip.y + tailHeight * 0.36))
+        path.addLine(to: CGPoint(x: rect.maxX - radius, y: bodyBottom))
+        path.addQuadCurve(to: CGPoint(x: rect.maxX, y: bodyBottom + radius),
+                          control: CGPoint(x: rect.maxX, y: bodyBottom))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - radius))
+        path.addQuadCurve(to: CGPoint(x: rect.maxX - radius, y: rect.maxY),
+                          control: CGPoint(x: rect.maxX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX + radius, y: rect.maxY))
+        path.addQuadCurve(to: CGPoint(x: rect.minX, y: rect.maxY - radius),
+                          control: CGPoint(x: rect.minX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX, y: bodyBottom + radius))
+        path.addQuadCurve(to: CGPoint(x: rect.minX + radius, y: bodyBottom),
+                          control: CGPoint(x: rect.minX, y: bodyBottom))
+        path.closeSubpath()
+        return path
     }
 }
 
@@ -141,8 +218,11 @@ struct MenuContent: View {
                     Text("Working…")
                 }
             } label: {
-                Label(instance.name,
-                      systemImage: issues.isEmpty ? "app" : "exclamationmark.triangle.fill")
+                if issues.isEmpty {
+                    Text(instance.name)
+                } else {
+                    Label(instance.name, systemImage: "exclamationmark.triangle.fill")
+                }
             }
         }
         Divider()
