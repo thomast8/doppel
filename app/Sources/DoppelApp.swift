@@ -95,20 +95,36 @@ struct MenuContent: View {
         }
         ForEach(store.instances) { instance in
             let issues = store.permissionIssues.filter { $0.instanceID == instance.id }
+            let permissions = store.permissionStatuses.filter { $0.instanceID == instance.id }
             Menu {
-                if !issues.isEmpty {
-                    Section("Needs Attention") {
-                        ForEach(issues) { issue in
-                            Button {
-                                store.showPermissionIssues(for: instance)
-                            } label: {
-                                Label("\(issue.label) — \(issue.statusLabel)",
-                                      systemImage: issue.systemImage)
+                Menu("Privacy Permissions") {
+                    if permissions.isEmpty {
+                        Text(store.checkingPermissions ? "Checking…" : "No status available")
+                    } else {
+                        ForEach(permissions) { permission in
+                            if permission.action != .unavailable {
+                                Button {
+                                    store.handlePermission(permission)
+                                } label: {
+                                    Label("\(permission.label) — \(permission.statusLabel)",
+                                          systemImage: permission.systemImage)
+                                }
+                                .disabled(store.busy.contains("permissions"))
+                            } else {
+                                Label("\(permission.label) — \(permission.statusLabel)",
+                                      systemImage: permission.systemImage)
+                                    .disabled(true)
                             }
                         }
                     }
                     Divider()
+                    if store.busy.contains("permissions") {
+                        Text("Waiting for macOS…")
+                    } else {
+                        Text("Select Not requested to ask macOS for this instance.")
+                    }
                 }
+                Divider()
                 Button("Launch") { store.launch(instance) }
                     .disabled(store.busy.contains(instance.id))
                 Button("Rebuild") { store.rebuild(instance) }

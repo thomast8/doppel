@@ -33,8 +33,10 @@ build number, OpenAI Team ID and a valid strict code signature.
 
 On restart Doppel records which instances were open, closes all managed apps,
 atomically replaces the untouched primary while keeping a rollback, rebuilds
-every installed instance, verifies the source build plus each instance's pinned
-signature, and reopens only the apps that were previously running. A failed
+every installed instance concurrently, verifies the source build plus each
+instance's pinned signature, and reopens only the apps that were previously
+running. APFS copy-on-write clones avoid copying the unchanged parts of the
+1+ GB vendor bundle once per instance. A failed
 download changes nothing; a failed install restores the previous primary; and a
 partial rebuild keeps the restart manifest and reports the exact instance.
 
@@ -98,20 +100,33 @@ installs the instance into `~/Applications`, and stores the instance definition 
 
 macOS grants privacy permissions to each app identity separately. A new Doppel
 instance therefore does not inherit access from ChatGPT or from another managed
-instance. Doppel checks each installed instance for the proactively checkable
-capabilities ChatGPT uses: **Microphone**, **Camera**, **Accessibility**,
-**Screen & System Audio Recording**, and **Notifications**. A missing grant
-raises a native alert and changes Doppel's menu-bar icon to a warning symbol.
-The alert can invoke Apple's native consent flows for the affected instances;
-**Later** keeps the apps usable and the warning remains until the issue clears.
+instance. Each instance's **Privacy Permissions** submenu shows the status of
+**Microphone**, **Camera**, **Accessibility**, **Screen & System Audio
+Recording**, and **Notifications**. Clicking a row opens that exact System
+Settings category when access was denied or is already granted. If the app has
+not asked yet, clicking the row first runs Apple's native request as that one
+managed instance. That request is what registers an otherwise absent app in
+the Microphone, Camera, Screen Recording, or Accessibility list. Doppel then
+refreshes the status; it never requests unrelated permissions at the same time.
+
+Camera and microphone are optional until that account uses the relevant feature,
+so `Not requested` is informational and never raises a warning. The public
+Accessibility and Screen Recording checks expose only a boolean and can lag or
+disagree with the visible System Settings row; Doppel labels an inconclusive
+result `Check in Settings` instead of claiming the permission is missing. Only an explicit
+denial, restriction, or outdated checker changes the menu-bar icon to a warning.
 
 Permissions that macOS grants only in the context of a specific action or
 target—such as Files and Folders, Calendar, Reminders, Location, and Apple
 Events—continue to be requested by ChatGPT when that feature is used. Doppel
 does not manufacture broad requests for capabilities an account may never use.
 Doppel never resets or writes the macOS privacy database itself; permissions
-remain under your control in System Settings. The menu app checks again every
-five minutes and immediately after a managed instance is rebuilt.
+remain under your control in System Settings. The menu app checks through Launch
+Services so macOS attributes the probe to the managed bundle rather than to
+Doppel itself, and checks again every five minutes and after a rebuild. Managed
+apps no longer raise a broad permission assistant at launch. Optional access is
+requested either by ChatGPT when a feature needs it or by selecting that one row
+in Doppel.
 
 ### Dependencies
 

@@ -11,7 +11,7 @@
 set -u
 setopt PIPE_FAIL
 
-readonly ENGINE_VERSION="15"
+readonly ENGINE_VERSION="18"
 
 # When this engine copy runs from inside an installed bundle, environment
 # overrides are ignored: otherwise a same-uid process could point a
@@ -282,7 +282,14 @@ build_instance() {
     [[ ! -e "$target" ]] || fail_closed "Refusing to overwrite an existing staging path: $target"
     mkdir -p "${target:h}"
     log_message "Building instance $version at $target"
-    /usr/bin/ditto "$PRIMARY_APP" "$target" || fail_closed "Copying the primary app into staging failed."
+    # APFS can clone the 1+ GB source bundle copy-on-write in seconds. Each
+    # instance then gets private copies only for the files Doppel changes.
+    # Keep ditto as the fallback for non-APFS volumes or older macOS.
+    if ! /bin/cp -cR "$PRIMARY_APP" "$target" 2>/dev/null; then
+        [[ ! -e "$target" ]] || /bin/rm -rf "$target"
+        /usr/bin/ditto "$PRIMARY_APP" "$target" || \
+            fail_closed "Copying the primary app into staging failed."
+    fi
     /usr/bin/xattr -cr "$target" || fail_closed "Removing copied filesystem metadata failed."
     /usr/bin/codesign --verify --deep --strict "$target" >/dev/null 2>&1 || \
         fail_closed "The staged source copy did not retain the vendor signature."
@@ -492,12 +499,10 @@ launch_instance() {
         mkdir -p "$DOPPEL_PROFILE_ROOT" "$DOPPEL_CODEX_HOME"
         export CODEX_ELECTRON_USER_DATA_PATH="$DOPPEL_PROFILE_ROOT"
         export CODEX_HOME="$DOPPEL_CODEX_HOME"
-        # Ask only after the bundle is known healthy. With ad-hoc signing, a
-        # rebuild changes the TCC identity, so prompting from the launcher that
-        # was about to be replaced would grant access to stale code and then
-        # immediately ask the user again.
-        "$app/Contents/MacOS/ChatGPT" --doppel-request-permissions || \
-            log_message "The permission check could not be shown; continuing launch"
+        # ChatGPT asks for optional privacy capabilities in the context where
+        # it actually uses them. Doppel used to raise its own broad assistant
+        # on every launch, which nagged for camera and microphone even when the
+        # account never used those features and could disagree with Settings.
         log_message "Launching healthy instance $version"
         exec "$app/Contents/MacOS/ChatGPT.real" --user-data-dir="$DOPPEL_PROFILE_ROOT" "$@"
         fail_closed "The preserved vendor executable could not be started."

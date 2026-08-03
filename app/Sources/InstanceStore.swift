@@ -20,17 +20,22 @@ final class InstanceStore: ObservableObject {
     @Published var signingReady = false
     @Published var chatGPTUpdate: ChatGPTUpdate?
     @Published var checkingForUpdates = false
-    @Published var permissionIssues: [PermissionIssue] = []
+    @Published var permissionStatuses: [PermissionIssue] = []
     @Published var checkingPermissions = false
+
+    var permissionIssues: [PermissionIssue] { permissionStatuses.filter(\.needsAttention) }
 
     /// The last failure already reported for a given piece of work, so a
     /// condition that persists across reloads is raised once rather than after
     /// every refresh.
     private var reported: [String: String] = [:]
     private var promptedUpdateBuilds: Set<Int> = []
+    /// Accessibility and Screen Recording expose only a boolean. After one
+    /// native request in this app session, a still-inconclusive row falls back
+    /// to its exact Settings pane instead of repeatedly raising the same flow.
+    private var requestedPermissionIDs: Set<String> = []
     private var updateTimer: Timer?
     private var permissionTimer: Timer?
-    private var promptedPermissionFingerprint = ""
 
     static let primaryAppPath = "/Applications/ChatGPT.app"
     static let primaryDownloadURL = URL(string: "https://chatgpt.com/features/desktop/")!
@@ -127,7 +132,7 @@ final class InstanceStore: ObservableObject {
 
     // MARK: - Permission health
 
-    func checkPermissions(prompt: Bool = true) {
+    func checkPermissions() {
         guard !checkingPermissions, !busy.contains("permissions"), let cli = discoveredCLI else { return }
         checkingPermissions = true
         Task.detached { [weak self] in
@@ -140,13 +145,7 @@ final class InstanceStore: ObservableObject {
                     self.report(message, for: "permissions-check")
                 case .success(let output):
                     self.clearReport(for: "permissions-check")
-                    let issues = PermissionIssue.parse(output)
-                    self.permissionIssues = issues
-                    if issues.isEmpty {
-                        self.promptedPermissionFingerprint = ""
-                    } else if prompt {
-                        self.promptForPermissionIssues(issues)
-                    }
+                    self.permissionStatuses = PermissionIssue.parseStatuses(output)
                 }
             }
         }
@@ -154,27 +153,15 @@ final class InstanceStore: ObservableObject {
 
     func showPermissionIssues() {
         guard !permissionIssues.isEmpty else { return }
-        promptForPermissionIssues(permissionIssues, force: true)
+        showPermissionIssues(permissionIssues)
     }
 
-    func showPermissionIssues(for instance: Instance) {
-        let matching = permissionIssues.filter { $0.instanceID == instance.id }
-        guard !matching.isEmpty else { return }
-        promptForPermissionIssues(matching, force: true)
-    }
-
-    private func promptForPermissionIssues(_ issues: [PermissionIssue], force: Bool = false) {
-        let fingerprint = issues.map(\.id).sorted().joined(separator: "|")
-        guard force || fingerprint != promptedPermissionFingerprint else { return }
-        promptedPermissionFingerprint = fingerprint
-
+    private func showPermissionIssues(_ issues: [PermissionIssue]) {
         let grouped = Dictionary(grouping: issues, by: \.instanceName)
         let details = grouped.keys.sorted().map { name in
             let labels = grouped[name, default: []].map(\.label).sorted().joined(separator: ", ")
             return "• \(name): \(labels)"
         }.joined(separator: "\n")
-        let requestable = issues.contains(where: \.canRequest)
-
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.alertStyle = .warning
@@ -182,37 +169,41 @@ final class InstanceStore: ObservableObject {
             ? "A managed ChatGPT permission needs attention"
             : "Managed ChatGPT permissions need attention"
         alert.informativeText = """
-            macOS keeps permissions separate for every Doppel instance. These instances are missing access or need their permission checker refreshed:
+            macOS reports an explicit denial or an outdated permission checker for:
 
             \(details)
+
+            Open the exact permission from an instance's Privacy Permissions submenu. Doppel no longer treats unused or unconfirmable capabilities as errors.
             """
-        alert.addButton(withTitle: requestable ? "Fix Permissions" : "OK")
-        alert.addButton(withTitle: "Later")
-        guard alert.runModal() == .alertFirstButtonReturn, requestable else { return }
-        requestPermissions(for: issues)
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
-    private func requestPermissions(for issues: [PermissionIssue]) {
-        guard let cli = discoveredCLI else { return }
-        let names = Array(Set(issues.filter(\.canRequest).map(\.instanceName))).sorted()
-        guard !names.isEmpty else { return }
-        busy.insert("permissions")
-        Task.detached { [weak self] in
-            var failures: [String] = []
-            for name in names {
-                let result = Self.runProcess(cli: cli, arguments: ["permissions", "request", name])
-                if case .failure(let message) = result { failures.append(message) }
-            }
-            let failureText = failures.joined(separator: "\n")
-            await MainActor.run { [weak self] in
+    func handlePermission(_ permission: PermissionIssue) {
+        switch permission.action {
+        case .requestNative where !requestedPermissionIDs.contains(permission.id):
+            requestedPermissionIDs.insert(permission.id)
+            runCLI(
+                ["permissions", "request", permission.instanceName, permission.permission],
+                busyKey: "permissions"
+            ) { [weak self] failure in
                 guard let self else { return }
-                self.busy.remove("permissions")
-                if !failureText.isEmpty {
-                    self.report(failureText, for: "permissions")
+                if failure == nil {
+                    self.checkPermissions()
+                } else {
+                    self.requestedPermissionIDs.remove(permission.id)
                 }
-                self.checkPermissions(prompt: false)
             }
+        case .requestNative, .openSettings:
+            openPermissionSettings(permission)
+        case .unavailable:
+            break
         }
+    }
+
+    private func openPermissionSettings(_ permission: PermissionIssue) {
+        guard let url = permission.settingsURL else { return }
+        NSWorkspace.shared.open(url)
     }
 
     // MARK: - Coordinated ChatGPT updates
@@ -381,10 +372,15 @@ final class InstanceStore: ObservableObject {
         NSApp.activate(ignoringOtherApps: true)
         let alert = updateAlert()
         alert.messageText = "Update Complete"
+        let signingNote = signingReady ? "" : """
+
+            This Mac is using ad-hoc signing, so macOS may have forgotten permissions for the rebuilt apps. Doppel will show one menu-bar warning if anything needs attention. Set Up Secure Signing before the next update to preserve their code identity.
+            """
         alert.informativeText = """
             ChatGPT \(update.targetVersion) is installed.
 
             Doppel verified \(verified) managed instance(s) and reopened \(reopened).
+            \(signingNote)
             """
         alert.addButton(withTitle: "OK")
         alert.runModal()

@@ -844,6 +844,16 @@ wait_for_instance() {
     return 1
 }
 
+rebuild_instance_for_update() {
+    local dir="$1" expected_version="$2" app
+    app="$(app_path_for "$dir")"
+    # Assets were compiled and installed for every instance before any app was
+    # closed. Running the per-instance engines directly avoids compiling again
+    # and avoids redundant Dock/Finder cache restarts during one update.
+    /bin/zsh "$dir/doppel-engine.zsh" install "$app" >/dev/null 2>&1 && \
+        verify_managed_instance "$dir" "$expected_version"
+}
+
 cmd_update_apply() {
     local version="${1:-}"
     [[ $# -le 1 ]] || die "usage: doppel update apply [build]"
@@ -924,10 +934,18 @@ cmd_update_apply() {
     fi
     "$LSREGISTER" -f "$PRIMARY_APP" >/dev/null 2>&1 || true
 
+    # Instance bundles have separate staging, backup, pin, and lock roots, so
+    # their expensive clone/sign/verify work is independent. Rebuild all of
+    # them concurrently, keeping process IDs in the same order as the instance
+    # arrays so results are still reported deterministically.
+    local -a rebuild_pids
+    for (( index = 1; index <= ${#dirs}; index++ )); do
+        rebuild_instance_for_update "${dirs[$index]}" "$version" &
+        rebuild_pids+=("$!")
+    done
     for (( index = 1; index <= ${#dirs}; index++ )); do
         name="${names[$index]}"
-        if (DOPPEL_RELAUNCH=0 cmd_rebuild "$name") >/dev/null 2>&1 && \
-           verify_managed_instance "${dirs[$index]}" "$version"; then
+        if wait "${rebuild_pids[$index]}"; then
             verified_apps+=("${apps[$index]}")
         else
             failures+=("$name did not rebuild or verify")
@@ -1014,23 +1032,47 @@ permission_label() {
 }
 
 permission_rows_for_dir() {
-    local dir="$1" app name slug engine launcher output permission permission_state
+    local dir="$1" app name slug engine output permission permission_state
     app="$(app_path_for "$dir")"
     [[ -d "$app" ]] || return 0
     name="$(config_value "$dir" DOPPEL_DISPLAY_NAME)"
     slug="${dir:t}"
     engine="$(/usr/bin/plutil -extract DoppelEngineVersion raw "$app/Contents/Info.plist" 2>/dev/null || true)"
-    launcher="$app/Contents/MacOS/ChatGPT"
-    if [[ "$engine" != <15-> || ! -x "$launcher" ]]; then
+    if [[ "$engine" != <18-> || ! -x "$app/Contents/MacOS/ChatGPT" ]]; then
         printf '%s\t%s\t%s\t%s\n' "$slug" "$name" "permission-check" "outdated"
         return 0
     fi
-    if ! output="$("$launcher" --doppel-permission-status 2>/dev/null)"; then
+
+    # Launch through Launch Services rather than executing the bundle binary as
+    # Doppel's child. macOS privacy attribution follows the responsible app;
+    # the direct child check could therefore report Doppel's grants instead of
+    # this managed app's. `open --stdout` preserves the checker's stable output.
+    local probe_root="$DOPPEL_HOME/permission-checks" status_file error_file
+    /bin/mkdir -p "$probe_root" || return 1
+    /bin/chmod 700 "$probe_root"
+    status_file="$(/usr/bin/mktemp "$probe_root/status.XXXXXXXX")" || return 1
+    error_file="$(/usr/bin/mktemp "$probe_root/error.XXXXXXXX")" || {
+        /bin/rm -f "$status_file"
+        return 1
+    }
+    if ! /usr/bin/open -n -W "$app" --stdout "$status_file" --stderr "$error_file" \
+        --args --doppel-permission-status >/dev/null 2>&1; then
+        /bin/rm -f "$status_file" "$error_file"
         printf '%s\t%s\t%s\t%s\n' "$slug" "$name" "permission-check" "error"
         return 0
     fi
+    output="$(<"$status_file")"
+    /bin/rm -f "$status_file" "$error_file"
+    [[ -n "$output" ]] || {
+        printf '%s\t%s\t%s\t%s\n' "$slug" "$name" "permission-check" "error"
+        return 0
+    }
     while IFS=$'\t' read -r permission permission_state; do
         [[ -n "$permission" && -n "$permission_state" ]] || continue
+        # The CoreGraphics and Accessibility APIs expose only a boolean. A
+        # false value is not proof that the setting is absent (and can lag the
+        # visible System Settings row), so do not label it "missing".
+        [[ "$permission_state" != "missing" ]] || permission_state="unconfirmed"
         printf '%s\t%s\t%s\t%s\n' "$slug" "$name" "$permission" "$permission_state"
     done <<< "$output"
 }
@@ -1068,15 +1110,57 @@ cmd_permissions_check() {
 }
 
 cmd_permissions_request() {
-    [[ $# -eq 1 ]] || die "usage: doppel permissions request <name>"
-    local dir app engine
-    dir="$(instance_dir_for "$1")"
+    (( $# >= 1 && $# <= 2 )) || die "usage: doppel permissions request <name> [permission]"
+    local name="$1" permission="${2:-}" dir app engine
+    if [[ -n "$permission" ]]; then
+        case "$permission" in
+            accessibility|screen-recording|microphone|camera|notifications) ;;
+            *) die "unknown permission '$permission'; expected accessibility, screen-recording, microphone, camera, or notifications" ;;
+        esac
+    fi
+    dir="$(instance_dir_for "$name")"
     app="$(app_path_for "$dir")"
-    [[ -d "$app" ]] || die "'$1' is not installed"
+    [[ -d "$app" ]] || die "'$name' is not installed"
     engine="$(/usr/bin/plutil -extract DoppelEngineVersion raw "$app/Contents/Info.plist" 2>/dev/null || true)"
-    [[ "$engine" == <15-> ]] || die "'$1' must be rebuilt before Doppel can check its permissions"
-    "$app/Contents/MacOS/ChatGPT" --doppel-request-permissions || \
-        die "'$1' could not open its permission assistant"
+    if [[ -z "$permission" ]]; then
+        [[ "$engine" == <15-> ]] || die "'$name' must be rebuilt before Doppel can request permissions"
+        /usr/bin/open -n -W "$app" --args --doppel-request-permissions || \
+            die "'$name' could not start its native permission requests"
+        return 0
+    fi
+
+    [[ "$engine" == <18-> ]] || \
+        die "'$name' must be rebuilt before Doppel can request one permission at a time"
+
+    # `open -W` does not reliably forward the launched application's exit
+    # status. Capture and validate the helper's one-row result instead, using a
+    # private directory so another local process cannot replace the files.
+    local request_root="$DOPPEL_HOME/permission-checks" status_file error_file output result_permission result_status
+    /bin/mkdir -p "$request_root" || die "could not create the permission request directory"
+    /bin/chmod 700 "$request_root"
+    status_file="$(/usr/bin/mktemp "$request_root/request.XXXXXXXX")" || \
+        die "could not create the permission request result file"
+    error_file="$(/usr/bin/mktemp "$request_root/error.XXXXXXXX")" || {
+        /bin/rm -f "$status_file"
+        die "could not create the permission request error file"
+    }
+    if ! /usr/bin/open -n -W "$app" --stdout "$status_file" --stderr "$error_file" \
+        --args --doppel-request-permission "$permission" >/dev/null 2>&1; then
+        output="$(<"$error_file")"
+        /bin/rm -f "$status_file" "$error_file"
+        [[ -n "$output" ]] || output="the managed app did not launch"
+        die "'$name' could not request $permission: $output"
+    fi
+    output="$(<"$status_file")"
+    /bin/rm -f "$status_file" "$error_file"
+    IFS=$'\t' read -r result_permission result_status <<< "$output"
+    [[ "$result_permission" == "$permission" ]] || \
+        die "'$name' returned no valid result after requesting $permission"
+    case "$result_status" in
+        granted|not-requested|denied|restricted|missing|unknown) ;;
+        *) die "'$name' returned an invalid status after requesting $permission" ;;
+    esac
+    printf '%s\t%s\n' "$result_permission" "$result_status"
 }
 
 cmd_permissions() {

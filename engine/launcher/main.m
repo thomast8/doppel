@@ -87,73 +87,97 @@ static BOOL permission_missing(NSString *status) {
     return ![status isEqualToString:@"granted"];
 }
 
-static void wait_for_capture_request(AVMediaType mediaType) {
+static BOOL wait_for_capture_request(AVMediaType mediaType) {
     dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
     [AVCaptureDevice requestAccessForMediaType:mediaType completionHandler:^(__unused BOOL granted) {
         dispatch_semaphore_signal(semaphore);
     }];
-    dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_SEC));
+    return dispatch_semaphore_wait(semaphore,
+        dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_SEC)) == 0;
 }
 
-static void wait_for_notification_request(void) {
+static BOOL wait_for_notification_request(void) {
+    __block NSError *requestError = nil;
     dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
     [[UNUserNotificationCenter currentNotificationCenter]
         requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound | UNAuthorizationOptionBadge)
-        completionHandler:^(__unused BOOL granted, __unused NSError *error) {
+        completionHandler:^(__unused BOOL granted, NSError *error) {
+            requestError = error;
             dispatch_semaphore_signal(semaphore);
         }];
-    dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_SEC));
+    BOOL completed = dispatch_semaphore_wait(semaphore,
+        dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_SEC)) == 0;
+    return completed && requestError == nil;
 }
 
-static void request_missing_permissions(void) {
-    NSDictionary<NSString *, NSString *> *statuses = permission_statuses();
-    BOOL needsAccessibility = permission_missing(statuses[@"accessibility"]);
-    BOOL needsScreenCapture = permission_missing(statuses[@"screen-recording"]);
-    BOOL needsMicrophone = permission_missing(statuses[@"microphone"]);
-    BOOL needsCamera = permission_missing(statuses[@"camera"]);
-    BOOL needsNotifications = permission_missing(statuses[@"notifications"]);
-    if (!needsAccessibility && !needsScreenCapture && !needsMicrophone &&
-        !needsCamera && !needsNotifications) return;
+static NSString *permission_status(NSString *permission) {
+    if ([permission isEqualToString:@"accessibility"]) {
+        return AXIsProcessTrusted() ? @"granted" : @"missing";
+    }
+    if ([permission isEqualToString:@"screen-recording"]) {
+        return CGPreflightScreenCaptureAccess() ? @"granted" : @"missing";
+    }
+    if ([permission isEqualToString:@"microphone"]) {
+        return capture_status(AVMediaTypeAudio);
+    }
+    if ([permission isEqualToString:@"camera"]) {
+        return capture_status(AVMediaTypeVideo);
+    }
+    if ([permission isEqualToString:@"notifications"]) {
+        return notification_status();
+    }
+    return nil;
+}
 
-    NSMutableArray<NSString *> *missing = [NSMutableArray array];
-    if (needsAccessibility) {
-        [missing addObject:@"Accessibility (to work with other apps)"];
-    }
-    if (needsScreenCapture) {
-        [missing addObject:@"Screen & System Audio Recording (to see on-screen content)"];
-    }
-    if (needsMicrophone) {
-        [missing addObject:@"Microphone (for voice input)"];
-    }
-    if (needsCamera) {
-        [missing addObject:@"Camera (for video input)"];
-    }
-    if (needsNotifications) {
-        [missing addObject:@"Notifications (for completed tasks and replies)"];
-    }
+// Request exactly one capability. This is the path used by a permission row
+// in Doppel's menu. Asking through the managed bundle's executable is what
+// registers an app that is not yet present in the corresponding Settings list.
+// A denied choice is user state, not an execution error; Settings is the only
+// place it can subsequently be changed.
+static int request_permission_named(NSString *permission) {
+    NSString *status = permission_status(permission);
+    if (status == nil) return 64; // EX_USAGE
 
     [NSApplication sharedApplication];
     [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
     [NSApp activateIgnoringOtherApps:YES];
-    NSAlert *alert = [[NSAlert alloc] init];
-    alert.messageText = [NSString stringWithFormat:@"%@ needs permission", instance_name()];
-    alert.informativeText = [NSString stringWithFormat:
-        @"This managed Codex app is missing:\n\n• %@\n\nmacOS keeps permission separate for every Doppel instance. You can continue without it, but features that use other apps may not work.",
-        [missing componentsJoinedByString:@"\n• "]];
-    alert.alertStyle = NSAlertStyleInformational;
-    [alert addButtonWithTitle:@"Allow Permissions"];
-    [alert addButtonWithTitle:@"Not Now"];
-    if ([alert runModal] != NSAlertFirstButtonReturn) {
-        return;
+
+    BOOL completed = YES;
+    if ([permission isEqualToString:@"accessibility"] &&
+        ![status isEqualToString:@"granted"]) {
+        NSDictionary *options = @{(__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES};
+        AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options);
+    } else if ([permission isEqualToString:@"screen-recording"] &&
+               ![status isEqualToString:@"granted"]) {
+        CGRequestScreenCaptureAccess();
+    } else if ([permission isEqualToString:@"microphone"] &&
+               [status isEqualToString:@"not-requested"]) {
+        completed = wait_for_capture_request(AVMediaTypeAudio);
+    } else if ([permission isEqualToString:@"camera"] &&
+               [status isEqualToString:@"not-requested"]) {
+        completed = wait_for_capture_request(AVMediaTypeVideo);
+    } else if ([permission isEqualToString:@"notifications"] &&
+               [status isEqualToString:@"not-requested"]) {
+        completed = wait_for_notification_request();
     }
 
-    // These are Apple's own consent flows. They deliberately run only after a
-    // user action; denied grants are never modified or reset behind their back.
-    if (needsAccessibility) {
+    if (!completed) return 70; // EX_SOFTWARE
+    status = permission_status(permission) ?: @"unknown";
+    printf("%s\t%s\n", permission.UTF8String, status.UTF8String);
+    fflush(stdout);
+    return 0;
+}
+
+static void request_missing_permissions(void) {
+    NSDictionary<NSString *, NSString *> *statuses = permission_statuses();
+    // This mode is explicit and user-initiated. Invoke Apple's native flows
+    // directly; Doppel's former alert merely repeated the list, then sent the
+    // user to the top-level Privacy page when any boolean check stayed false.
+    if (permission_missing(statuses[@"accessibility"])) {
         NSDictionary *options = @{(__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES};
         AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options);
     }
-    if (needsScreenCapture) {
+    if (permission_missing(statuses[@"screen-recording"])) {
         CGRequestScreenCaptureAccess();
     }
     if ([statuses[@"microphone"] isEqualToString:@"not-requested"]) {
@@ -164,23 +188,6 @@ static void request_missing_permissions(void) {
     }
     if ([statuses[@"notifications"] isEqualToString:@"not-requested"]) {
         wait_for_notification_request();
-    }
-
-    NSDictionary<NSString *, NSString *> *remaining = permission_statuses();
-    BOOL stillMissing = NO;
-    for (NSString *status in remaining.allValues) {
-        if (permission_missing(status)) { stillMissing = YES; break; }
-    }
-    if (stillMissing) {
-        NSAlert *settings = [[NSAlert alloc] init];
-        settings.messageText = @"Some permissions still need attention";
-        settings.informativeText = @"A permission that was denied earlier must be enabled in System Settings. Doppel will keep the menu-bar warning visible until this instance can use it.";
-        [settings addButtonWithTitle:@"Open System Settings"];
-        [settings addButtonWithTitle:@"Later"];
-        if ([settings runModal] == NSAlertFirstButtonReturn) {
-            NSURL *url = [NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy"];
-            [[NSWorkspace sharedWorkspace] openURL:url];
-        }
     }
 }
 
@@ -295,6 +302,13 @@ int main(int argc, char *argv[]) {
         if (argc == 2 && strcmp(argv[1], "--doppel-request-permissions") == 0) {
             request_missing_permissions();
             return 0;
+        }
+
+        // A menu-row action must never request unrelated capabilities. The
+        // CLI validates the name too, while this second check keeps the bundle
+        // helper safe when invoked by another caller.
+        if (argc == 3 && strcmp(argv[1], "--doppel-request-permission") == 0) {
+            return request_permission_named([NSString stringWithUTF8String:argv[2]]);
         }
 
         char **engineArgv = calloc((size_t)argc + 4, sizeof(char *));

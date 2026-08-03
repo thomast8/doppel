@@ -108,9 +108,9 @@ ICON_WORK="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/doppel-appicon.XXXXXXXX")"
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.4</string>
+	<string>0.4.4</string>
 	<key>CFBundleVersion</key>
-	<string>4</string>
+	<string>8</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>LSUIElement</key>
