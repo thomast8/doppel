@@ -6,9 +6,10 @@ separate name and icon in the Dock, Finder, Spotlight and the Cmd-Tab switcher.
 Doppel was built for the ChatGPT desktop app, which supports only one account per
 install. It clones the app you already have into additional instances ("ChatGPT
 Personal", "ChatGPT Work", each with its own tinted icon), points each instance at
-its own data directories, and re-signs the clone locally. Nothing is downloaded and
-no vendor code ships with this project; every clone is generated on your machine
-from your own installed copy.
+its own data directories, and re-signs the clone locally. No vendor code ships
+with this project; every clone is generated on your machine from your own
+installed copy. When an update is available, Doppel downloads it only from the
+official OpenAI appcast and verifies the vendor signature before installation.
 
 ## Why not just a launcher script?
 
@@ -17,18 +18,25 @@ the running process as the original app: same icon, same Dock identity, and only
 of them can pin to the Dock meaningfully. A Doppel instance is a real bundle with
 its own bundle identifier, so macOS treats it as a genuinely different app.
 
-## Surviving vendor auto-updates
+## Coordinated ChatGPT updates
 
-The cloned app would normally break or go stale whenever the vendor's auto-updater
-replaces the primary app. Every Doppel instance embeds the engine plus its own
-config, and its launcher health-checks the bundle on every start: if the primary
-app has moved on (new version, new binary hash), the instance rebuilds itself from
-the current primary before launching. Updates flow in; the clone never drifts.
+Managed instances cannot safely run ChatGPT's own Sparkle installer: their local
+identity cannot match OpenAI's signing Team ID, and an in-place vendor update
+would erase Doppel's launcher and account routing. Doppel disables that updater
+inside every instance and checks OpenAI's production appcast itself.
 
-Because nobody launches the primary app anymore once every account lives in a
-Doppel instance, its updater never gets a chance to run. `agent/` contains a
-LaunchAgent that periodically opens the primary hidden while idle, lets its
-updater work, and quits it again.
+The menu app checks shortly after launch and every six hours. Its native prompt
+uses the primary ChatGPT icon and the same two-stage flow as the standard updater:
+download or remind later, then restart and install or wait. The download is
+resumable and nothing closes until the staged app has the expected bundle ID,
+build number, OpenAI Team ID and a valid strict code signature.
+
+On restart Doppel records which instances were open, closes all managed apps,
+atomically replaces the untouched primary while keeping a rollback, rebuilds
+every installed instance, verifies the source build plus each instance's pinned
+signature, and reopens only the apps that were previously running. A failed
+download changes nothing; a failed install restores the previous primary; and a
+partial rebuild keeps the restart manifest and reports the exact instance.
 
 ## Usage
 
@@ -43,6 +51,10 @@ bin/doppel create --name "ChatGPT Personal" \
 bin/doppel list
 bin/doppel launch "ChatGPT Personal"
 bin/doppel rebuild "ChatGPT Personal"
+bin/doppel update check
+bin/doppel update prepare
+bin/doppel update apply
+bin/doppel update verify
 bin/doppel edit "ChatGPT Personal" --rename "ChatGPT Home" --tint 3B82F6
 bin/doppel remove "ChatGPT Personal"                # keeps the account data
 bin/doppel remove "ChatGPT Personal" --purge-data    # data to the Trash too
@@ -82,6 +94,25 @@ go, so this is only needed to reclaim what earlier versions left behind.
 installs the instance into `~/Applications`, and stores the instance definition in
 `~/Library/Application Support/Doppel/instances/`.
 
+### Permissions for managed apps
+
+macOS grants privacy permissions to each app identity separately. A new Doppel
+instance therefore does not inherit access from ChatGPT or from another managed
+instance. Doppel checks each installed instance for the proactively checkable
+capabilities ChatGPT uses: **Microphone**, **Camera**, **Accessibility**,
+**Screen & System Audio Recording**, and **Notifications**. A missing grant
+raises a native alert and changes Doppel's menu-bar icon to a warning symbol.
+The alert can invoke Apple's native consent flows for the affected instances;
+**Later** keeps the apps usable and the warning remains until the issue clears.
+
+Permissions that macOS grants only in the context of a specific action or
+target—such as Files and Folders, Calendar, Reminders, Location, and Apple
+Events—continue to be requested by ChatGPT when that feature is used. Doppel
+does not manufacture broad requests for capabilities an account may never use.
+Doppel never resets or writes the macOS privacy database itself; permissions
+remain under your control in System Settings. The menu app checks again every
+five minutes and immediately after a managed instance is rebuilt.
+
 ### Dependencies
 
 There are none beyond macOS. Icon tinting, the instance launcher and the error
@@ -98,9 +129,9 @@ app/build-app.zsh          # builds and installs ~/Applications/Doppel.app
 open -a ~/Applications/Doppel.app
 ```
 
-A menu-bar-only front end (`LSUIElement`, so no Dock icon): list instances, launch,
-rebuild, rename, recolour or remove them, create a new one from a name plus a
-colour picker, and toggle **Start at Login**.
+A menu-bar-only front end (`LSUIElement`, so no Dock icon): list instances,
+launch, rebuild, rename, recolour or remove them, coordinate ChatGPT updates,
+create a new one from a name plus a colour picker, and toggle **Start at Login**.
 
 The app is self-contained. The CLI, the engine and the compiled helpers all ship
 inside `Contents/Resources/doppel`, sealed by the app's own signature, so a
@@ -197,7 +228,8 @@ otherwise ask `codesign` to sign with it.
   (notifications, background services) are shared with the primary app and with
   every other instance. Isolating those means re-signing the helpers, which
   reintroduces the AMFI kill this design exists to avoid.
-- Sparkle is neutralized inside a clone (scheduled checks off, feed URL pointed
-  at an unresolvable host) because an in-place vendor update would drop the
-  launcher and the profile settings, silently merging two accounts. Updates
-  reach instances only via the primary app plus a rebuild.
+- Sparkle is disabled inside a clone with Codex's own
+  `CODEX_SPARKLE_ENABLED=false` switch (plus the legacy scheduled-check and feed
+  safeguards) because an in-place vendor update would drop the launcher and the
+  profile settings, silently merging two accounts. Doppel checks the official
+  appcast, updates the vendor-signed primary, then rebuilds every instance.

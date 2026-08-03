@@ -18,11 +18,19 @@ final class InstanceStore: ObservableObject {
     @Published var busy: Set<String> = []
     @Published var primaryInstalled = false
     @Published var signingReady = false
+    @Published var chatGPTUpdate: ChatGPTUpdate?
+    @Published var checkingForUpdates = false
+    @Published var permissionIssues: [PermissionIssue] = []
+    @Published var checkingPermissions = false
 
     /// The last failure already reported for a given piece of work, so a
     /// condition that persists across reloads is raised once rather than after
     /// every refresh.
     private var reported: [String: String] = [:]
+    private var promptedUpdateBuilds: Set<Int> = []
+    private var updateTimer: Timer?
+    private var permissionTimer: Timer?
+    private var promptedPermissionFingerprint = ""
 
     static let primaryAppPath = "/Applications/ChatGPT.app"
     static let primaryDownloadURL = URL(string: "https://chatgpt.com/features/desktop/")!
@@ -63,6 +71,21 @@ final class InstanceStore: ObservableObject {
 
     init() {
         reload()
+        // Check shortly after launch, then every six hours while Doppel is
+        // running. The CLI performs the official-feed and signature checks;
+        // the app owns only scheduling and user interaction.
+        Task { [weak self] in
+            // Permission health is populated first. Otherwise a prepared
+            // update's modal can arrive before the menu-bar warning publishes.
+            try? await Task.sleep(nanoseconds: 12_000_000_000)
+            self?.checkForUpdates()
+        }
+        updateTimer = Timer.scheduledTimer(withTimeInterval: 6 * 60 * 60, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.checkForUpdates() }
+        }
+        permissionTimer = Timer.scheduledTimer(withTimeInterval: 5 * 60, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.checkPermissions() }
+        }
     }
 
     func reload() {
@@ -86,6 +109,7 @@ final class InstanceStore: ObservableObject {
                 case .success(let stdout):
                     self.clearReport(for: "list")
                     self.instances = Self.parsePorcelain(stdout).sorted { $0.name < $1.name }
+                    self.checkPermissions()
                 }
             }
         }
@@ -96,7 +120,274 @@ final class InstanceStore: ObservableObject {
     }
 
     func rebuild(_ instance: Instance) {
-        runCLI(["rebuild", instance.name], busyKey: instance.id)
+        runCLI(["rebuild", instance.name], busyKey: instance.id) { [weak self] failure in
+            if failure == nil { self?.checkPermissions() }
+        }
+    }
+
+    // MARK: - Permission health
+
+    func checkPermissions(prompt: Bool = true) {
+        guard !checkingPermissions, !busy.contains("permissions"), let cli = discoveredCLI else { return }
+        checkingPermissions = true
+        Task.detached { [weak self] in
+            let result = Self.runProcess(cli: cli, arguments: ["permissions", "check", "--porcelain"])
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.checkingPermissions = false
+                switch result {
+                case .failure(let message):
+                    self.report(message, for: "permissions-check")
+                case .success(let output):
+                    self.clearReport(for: "permissions-check")
+                    let issues = PermissionIssue.parse(output)
+                    self.permissionIssues = issues
+                    if issues.isEmpty {
+                        self.promptedPermissionFingerprint = ""
+                    } else if prompt {
+                        self.promptForPermissionIssues(issues)
+                    }
+                }
+            }
+        }
+    }
+
+    func showPermissionIssues() {
+        guard !permissionIssues.isEmpty else { return }
+        promptForPermissionIssues(permissionIssues, force: true)
+    }
+
+    func showPermissionIssues(for instance: Instance) {
+        let matching = permissionIssues.filter { $0.instanceID == instance.id }
+        guard !matching.isEmpty else { return }
+        promptForPermissionIssues(matching, force: true)
+    }
+
+    private func promptForPermissionIssues(_ issues: [PermissionIssue], force: Bool = false) {
+        let fingerprint = issues.map(\.id).sorted().joined(separator: "|")
+        guard force || fingerprint != promptedPermissionFingerprint else { return }
+        promptedPermissionFingerprint = fingerprint
+
+        let grouped = Dictionary(grouping: issues, by: \.instanceName)
+        let details = grouped.keys.sorted().map { name in
+            let labels = grouped[name, default: []].map(\.label).sorted().joined(separator: ", ")
+            return "• \(name): \(labels)"
+        }.joined(separator: "\n")
+        let requestable = issues.contains(where: \.canRequest)
+
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = issues.count == 1
+            ? "A managed ChatGPT permission needs attention"
+            : "Managed ChatGPT permissions need attention"
+        alert.informativeText = """
+            macOS keeps permissions separate for every Doppel instance. These instances are missing access or need their permission checker refreshed:
+
+            \(details)
+            """
+        alert.addButton(withTitle: requestable ? "Fix Permissions" : "OK")
+        alert.addButton(withTitle: "Later")
+        guard alert.runModal() == .alertFirstButtonReturn, requestable else { return }
+        requestPermissions(for: issues)
+    }
+
+    private func requestPermissions(for issues: [PermissionIssue]) {
+        guard let cli = discoveredCLI else { return }
+        let names = Array(Set(issues.filter(\.canRequest).map(\.instanceName))).sorted()
+        guard !names.isEmpty else { return }
+        busy.insert("permissions")
+        Task.detached { [weak self] in
+            var failures: [String] = []
+            for name in names {
+                let result = Self.runProcess(cli: cli, arguments: ["permissions", "request", name])
+                if case .failure(let message) = result { failures.append(message) }
+            }
+            let failureText = failures.joined(separator: "\n")
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.busy.remove("permissions")
+                if !failureText.isEmpty {
+                    self.report(failureText, for: "permissions")
+                }
+                self.checkPermissions(prompt: false)
+            }
+        }
+    }
+
+    // MARK: - Coordinated ChatGPT updates
+
+    func checkForUpdates(userInitiated: Bool = false) {
+        guard !checkingForUpdates, !busy.contains("update") else { return }
+        guard let cli = discoveredCLI else {
+            if userInitiated { report(Self.missingCLIMessage, for: "cli") }
+            return
+        }
+        checkingForUpdates = true
+        Task.detached { [weak self] in
+            let result = Self.runProcess(cli: cli, arguments: ["update", "check", "--porcelain"])
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.checkingForUpdates = false
+                switch result {
+                case .failure(let message):
+                    // A background check must stay quiet when the Mac is
+                    // offline. A check the user explicitly requested reports
+                    // the same actionable CLI failure.
+                    if userInitiated { self.report(message, for: "update-check") }
+                case .success(let output):
+                    self.clearReport(for: "update-check")
+                    guard let update = ChatGPTUpdate.parse(output) else {
+                        self.chatGPTUpdate = nil
+                        if userInitiated { self.showCurrentAlert() }
+                        return
+                    }
+                    self.chatGPTUpdate = update
+                    self.promptForUpdate(update, force: userInitiated)
+                }
+            }
+        }
+    }
+
+    func beginKnownUpdate() {
+        guard let update = chatGPTUpdate else {
+            checkForUpdates(userInitiated: true)
+            return
+        }
+        if update.state == .ready {
+            promptToRestart(update, force: true)
+        } else {
+            promptForUpdate(update, force: true)
+        }
+    }
+
+    private func promptForUpdate(_ update: ChatGPTUpdate, force: Bool = false) {
+        if update.state == .ready {
+            promptToRestart(update, force: force)
+            return
+        }
+        guard force || !promptedUpdateBuilds.contains(update.targetBuild) else { return }
+        promptedUpdateBuilds.insert(update.targetBuild)
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = updateAlert()
+        alert.messageText = "A new version of ChatGPT is available!"
+        alert.informativeText = """
+            ChatGPT \(update.targetVersion) is now available—you have \(update.currentVersion). Would you like to download it now?
+
+            Doppel will apply this update to the primary app and all \(instances.filter(\.installed).count) managed instances together.
+            """
+        alert.addButton(withTitle: "Install Update")
+        alert.addButton(withTitle: "Remind Me Later")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        prepareUpdate(update)
+    }
+
+    private func prepareUpdate(_ update: ChatGPTUpdate) {
+        guard let cli = discoveredCLI else {
+            report(Self.missingCLIMessage, for: "cli")
+            return
+        }
+        busy.insert("update")
+        Task.detached { [weak self] in
+            let result = Self.runProcess(cli: cli, arguments: ["update", "prepare"])
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.busy.remove("update")
+                switch result {
+                case .failure(let message):
+                    self.report(message, for: "update")
+                case .success:
+                    self.clearReport(for: "update")
+                    let ready = ChatGPTUpdate(
+                        state: .ready,
+                        currentBuild: update.currentBuild,
+                        currentVersion: update.currentVersion,
+                        targetBuild: update.targetBuild,
+                        targetVersion: update.targetVersion)
+                    self.chatGPTUpdate = ready
+                    self.promptToRestart(ready, force: true)
+                }
+            }
+        }
+    }
+
+    private func promptToRestart(_ update: ChatGPTUpdate, force: Bool = false) {
+        guard force || !promptedUpdateBuilds.contains(-update.targetBuild) else { return }
+        promptedUpdateBuilds.insert(-update.targetBuild)
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = updateAlert()
+        alert.messageText = "Ready to Install"
+        alert.informativeText = """
+            ChatGPT \(update.targetVersion) has been downloaded and verified.
+
+            Doppel will close every running managed instance, update the primary ChatGPT app, rebuild and verify all managed instances, then reopen only the ones you were using.
+
+            Active local chats will be interrupted. If a managed app asks you to confirm quitting, choose Quit so Doppel can continue safely.
+            """
+        alert.addButton(withTitle: "Restart and Install")
+        alert.addButton(withTitle: "Later")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        applyUpdate(update)
+    }
+
+    private func applyUpdate(_ update: ChatGPTUpdate) {
+        guard let cli = discoveredCLI else {
+            report(Self.missingCLIMessage, for: "cli")
+            return
+        }
+        busy.insert("update")
+        Task.detached { [weak self] in
+            let result = Self.runProcess(
+                cli: cli, arguments: ["update", "apply", String(update.targetBuild)])
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.busy.remove("update")
+                switch result {
+                case .failure(let message):
+                    self.report(message, for: "update")
+                case .success(let output):
+                    self.clearReport(for: "update")
+                    self.chatGPTUpdate = nil
+                    self.reload()
+                    self.showUpdateComplete(update, output: output)
+                }
+            }
+        }
+    }
+
+    private func updateAlert() -> NSAlert {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        let icon = NSWorkspace.shared.icon(forFile: Self.primaryAppPath)
+        icon.size = NSSize(width: 64, height: 64)
+        alert.icon = icon
+        return alert
+    }
+
+    private func showCurrentAlert() {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = updateAlert()
+        alert.messageText = "You're up to date!"
+        alert.informativeText = "ChatGPT and its managed Doppel instances are using the latest available version."
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    private func showUpdateComplete(_ update: ChatGPTUpdate, output: String) {
+        let fields = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: "\t", omittingEmptySubsequences: false)
+        let verified = fields.count > 3 ? fields[3] : "all"
+        let reopened = fields.count > 4 ? fields[4] : "all previously running"
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = updateAlert()
+        alert.messageText = "Update Complete"
+        alert.informativeText = """
+            ChatGPT \(update.targetVersion) is installed.
+
+            Doppel verified \(verified) managed instance(s) and reopened \(reopened).
+            """
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     /// Creates an instance from just a name and a tint color; the CLI derives

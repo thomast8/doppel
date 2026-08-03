@@ -23,6 +23,16 @@ readonly BUILD_CACHE="$DOPPEL_HOME/build"
 readonly PREBUILT_DIR="$REPO_ROOT/prebuilt"
 readonly PRIMARY_APP="${DOPPEL_PRIMARY_APP:-/Applications/ChatGPT.app}"
 readonly PRIMARY_SCHEME="${DOPPEL_PRIMARY_SCHEME:-codex}"
+readonly PRIMARY_BUNDLE_ID="${DOPPEL_PRIMARY_BUNDLE_ID:-com.openai.codex}"
+readonly PRIMARY_TEAM_ID="${DOPPEL_PRIMARY_TEAM_ID:-2DC432GLL2}"
+# Codex publishes the same production appcast its Sparkle integration uses.
+# Installed copies ignore overrides unless explicitly put into development
+# mode, so a same-user process cannot redirect an unattended update check.
+if [[ "${0:A}" == */Doppel.app/Contents/Resources/doppel/* && "${DOPPEL_DEV:-0}" != "1" ]]; then
+    unset DOPPEL_APPCAST_URL DOPPEL_UPDATE_ROOT
+fi
+readonly APPCAST_URL="${DOPPEL_APPCAST_URL:-https://persistent.oaistatic.com/codex-app-prod/appcast.xml}"
+readonly UPDATE_ROOT="${DOPPEL_UPDATE_ROOT:-$DOPPEL_HOME/updates}"
 
 die() { print -u2 -r -- "doppel: $1"; exit 1 }
 
@@ -50,7 +60,9 @@ compile_helpers() {
     for pair in "launcher:doppel-launcher" "alert:doppel-alert"; do
         src="$ENGINE_SRC/${pair%%:*}/main.m"
         bin="$BUILD_CACHE/${pair##*:}"
-        /usr/bin/clang -fobjc-arc -O2 -framework Cocoa -framework Security -o "$bin" "$src" || \
+        /usr/bin/clang -fobjc-arc -O2 -framework Cocoa -framework ApplicationServices \
+            -framework AVFoundation -framework UserNotifications -framework Security \
+            -o "$bin" "$src" || \
             die "compiling ${pair##*:} failed"
     done
     /usr/bin/swiftc -O "$ENGINE_SRC/icon/main.swift" -o "$BUILD_CACHE/doppel-icon" 2>/dev/null || \
@@ -599,7 +611,9 @@ cmd_rebuild() {
     install_engine_assets "$dir"
     engine_output="$(/bin/zsh "$dir/doppel-engine.zsh" install "$app")"
     refresh_icon_caches "$app"
-    (( was_running )) && /usr/bin/open -na "$app" >/dev/null 2>&1 || true
+    if (( was_running )) && [[ "${DOPPEL_RELAUNCH:-1}" != "0" ]]; then
+        /usr/bin/open -na "$app" >/dev/null 2>&1 || true
+    fi
     # A rebuild of a bundle that is already in step does nothing, and saying
     # "rebuilt" anyway made a no-op look like a repair.
     if [[ "$engine_output" == *already-healthy* ]]; then
@@ -607,6 +621,472 @@ cmd_rebuild() {
     else
         print -r -- "rebuilt: $app"
     fi
+}
+
+# MARK: - Primary-first coordinated updates
+
+primary_version() {
+    /usr/bin/plutil -extract CFBundleVersion raw "$PRIMARY_APP/Contents/Info.plist" 2>/dev/null || true
+}
+
+primary_short_version() {
+    /usr/bin/plutil -extract CFBundleShortVersionString raw "$PRIMARY_APP/Contents/Info.plist" 2>/dev/null || true
+}
+
+valid_build_number() {
+    [[ "$1" == <1-> ]]
+}
+
+validate_vendor_app() {
+    local app="$1" expected_version="${2:-}" info details actual_version
+    info="$app/Contents/Info.plist"
+    [[ -d "$app" && -f "$info" ]] || return 1
+    [[ "$(/usr/bin/plutil -extract CFBundleIdentifier raw "$info" 2>/dev/null)" == "$PRIMARY_BUNDLE_ID" ]] || return 1
+    actual_version="$(/usr/bin/plutil -extract CFBundleVersion raw "$info" 2>/dev/null)"
+    valid_build_number "$actual_version" || return 1
+    [[ -z "$expected_version" || "$actual_version" == "$expected_version" ]] || return 1
+    details="$(/usr/bin/codesign -dv --verbose=4 "$app" 2>&1)" || return 1
+    [[ "$details" == *"TeamIdentifier=$PRIMARY_TEAM_ID"* ]] || return 1
+    /usr/bin/codesign --verify --deep --strict "$app" >/dev/null 2>&1 || return 1
+    return 0
+}
+
+fetch_latest_update() {
+    mkdir -p "$UPDATE_ROOT"
+    local feed item arch version short_version url
+    feed="$(/usr/bin/mktemp "$UPDATE_ROOT/appcast.XXXXXXXX")" || die "could not create an appcast work file"
+    if ! /usr/bin/curl --fail --silent --show-error --location --max-time 45 \
+        --retry 2 --retry-delay 2 "$APPCAST_URL" -o "$feed"; then
+        /bin/rm -f "$feed"
+        die "could not check OpenAI's ChatGPT update feed"
+    fi
+    arch="$(/usr/bin/uname -m)"
+    item="(//*[local-name()='item'][not(*[local-name()='hardwareRequirements']) or *[local-name()='hardwareRequirements' and text()='$arch']])[1]"
+    version="$(/usr/bin/xmllint --xpath "string($item/*[local-name()='version'])" "$feed" 2>/dev/null)"
+    short_version="$(/usr/bin/xmllint --xpath "string($item/*[local-name()='shortVersionString'])" "$feed" 2>/dev/null)"
+    url="$(/usr/bin/xmllint --xpath "string($item/*[local-name()='enclosure'][1]/@url)" "$feed" 2>/dev/null)"
+    /bin/rm -f "$feed"
+    valid_build_number "$version" || die "OpenAI's update feed did not contain a valid build number"
+    [[ -n "$short_version" && "$short_version" != *$'\n'* && "$short_version" != *$'\t'* ]] || \
+        die "OpenAI's update feed did not contain a valid version name"
+    [[ "$url" == https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-*.zip ]] || \
+        die "OpenAI's update feed returned an unexpected download location"
+    printf '%s\t%s\t%s\n' "$version" "$short_version" "$url"
+}
+
+prepared_update_app() {
+    local version="$1"
+    valid_build_number "$version" || return 1
+    print -r -- "$UPDATE_ROOT/Prepared/$version/ChatGPT.app"
+}
+
+update_metadata_value() {
+    local version="$1" key="$2" metadata
+    metadata="$UPDATE_ROOT/Prepared/$version/update.plist"
+    /usr/bin/plutil -extract "$key" raw "$metadata" 2>/dev/null || true
+}
+
+cmd_update_check() {
+    local porcelain=0
+    [[ "${1:-}" == "--porcelain" ]] && porcelain=1
+    [[ -z "${1:-}" || "$porcelain" == "1" ]] || die "usage: doppel update check [--porcelain]"
+    validate_vendor_app "$PRIMARY_APP" || die "the primary ChatGPT app is missing or is not valid vendor-signed code"
+    local current current_short latest latest_version latest_short latest_url prepared update_state
+    current="$(primary_version)"
+    current_short="$(primary_short_version)"
+    latest="$(fetch_latest_update)"
+    IFS=$'\t' read -r latest_version latest_short latest_url <<< "$latest"
+    update_state="current"
+    if (( latest_version > current )); then
+        update_state="available"
+        prepared="$(prepared_update_app "$latest_version")"
+        if validate_vendor_app "$prepared" "$latest_version"; then
+            update_state="ready"
+        fi
+    fi
+    if (( porcelain )); then
+        printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$update_state" "$current" "$current_short" "$latest_version" "$latest_short" "$latest_url"
+    elif [[ "$update_state" == "current" ]]; then
+        print -r -- "ChatGPT $current_short ($current) is up to date."
+    elif [[ "$update_state" == "ready" ]]; then
+        print -r -- "ChatGPT $latest_short ($latest_version) is downloaded and ready to install."
+    else
+        print -r -- "ChatGPT $latest_short ($latest_version) is available; current is $current_short ($current)."
+    fi
+}
+
+acquire_update_lock() {
+    mkdir -p "$UPDATE_ROOT"
+    if ! /bin/mkdir "$UPDATE_ROOT/Coordinator.lock" 2>/dev/null; then
+        local owner
+        owner="$(cat "$UPDATE_ROOT/Coordinator.lock/pid" 2>/dev/null || true)"
+        if valid_build_number "$owner" && ! /bin/kill -0 "$owner" 2>/dev/null; then
+            # A power loss or killed coordinator may leave the mkdir lock
+            # behind. Remove only the exact lock after proving its owner is
+            # gone, then take it normally.
+            /bin/rm -f "$UPDATE_ROOT/Coordinator.lock/pid"
+            /bin/rmdir "$UPDATE_ROOT/Coordinator.lock" 2>/dev/null || true
+            /bin/mkdir "$UPDATE_ROOT/Coordinator.lock" 2>/dev/null || \
+                die "another Doppel update is already in progress"
+        else
+            die "another Doppel update is already in progress"
+        fi
+    fi
+    print -r -- "$$" > "$UPDATE_ROOT/Coordinator.lock/pid"
+}
+
+release_update_lock() {
+    [[ -d "$UPDATE_ROOT/Coordinator.lock" ]] || return 0
+    local owner
+    owner="$(cat "$UPDATE_ROOT/Coordinator.lock/pid" 2>/dev/null || true)"
+    [[ "$owner" == "$$" ]] || return 0
+    /bin/rm -f "$UPDATE_ROOT/Coordinator.lock/pid"
+    /bin/rmdir "$UPDATE_ROOT/Coordinator.lock" 2>/dev/null || true
+}
+
+typeset -g UPDATE_ABORT_MANIFEST=""
+abort_update_cleanup() {
+    local app
+    if [[ -n "$UPDATE_ABORT_MANIFEST" && -f "$UPDATE_ABORT_MANIFEST" ]]; then
+        while IFS= read -r app; do
+            [[ -d "$app" ]] || continue
+            /usr/bin/pgrep -f "${app}/Contents/MacOS/" >/dev/null 2>&1 || \
+                /usr/bin/open -na "$app" >/dev/null 2>&1 || true
+        done < "$UPDATE_ABORT_MANIFEST"
+    fi
+    release_update_lock
+}
+
+cmd_update_prepare() {
+    [[ $# -eq 0 ]] || die "usage: doppel update prepare"
+    validate_vendor_app "$PRIMARY_APP" || die "the primary ChatGPT app is missing or is not valid vendor-signed code"
+    local current latest latest_version latest_short latest_url prepared partial archive staging extracted metadata
+    current="$(primary_version)"
+    latest="$(fetch_latest_update)"
+    IFS=$'\t' read -r latest_version latest_short latest_url <<< "$latest"
+    (( latest_version > current )) || { print -r -- "already current\t$current"; return 0; }
+    prepared="$(prepared_update_app "$latest_version")"
+    if validate_vendor_app "$prepared" "$latest_version"; then
+        print -r -- "ready\t$latest_version\t$latest_short"
+        return 0
+    fi
+
+    acquire_update_lock
+    trap 'release_update_lock' EXIT INT TERM
+    mkdir -p "$UPDATE_ROOT/Downloads" "$UPDATE_ROOT/Staging" "$UPDATE_ROOT/Prepared"
+    partial="$UPDATE_ROOT/Downloads/ChatGPT-$latest_version.zip.partial"
+    archive="$UPDATE_ROOT/Downloads/ChatGPT-$latest_version.zip"
+    if [[ ! -f "$archive" ]]; then
+        print -u2 -r -- "Downloading ChatGPT $latest_short…"
+        /usr/bin/curl --fail --show-error --location --retry 3 --retry-all-errors --retry-delay 2 \
+            --continue-at - --output "$partial" "$latest_url" || \
+            die "downloading ChatGPT $latest_short failed; the partial download was kept for retry"
+        /bin/mv "$partial" "$archive" || die "finishing the ChatGPT download failed"
+    fi
+
+    staging="$UPDATE_ROOT/Staging/$latest_version.$$"
+    [[ ! -e "$staging" ]] || die "the update staging path already exists: $staging"
+    /bin/mkdir "$staging" || die "creating the update staging directory failed"
+    if ! /usr/bin/ditto -x -k "$archive" "$staging"; then
+        /bin/rm -rf "$staging"
+        die "unpacking ChatGPT $latest_short failed"
+    fi
+    local -a apps
+    apps=("$staging"/*.app(N/))
+    if (( ${#apps} != 1 )); then
+        /bin/rm -rf "$staging"
+        die "the ChatGPT update contained ${#apps} top-level app bundles instead of one"
+    fi
+    extracted="${apps[1]}"
+    if ! validate_vendor_app "$extracted" "$latest_version"; then
+        /bin/rm -rf "$staging"
+        die "the downloaded ChatGPT app failed its bundle ID, version, Team ID, or strict signature check"
+    fi
+
+    local prepared_root="$UPDATE_ROOT/Prepared/$latest_version"
+    if [[ -e "$prepared_root" ]]; then
+        local rejected="$UPDATE_ROOT/Rejected/$latest_version.$(/bin/date '+%Y%m%d-%H%M%S')"
+        /bin/mkdir -p "${rejected:h}"
+        /bin/mv "$prepared_root" "$rejected" || die "moving an invalid prepared update aside failed"
+    fi
+    /bin/mkdir "$prepared_root" || die "creating the prepared-update directory failed"
+    /bin/mv "$extracted" "$prepared" || die "staging the verified ChatGPT app failed"
+    metadata="$prepared_root/update.plist"
+    /usr/bin/plutil -create xml1 "$metadata"
+    /usr/bin/plutil -insert Build -string "$latest_version" "$metadata"
+    /usr/bin/plutil -insert Version -string "$latest_short" "$metadata"
+    /usr/bin/plutil -insert URL -string "$latest_url" "$metadata"
+    /bin/rm -rf "$staging"
+    release_update_lock
+    trap - EXIT INT TERM
+    print -r -- "ready\t$latest_version\t$latest_short"
+}
+
+verify_managed_instance() {
+    local dir="$1" expected_version="$2" app info
+    app="$(app_path_for "$dir")"
+    info="$app/Contents/Info.plist"
+    [[ -x "$app/Contents/MacOS/ChatGPT" && -f "$info" ]] || return 1
+    [[ "$(/usr/bin/plutil -extract DoppelSourceBundleVersion raw "$info" 2>/dev/null)" == "$expected_version" ]] || return 1
+    [[ "$(/usr/bin/plutil -extract LSEnvironment.CODEX_SPARKLE_ENABLED raw "$info" 2>/dev/null)" == "false" ]] || return 1
+    "$app/Contents/MacOS/ChatGPT" --doppel-verify >/dev/null 2>&1 || return 1
+    return 0
+}
+
+wait_for_instance() {
+    local app="$1" waited=0
+    while (( waited < 30 )); do
+        /usr/bin/pgrep -f "${app}/Contents/MacOS/" >/dev/null 2>&1 && return 0
+        /bin/sleep 1
+        waited=$(( waited + 1 ))
+    done
+    return 1
+}
+
+cmd_update_apply() {
+    local version="${1:-}"
+    [[ $# -le 1 ]] || die "usage: doppel update apply [build]"
+    if [[ -z "$version" ]]; then
+        local latest latest_short latest_url
+        latest="$(fetch_latest_update)"
+        IFS=$'\t' read -r version latest_short latest_url <<< "$latest"
+    fi
+    valid_build_number "$version" || die "the requested update build is invalid"
+    local prepared prepared_root target_short current stamp backup restart_manifest
+    prepared="$(prepared_update_app "$version")"
+    prepared_root="${prepared:h}"
+    target_short="$(update_metadata_value "$version" Version)"
+    [[ -n "$target_short" ]] || target_short="$version"
+    validate_vendor_app "$prepared" "$version" || die "ChatGPT $version has not been downloaded and verified; run 'doppel update prepare' first"
+    validate_vendor_app "$PRIMARY_APP" || die "the installed primary ChatGPT app is not valid vendor-signed code"
+    current="$(primary_version)"
+    (( version > current )) || die "ChatGPT $version is not newer than the installed build $current"
+
+    acquire_update_lock
+    trap 'release_update_lock' EXIT INT TERM
+    compile_helpers
+    local dir name app bundle_id primary_was_running=0
+    local -a dirs names apps running_apps failures verified_apps
+    for dir in "$INSTANCES_ROOT"/*(N/); do
+        is_instance_dir "$dir" || continue
+        app="$(app_path_for "$dir")"
+        [[ -d "$app" ]] || continue
+        dirs+=("$dir")
+        names+=("$(config_value "$dir" DOPPEL_DISPLAY_NAME)")
+        apps+=("$app")
+        install_engine_assets "$dir"
+        if /usr/bin/pgrep -f "${app}/Contents/MacOS/" >/dev/null 2>&1; then
+            running_apps+=("$app")
+        fi
+    done
+    (( ${#dirs} > 0 )) || die "there are no installed managed instances to update"
+    if /usr/bin/pgrep -f "${PRIMARY_APP}/Contents/MacOS/" >/dev/null 2>&1; then
+        primary_was_running=1
+    fi
+
+    restart_manifest="$UPDATE_ROOT/restart-after-update"
+    : > "$restart_manifest"
+    (( primary_was_running )) && print -r -- "$PRIMARY_APP" >> "$restart_manifest"
+    for app in $running_apps; do print -r -- "$app" >> "$restart_manifest"; done
+    UPDATE_ABORT_MANIFEST="$restart_manifest"
+    trap 'abort_update_cleanup' EXIT INT TERM
+
+    # All destructive work starts only after the download, vendor signature,
+    # instance inventory, helper compilation, and restart manifest are ready.
+    local index
+    if (( primary_was_running )); then
+        quit_instance "$PRIMARY_APP" "$PRIMARY_BUNDLE_ID" "ChatGPT"
+    fi
+    for (( index = 1; index <= ${#dirs}; index++ )); do
+        app="${apps[$index]}"
+        name="${names[$index]}"
+        bundle_id="$(config_value "${dirs[$index]}" DOPPEL_BUNDLE_ID)"
+        quit_instance "$app" "$bundle_id" "$name"
+    done
+
+    stamp="$(/bin/date '+%Y%m%d-%H%M%S')"
+    /bin/mkdir -p "$UPDATE_ROOT/Backups"
+    backup="$UPDATE_ROOT/Backups/ChatGPT.$current.$stamp.app"
+    [[ ! -e "$backup" ]] || die "the primary rollback path already exists: $backup"
+    "$LSREGISTER" -u "$PRIMARY_APP" >/dev/null 2>&1 || true
+    /bin/mv "$PRIMARY_APP" "$backup" || die "moving the current primary ChatGPT app into rollback storage failed"
+    if ! /bin/mv "$prepared" "$PRIMARY_APP"; then
+        /bin/mv "$backup" "$PRIMARY_APP" || true
+        die "installing ChatGPT $target_short failed; the previous primary was restored"
+    fi
+    if ! validate_vendor_app "$PRIMARY_APP" "$version"; then
+        local rejected="$UPDATE_ROOT/Rejected/ChatGPT.$version.$stamp.app"
+        /bin/mkdir -p "${rejected:h}"
+        /bin/mv "$PRIMARY_APP" "$rejected" || true
+        /bin/mv "$backup" "$PRIMARY_APP" || true
+        die "the installed primary failed post-install verification; the previous primary was restored"
+    fi
+    "$LSREGISTER" -f "$PRIMARY_APP" >/dev/null 2>&1 || true
+
+    for (( index = 1; index <= ${#dirs}; index++ )); do
+        name="${names[$index]}"
+        if (DOPPEL_RELAUNCH=0 cmd_rebuild "$name") >/dev/null 2>&1 && \
+           verify_managed_instance "${dirs[$index]}" "$version"; then
+            verified_apps+=("${apps[$index]}")
+        else
+            failures+=("$name did not rebuild or verify")
+        fi
+    done
+
+    local reopened=0 was_running verified
+    for was_running in $running_apps; do
+        verified=0
+        for app in $verified_apps; do [[ "$app" == "$was_running" ]] && verified=1; done
+        if (( verified )); then
+            if /usr/bin/open -na "$was_running" >/dev/null 2>&1 && wait_for_instance "$was_running"; then
+                reopened=$(( reopened + 1 ))
+            else
+                failures+=("${was_running:t:r} was updated but did not reopen")
+            fi
+        fi
+    done
+
+    if (( primary_was_running )); then
+        if ! /usr/bin/open -na "$PRIMARY_APP" >/dev/null 2>&1 || ! wait_for_instance "$PRIMARY_APP"; then
+            failures+=("the primary ChatGPT app was updated but did not reopen")
+        fi
+    fi
+
+    if (( ${#failures} > 0 )); then
+        release_update_lock
+        trap - EXIT INT TERM
+        die "ChatGPT updated to $target_short, but Doppel could not finish every instance: ${(j:; :)failures}. Restart information remains at $restart_manifest"
+    fi
+    /bin/rm -f "$restart_manifest"
+    UPDATE_ABORT_MANIFEST=""
+    /bin/rmdir "$prepared_root" 2>/dev/null || true
+    release_update_lock
+    trap - EXIT INT TERM
+    printf 'updated\t%s\t%s\t%s\t%s\n' "$current" "$version" "${#verified_apps}" "$reopened"
+}
+
+cmd_update_verify() {
+    [[ $# -eq 0 ]] || die "usage: doppel update verify"
+    validate_vendor_app "$PRIMARY_APP" || die "the primary ChatGPT app failed vendor-signature verification"
+    local version dir count=0 failed=0 name
+    version="$(primary_version)"
+    for dir in "$INSTANCES_ROOT"/*(N/); do
+        is_instance_dir "$dir" || continue
+        [[ -d "$(app_path_for "$dir")" ]] || continue
+        name="$(config_value "$dir" DOPPEL_DISPLAY_NAME)"
+        if verify_managed_instance "$dir" "$version"; then
+            print -r -- "verified: $name ($version)"
+            count=$(( count + 1 ))
+        else
+            print -u2 -r -- "not verified: $name"
+            failed=$(( failed + 1 ))
+        fi
+    done
+    (( failed == 0 )) || die "$failed managed instance(s) failed verification"
+    print -r -- "verified primary and $count managed instance(s) at build $version"
+}
+
+cmd_update() {
+    local action="${1:-check}"
+    (( $# > 0 )) && shift
+    case "$action" in
+        check) cmd_update_check "$@" ;;
+        prepare) cmd_update_prepare "$@" ;;
+        apply) cmd_update_apply "$@" ;;
+        verify) cmd_update_verify "$@" ;;
+        *) die "usage: doppel update {check|prepare|apply|verify} ..." ;;
+    esac
+}
+
+# MARK: - Per-instance permission health
+
+permission_label() {
+    case "$1" in
+        accessibility) print -r -- "Accessibility" ;;
+        screen-recording) print -r -- "Screen & System Audio Recording" ;;
+        microphone) print -r -- "Microphone" ;;
+        camera) print -r -- "Camera" ;;
+        notifications) print -r -- "Notifications" ;;
+        permission-check) print -r -- "Permission checker" ;;
+        *) print -r -- "$1" ;;
+    esac
+}
+
+permission_rows_for_dir() {
+    local dir="$1" app name slug engine launcher output permission permission_state
+    app="$(app_path_for "$dir")"
+    [[ -d "$app" ]] || return 0
+    name="$(config_value "$dir" DOPPEL_DISPLAY_NAME)"
+    slug="${dir:t}"
+    engine="$(/usr/bin/plutil -extract DoppelEngineVersion raw "$app/Contents/Info.plist" 2>/dev/null || true)"
+    launcher="$app/Contents/MacOS/ChatGPT"
+    if [[ "$engine" != <15-> || ! -x "$launcher" ]]; then
+        printf '%s\t%s\t%s\t%s\n' "$slug" "$name" "permission-check" "outdated"
+        return 0
+    fi
+    if ! output="$("$launcher" --doppel-permission-status 2>/dev/null)"; then
+        printf '%s\t%s\t%s\t%s\n' "$slug" "$name" "permission-check" "error"
+        return 0
+    fi
+    while IFS=$'\t' read -r permission permission_state; do
+        [[ -n "$permission" && -n "$permission_state" ]] || continue
+        printf '%s\t%s\t%s\t%s\n' "$slug" "$name" "$permission" "$permission_state"
+    done <<< "$output"
+}
+
+cmd_permissions_check() {
+    local porcelain=0 target="" arg dir rows=""
+    for arg in "$@"; do
+        case "$arg" in
+            --porcelain) porcelain=1 ;;
+            *) [[ -z "$target" ]] || die "usage: doppel permissions check [--porcelain] [<name>]"
+               target="$arg" ;;
+        esac
+    done
+    if [[ -n "$target" ]]; then
+        dir="$(instance_dir_for "$target")"
+        rows="$(permission_rows_for_dir "$dir")"
+    else
+        for dir in "$INSTANCES_ROOT"/*(N/); do
+            is_instance_dir "$dir" || continue
+            rows+="$(permission_rows_for_dir "$dir")"$'\n'
+        done
+    fi
+    if (( porcelain )); then
+        print -rn -- "$rows"
+        return 0
+    fi
+    local slug name permission permission_state found=0
+    while IFS=$'\t' read -r slug name permission permission_state; do
+        [[ -n "$permission" ]] || continue
+        [[ "$permission_state" != "granted" ]] || continue
+        found=1
+        print -r -- "$name: $(permission_label "$permission") — $permission_state"
+    done <<< "$rows"
+    (( found )) || print -r -- "All installed instances have the checked permissions."
+}
+
+cmd_permissions_request() {
+    [[ $# -eq 1 ]] || die "usage: doppel permissions request <name>"
+    local dir app engine
+    dir="$(instance_dir_for "$1")"
+    app="$(app_path_for "$dir")"
+    [[ -d "$app" ]] || die "'$1' is not installed"
+    engine="$(/usr/bin/plutil -extract DoppelEngineVersion raw "$app/Contents/Info.plist" 2>/dev/null || true)"
+    [[ "$engine" == <15-> ]] || die "'$1' must be rebuilt before Doppel can check its permissions"
+    "$app/Contents/MacOS/ChatGPT" --doppel-request-permissions || \
+        die "'$1' could not open its permission assistant"
+}
+
+cmd_permissions() {
+    local action="${1:-}"
+    [[ -n "$action" ]] && shift
+    case "$action" in
+        check) cmd_permissions_check "$@" ;;
+        request) cmd_permissions_request "$@" ;;
+        *) die "usage: doppel permissions {check|request} ..." ;;
+    esac
 }
 
 # Rollback copies are whole app bundles, about 1.4GB each, and one is kept
@@ -680,6 +1160,8 @@ case "${1:-}" in
     rebuild) [[ $# -eq 2 ]] || die "usage: doppel rebuild <name>"; cmd_rebuild "$2" ;;
     edit) shift; cmd_edit "$@" ;;
     remove) shift; cmd_remove "$@" ;;
+    update) shift; cmd_update "$@" ;;
+    permissions) shift; cmd_permissions "$@" ;;
     prune) shift; [[ $# -le 1 ]] || die "usage: doppel prune [<name>]"; cmd_prune "${1:-}" ;;
-    *) die "usage: doppel {create|list|launch|rebuild|edit|remove|prune} ..." ;;
+    *) die "usage: doppel {create|list|launch|rebuild|edit|remove|update|permissions|prune} ..." ;;
 esac

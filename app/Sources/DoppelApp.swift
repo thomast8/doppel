@@ -44,7 +44,7 @@ struct DoppelApp: App {
         MenuBarExtra {
             MenuContent(store: store)
         } label: {
-            MenuBarLabel()
+            MenuBarLabel(store: store)
         }
         Window("New Doppel Instance", id: "create-instance") {
             CreateInstanceView(store: store)
@@ -66,10 +66,16 @@ struct DoppelApp: App {
 /// what --show-create hangs off: the window can be opened at launch without
 /// driving the menu by hand.
 struct MenuBarLabel: View {
+    @ObservedObject var store: InstanceStore
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Image(systemName: "square.on.square")
+        Image(systemName: store.permissionIssues.isEmpty
+              ? "square.on.square"
+              : "exclamationmark.square.fill")
+            .accessibilityLabel(store.permissionIssues.isEmpty
+                                ? "Doppel"
+                                : "Doppel: managed app permissions need attention")
             .onAppear {
                 guard ProcessInfo.processInfo.arguments.contains("--show-create") else { return }
                 openWindow(id: "create-instance")
@@ -88,7 +94,21 @@ struct MenuContent: View {
             Text("Create one with `doppel create`")
         }
         ForEach(store.instances) { instance in
-            Menu(instance.name) {
+            let issues = store.permissionIssues.filter { $0.instanceID == instance.id }
+            Menu {
+                if !issues.isEmpty {
+                    Section("Needs Attention") {
+                        ForEach(issues) { issue in
+                            Button {
+                                store.showPermissionIssues(for: instance)
+                            } label: {
+                                Label("\(issue.label) — \(issue.statusLabel)",
+                                      systemImage: issue.systemImage)
+                            }
+                        }
+                    }
+                    Divider()
+                }
                 Button("Launch") { store.launch(instance) }
                     .disabled(store.busy.contains(instance.id))
                 Button("Rebuild") { store.rebuild(instance) }
@@ -104,14 +124,40 @@ struct MenuContent: View {
                 if store.busy.contains(instance.id) {
                     Text("Working…")
                 }
+            } label: {
+                Label(instance.name,
+                      systemImage: issues.isEmpty ? "app" : "exclamationmark.triangle.fill")
             }
         }
         Divider()
+        if !store.permissionIssues.isEmpty {
+            Button("Permissions Need Attention (\(store.permissionIssues.count))…") {
+                store.showPermissionIssues()
+            }
+        } else if store.checkingPermissions {
+            Text("Checking Managed App Permissions…")
+        }
         Button("New Instance…") {
             openWindow(id: "create-instance")
             NSApp.activate(ignoringOtherApps: true)
         }
         Button("Refresh") { store.reload() }
+        if store.busy.contains("update") {
+            Text("Updating ChatGPT and managed instances…")
+        } else if let update = store.chatGPTUpdate {
+            Button(update.state == .ready
+                   ? "Restart to Install ChatGPT \(update.targetVersion)…"
+                   : "Install ChatGPT \(update.targetVersion)…") {
+                store.beginKnownUpdate()
+            }
+        } else {
+            Button(store.checkingForUpdates
+                   ? "Checking for ChatGPT Updates…"
+                   : "Check for ChatGPT Updates…") {
+                store.checkForUpdates(userInitiated: true)
+            }
+            .disabled(store.checkingForUpdates)
+        }
         if !store.signingReady {
             Button(store.busy.contains("signing")
                    ? "Setting up secure signing…"

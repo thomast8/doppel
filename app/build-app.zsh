@@ -55,7 +55,8 @@ if [[ "$UNIVERSAL" == "1" ]]; then
 else
     arch_flags=()
 fi
-/usr/bin/clang -fobjc-arc -O2 $arch_flags -framework Cocoa -framework Security \
+/usr/bin/clang -fobjc-arc -O2 $arch_flags -framework Cocoa -framework ApplicationServices \
+    -framework AVFoundation -framework UserNotifications -framework Security \
     -o "$PAYLOAD/prebuilt/doppel-launcher" "$REPO_ROOT/engine/launcher/main.m"
 /usr/bin/clang -fobjc-arc -O2 $arch_flags -framework Cocoa \
     -o "$PAYLOAD/prebuilt/doppel-alert" "$REPO_ROOT/engine/alert/main.m"
@@ -107,9 +108,9 @@ ICON_WORK="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/doppel-appicon.XXXXXXXX")"
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.2</string>
+	<string>0.4</string>
 	<key>CFBundleVersion</key>
-	<string>2</string>
+	<string>4</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>LSUIElement</key>

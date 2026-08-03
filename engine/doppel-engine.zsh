@@ -11,7 +11,7 @@
 set -u
 setopt PIPE_FAIL
 
-readonly ENGINE_VERSION="11"
+readonly ENGINE_VERSION="15"
 
 # When this engine copy runs from inside an installed bundle, environment
 # overrides are ignored: otherwise a same-uid process could point a
@@ -206,6 +206,7 @@ instance_is_healthy() {
     [[ "$(plist_value "$info" DoppelSourceExecutableSHA256)" == "$expected_hash" ]] || return 1
     [[ "$(plist_value "$info" LSEnvironment.CODEX_ELECTRON_USER_DATA_PATH)" == "$DOPPEL_PROFILE_ROOT" ]] || return 1
     [[ "$(plist_value "$info" LSEnvironment.CODEX_HOME)" == "$DOPPEL_CODEX_HOME" ]] || return 1
+    [[ "$(plist_value "$info" LSEnvironment.CODEX_SPARKLE_ENABLED)" == "false" ]] || return 1
     [[ "$(plist_value "$info" CFBundleURLTypes.0.CFBundleURLSchemes.0)" == "$DOPPEL_URL_SCHEME" ]] || return 1
     [[ -z "$(plist_value "$info" CFBundleURLTypes.0.CFBundleURLSchemes.1)" ]] || return 1
     [[ "$(plist_value "$info" SUFeedURL)" == "https://doppel.invalid/no-updates.xml" ]] || return 1
@@ -246,6 +247,12 @@ patch_plist() {
     /usr/bin/plutil -replace CFBundleURLTypes.0.CFBundleURLSchemes -json "[\"$DOPPEL_URL_SCHEME\"]" "$info"
     /usr/bin/plutil -replace LSEnvironment.CODEX_ELECTRON_USER_DATA_PATH -string "$DOPPEL_PROFILE_ROOT" "$info"
     /usr/bin/plutil -replace LSEnvironment.CODEX_HOME -string "$DOPPEL_CODEX_HOME" "$info"
+    # Codex now supplies its appcast at runtime, so the traditional Sparkle
+    # Info.plist switches below no longer stop a user- or backend-initiated
+    # update. This environment switch is read by Codex before it creates the
+    # updater and is the supported interception point. Only the untouched,
+    # vendor-signed primary app is ever allowed to run Sparkle.
+    /usr/bin/plutil -replace LSEnvironment.CODEX_SPARKLE_ENABLED -string "false" "$info"
     # Sparkle must not update an instance: it would replace the bundle with the
     # vendor's, dropping the launcher and this instance's LSEnvironment profile
     # keys, which would silently point the icon at the default profile and merge
@@ -485,6 +492,12 @@ launch_instance() {
         mkdir -p "$DOPPEL_PROFILE_ROOT" "$DOPPEL_CODEX_HOME"
         export CODEX_ELECTRON_USER_DATA_PATH="$DOPPEL_PROFILE_ROOT"
         export CODEX_HOME="$DOPPEL_CODEX_HOME"
+        # Ask only after the bundle is known healthy. With ad-hoc signing, a
+        # rebuild changes the TCC identity, so prompting from the launcher that
+        # was about to be replaced would grant access to stale code and then
+        # immediately ask the user again.
+        "$app/Contents/MacOS/ChatGPT" --doppel-request-permissions || \
+            log_message "The permission check could not be shown; continuing launch"
         log_message "Launching healthy instance $version"
         exec "$app/Contents/MacOS/ChatGPT.real" --user-data-dir="$DOPPEL_PROFILE_ROOT" "$@"
         fail_closed "The preserved vendor executable could not be started."
