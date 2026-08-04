@@ -43,7 +43,9 @@ slugify() {
 # Where the instance helpers come from: the bundled, signature-sealed copies
 # when running inside Doppel.app, otherwise freshly compiled sources.
 helper_dir() {
-    if [[ -x "$PREBUILT_DIR/doppel-launcher" ]]; then
+    if [[ -x "$PREBUILT_DIR/doppel-launcher" && \
+          -x "$PREBUILT_DIR/doppel-alert" && \
+          -x "$PREBUILT_DIR/doppel-url-handler" ]]; then
         print -r -- "$PREBUILT_DIR"
     else
         print -r -- "$BUILD_CACHE"
@@ -52,16 +54,19 @@ helper_dir() {
 
 compile_helpers() {
     # Nothing to build when the app shipped them.
-    [[ -x "$PREBUILT_DIR/doppel-launcher" ]] && return 0
+    [[ -x "$PREBUILT_DIR/doppel-launcher" && \
+       -x "$PREBUILT_DIR/doppel-alert" && \
+       -x "$PREBUILT_DIR/doppel-url-handler" ]] && return 0
     # Always recompile from the repo sources: an mtime-based cache would let a
     # planted binary in the build dir be embedded and signed into a bundle.
     mkdir -p "$BUILD_CACHE"
     local src bin
-    for pair in "launcher:doppel-launcher" "alert:doppel-alert"; do
+    for pair in "launcher:doppel-launcher" "alert:doppel-alert" "url-handler:doppel-url-handler"; do
         src="$ENGINE_SRC/${pair%%:*}/main.m"
         bin="$BUILD_CACHE/${pair##*:}"
         /usr/bin/clang -fobjc-arc -O2 -framework Cocoa -framework ApplicationServices \
             -framework AVFoundation -framework UserNotifications -framework Security \
+            -framework CoreServices \
             -o "$bin" "$src" || \
             die "compiling ${pair##*:} failed"
     done
@@ -97,9 +102,11 @@ install_engine_assets() {
     local dir="$1"
     mkdir -p "$dir/bin" "$dir/assets"
     /bin/cp "$ENGINE_SRC/doppel-engine.zsh" "$dir/doppel-engine.zsh"
+    /bin/cp "$ENGINE_SRC/patch-deep-link.py" "$dir/patch-deep-link.py"
     /bin/chmod 755 "$dir/doppel-engine.zsh"
     local helpers; helpers="$(helper_dir)"
-    /bin/cp "$helpers/doppel-launcher" "$helpers/doppel-alert" "$dir/bin/"
+    /bin/cp "$helpers/doppel-launcher" "$helpers/doppel-alert" \
+        "$helpers/doppel-url-handler" "$dir/bin/"
 }
 
 # The name lands in a sourced config file, an Info.plist JSON fragment, and a
@@ -603,10 +610,12 @@ cmd_edit() {
 }
 
 cmd_rebuild() {
-    local dir app was_running=0 engine_output
+    local dir app bundle_id was_running=0 engine_output
     dir="$(instance_dir_for "$1")"
     app="$(app_path_for "$dir")"
+    bundle_id="$(config_value "$dir" DOPPEL_BUNDLE_ID)"
     /usr/bin/pgrep -f "${app}/Contents/MacOS/" >/dev/null 2>&1 && was_running=1
+    (( was_running )) && quit_instance "$app" "$bundle_id" "$1"
     compile_helpers
     install_engine_assets "$dir"
     engine_output="$(/bin/zsh "$dir/doppel-engine.zsh" install "$app")"

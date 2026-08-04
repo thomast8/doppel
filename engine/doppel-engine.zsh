@@ -11,7 +11,7 @@
 set -u
 setopt PIPE_FAIL
 
-readonly ENGINE_VERSION="18"
+readonly ENGINE_VERSION="20"
 
 # When this engine copy runs from inside an installed bundle, environment
 # overrides are ignored: otherwise a same-uid process could point a
@@ -20,7 +20,7 @@ readonly ENGINE_VERSION="18"
 if [[ "${0:A}" == */*.app/Contents/Resources/Doppel/* && "${DOPPEL_DEV:-0}" != "1" ]]; then
     unset DOPPEL_ASSET_ROOT DOPPEL_STATE_ROOT DOPPEL_PIN_ROOT DOPPEL_SIGN_IDENTITY \
           DOPPEL_SIGN_LEAF_SHA1 DOPPEL_PRIMARY_APP DOPPEL_PRIMARY_BUNDLE_ID \
-          DOPPEL_PRIMARY_TEAM_ID DOPPEL_INSTALL_ONLY
+          DOPPEL_PRIMARY_SCHEME DOPPEL_PRIMARY_TEAM_ID DOPPEL_INSTALL_ONLY
 fi
 
 readonly ASSET_ROOT="${DOPPEL_ASSET_ROOT:-${0:A:h}}"
@@ -38,6 +38,7 @@ done
 
 readonly PRIMARY_APP="${DOPPEL_PRIMARY_APP:-/Applications/ChatGPT.app}"
 readonly PRIMARY_BUNDLE_ID="${DOPPEL_PRIMARY_BUNDLE_ID:-com.openai.codex}"
+readonly PRIMARY_SCHEME="${DOPPEL_PRIMARY_SCHEME:-codex}"
 readonly PRIMARY_TEAM_ID="${DOPPEL_PRIMARY_TEAM_ID:-2DC432GLL2}"
 readonly STATE_ROOT="${DOPPEL_STATE_ROOT:-$HOME/Library/Application Support/Doppel/state/$DOPPEL_BUNDLE_ID}"
 # Where the launcher looks up the requirement a bundle at a given path has to
@@ -49,6 +50,8 @@ readonly STATE_ROOT="${DOPPEL_STATE_ROOT:-$HOME/Library/Application Support/Dopp
 readonly PIN_ROOT="${DOPPEL_PIN_ROOT:-$HOME/Library/Application Support/Doppel/pins}"
 readonly LAUNCHER="$ASSET_ROOT/bin/doppel-launcher"
 readonly ALERT_HELPER="$ASSET_ROOT/bin/doppel-alert"
+readonly URL_HANDLER_HELPER="$ASSET_ROOT/bin/doppel-url-handler"
+readonly DEEP_LINK_PATCHER="$ASSET_ROOT/patch-deep-link.py"
 readonly ICON_ICNS="$ASSET_ROOT/assets/icon.icns"
 readonly ICON_PNG="$ASSET_ROOT/assets/icon.png"
 readonly LOG_FILE="$STATE_ROOT/engine.log"
@@ -155,7 +158,7 @@ is_doppel_instance() {
 
 require_engine_assets() {
     local asset
-    for asset in "$LAUNCHER" "$ALERT_HELPER" "$ICON_ICNS" "$ICON_PNG"; do
+    for asset in "$LAUNCHER" "$ALERT_HELPER" "$URL_HANDLER_HELPER" "$DEEP_LINK_PATCHER" "$ICON_ICNS" "$ICON_PNG"; do
         [[ -f "$asset" ]] || fail_closed "A required engine asset is missing: $asset"
     done
     [[ -x "$LAUNCHER" ]] || fail_closed "The launcher is not executable: $LAUNCHER"
@@ -207,11 +210,13 @@ instance_is_healthy() {
     [[ "$(plist_value "$info" LSEnvironment.CODEX_ELECTRON_USER_DATA_PATH)" == "$DOPPEL_PROFILE_ROOT" ]] || return 1
     [[ "$(plist_value "$info" LSEnvironment.CODEX_HOME)" == "$DOPPEL_CODEX_HOME" ]] || return 1
     [[ "$(plist_value "$info" LSEnvironment.CODEX_SPARKLE_ENABLED)" == "false" ]] || return 1
+    [[ "$(plist_value "$info" LSEnvironment.DOPPEL_URL_SCHEME)" == "$DOPPEL_URL_SCHEME" ]] || return 1
     [[ "$(plist_value "$info" CFBundleURLTypes.0.CFBundleURLSchemes.0)" == "$DOPPEL_URL_SCHEME" ]] || return 1
     [[ -z "$(plist_value "$info" CFBundleURLTypes.0.CFBundleURLSchemes.1)" ]] || return 1
     [[ "$(plist_value "$info" SUFeedURL)" == "https://doppel.invalid/no-updates.xml" ]] || return 1
     /usr/bin/cmp -s "$app/Contents/Resources/electron.icns" "$ICON_ICNS" || return 1
     [[ "$(plist_value "$info" DoppelSigningIdentifier)" == "$DOPPEL_BUNDLE_ID" ]] || return 1
+    [[ "$(plist_value "$info" DoppelDeepLinkScheme)" == "$DOPPEL_URL_SCHEME" ]] || return 1
 
     # This runs on every launch, so it is one verification rather than two, and
     # not --deep: the bundle seal already covers every nested file, so tampering
@@ -253,6 +258,10 @@ patch_plist() {
     # updater and is the supported interception point. Only the untouched,
     # vendor-signed primary app is ever allowed to run Sparkle.
     /usr/bin/plutil -replace LSEnvironment.CODEX_SPARKLE_ENABLED -string "false" "$info"
+    # The packaged app otherwise hardcodes codex:// both when it creates an
+    # OAuth callback and when it registers with Launch Services. The cloned
+    # app.asar reads this per-instance value instead.
+    /usr/bin/plutil -replace LSEnvironment.DOPPEL_URL_SCHEME -string "$DOPPEL_URL_SCHEME" "$info"
     # Sparkle must not update an instance: it would replace the bundle with the
     # vendor's, dropping the launcher and this instance's LSEnvironment profile
     # keys, which would silently point the icon at the default profile and merge
@@ -263,6 +272,7 @@ patch_plist() {
     /usr/bin/plutil -replace SUScheduledCheckInterval -integer 0 "$info"
     /usr/bin/plutil -replace SUFeedURL -string "https://doppel.invalid/no-updates.xml" "$info"
     /usr/bin/plutil -replace DoppelSigningIdentifier -string "$DOPPEL_BUNDLE_ID" "$info"
+    /usr/bin/plutil -replace DoppelDeepLinkScheme -string "$DOPPEL_URL_SCHEME" "$info"
     if [[ -n "$SIGN_LEAF_SHA1" ]]; then
         /usr/bin/plutil -replace DoppelPinnedRequirement -string \
             "identifier \"$DOPPEL_BUNDLE_ID\" and certificate leaf H\"$SIGN_LEAF_SHA1\"" "$info"
@@ -300,11 +310,12 @@ build_instance() {
 
     local embedded="$target/Contents/Resources/Doppel"
     mkdir -p "$embedded/bin" "$embedded/assets"
-    /bin/cp "$ASSET_ROOT/doppel-engine.zsh" "$CONFIG_FILE" "$embedded/" || \
+    /bin/cp "$ASSET_ROOT/doppel-engine.zsh" "$CONFIG_FILE" "$DEEP_LINK_PATCHER" "$embedded/" || \
         fail_closed "Embedding the self-healing engine failed."
-    /bin/cp "$LAUNCHER" "$ALERT_HELPER" "$embedded/bin/" || \
+    /bin/cp "$LAUNCHER" "$ALERT_HELPER" "$URL_HANDLER_HELPER" "$embedded/bin/" || \
         fail_closed "Embedding the engine executables failed."
-    /bin/chmod 755 "$embedded/bin/doppel-launcher" "$embedded/bin/doppel-alert"
+    /bin/chmod 755 "$embedded/bin/doppel-launcher" "$embedded/bin/doppel-alert" \
+        "$embedded/bin/doppel-url-handler"
     /bin/cp "$ICON_ICNS" "$ICON_PNG" "$embedded/assets/" || \
         fail_closed "Embedding the icon assets failed."
 
@@ -349,6 +360,20 @@ PYFILTER
     /bin/cp "$ICON_PNG" "$target/Contents/Resources/icon-chatgpt.png"
     patch_plist "$target/Contents/Info.plist" "$version" "$executable_hash" || \
         fail_closed "Patching the instance metadata failed."
+
+    # Keep launch-time registration instance-specific, but retain Google's
+    # registered codex:// OAuth callback. The ASAR patch claims codex:// only
+    # when this instance actually starts connector authorization.
+    local asar_hash
+    asar_hash="$(/usr/bin/python3 "$DEEP_LINK_PATCHER" patch \
+        "$target/Contents/Resources/app.asar")" || \
+        fail_closed "Patching the instance OAuth callback routing failed."
+    (( ${#asar_hash} == 64 )) && [[ "$asar_hash" != *[^0-9a-f]* ]] || \
+        fail_closed "The patched ASAR returned an invalid integrity hash."
+    /usr/libexec/PlistBuddy -c \
+        "Set :ElectronAsarIntegrity:Resources/app.asar:hash $asar_hash" \
+        "$target/Contents/Info.plist" >/dev/null || \
+        fail_closed "Updating Electron's ASAR integrity metadata failed."
 
     # Finder provenance and resource-fork metadata are not executable content
     # and make an otherwise valid staged bundle fail code-signature sealing.
@@ -411,10 +436,14 @@ restyle_instance() {
     # to the previous name and colour — undoing the edit that just happened.
     local embedded="$app/Contents/Resources/Doppel"
     if [[ -d "$embedded" ]]; then
-        /bin/mkdir -p "$embedded/assets"
+        /bin/mkdir -p "$embedded/bin" "$embedded/assets"
         /bin/cp "$CONFIG_FILE" "$embedded/instance-config.zsh" || \
             fail_closed "Updating the embedded config failed."
         /bin/cp "$ASSET_ROOT/doppel-engine.zsh" "$embedded/doppel-engine.zsh" 2>/dev/null || true
+        /bin/cp "$DEEP_LINK_PATCHER" "$embedded/patch-deep-link.py" 2>/dev/null || true
+        /bin/cp "$URL_HANDLER_HELPER" "$embedded/bin/doppel-url-handler" || \
+            fail_closed "Updating the URL-handler repair helper failed."
+        /bin/chmod 755 "$embedded/bin/doppel-url-handler"
         /bin/cp "$ICON_ICNS" "$embedded/assets/icon.icns" || fail_closed "Updating the embedded icon failed."
         /bin/cp "$ICON_PNG" "$embedded/assets/icon.png" || fail_closed "Updating the embedded icon failed."
         /bin/chmod 755 "$embedded/doppel-engine.zsh" 2>/dev/null || true
@@ -499,6 +528,10 @@ launch_instance() {
         mkdir -p "$DOPPEL_PROFILE_ROOT" "$DOPPEL_CODEX_HOME"
         export CODEX_ELECTRON_USER_DATA_PATH="$DOPPEL_PROFILE_ROOT"
         export CODEX_HOME="$DOPPEL_CODEX_HOME"
+        export DOPPEL_URL_SCHEME
+        export DOPPEL_PRIMARY_APP="$PRIMARY_APP"
+        export DOPPEL_PRIMARY_BUNDLE_ID="$PRIMARY_BUNDLE_ID"
+        export DOPPEL_URL_HANDLER_HELPER="$URL_HANDLER_HELPER"
         # ChatGPT asks for optional privacy capabilities in the context where
         # it actually uses them. Doppel used to raise its own broad assistant
         # on every launch, which nagged for camera and microphone even when the
@@ -539,6 +572,13 @@ launch_instance() {
 
     [[ -e "$backup" ]] && "$LSREGISTER" -u "$backup" >/dev/null 2>&1 || true
     "$LSREGISTER" -f "$app" >/dev/null 2>&1 || true
+    # A pre-fix clone may have left an explicit preference claiming the
+    # vendor's codex:// scheme. New clones never register that scheme, and the
+    # stale preference is repaired here without launching the primary app.
+    if ! "$URL_HANDLER_HELPER" set "$PRIMARY_SCHEME" "$PRIMARY_APP" "$PRIMARY_BUNDLE_ID"; then
+        log_message "WARNING: Could not restore $PRIMARY_SCHEME:// to $PRIMARY_BUNDLE_ID"
+        print -u2 -r -- "$DOPPEL_DISPLAY_NAME: warning: the primary $PRIMARY_SCHEME:// handler could not be restored."
+    fi
     /usr/bin/touch "$app"
     record_pinned_requirement "$app"
     prune_state

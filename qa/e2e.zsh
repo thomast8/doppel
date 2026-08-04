@@ -43,6 +43,10 @@ check() {
 }
 
 plist() { /usr/bin/plutil -extract "$2" raw "$1/Contents/Info.plist" 2>/dev/null }
+asar_integrity_hash() {
+    /usr/libexec/PlistBuddy -c "Print :ElectronAsarIntegrity:Resources/app.asar:hash" \
+        "$1/Contents/Info.plist" 2>/dev/null
+}
 
 # Average colour of an icon's light pixels, so a tint can be asserted rather
 # than assumed. Built once into the QA directory.
@@ -94,6 +98,14 @@ check "display name" "$(plist "$APP" CFBundleDisplayName)" "$NAME"
 check "bundle name" "$(plist "$APP" CFBundleName)" "$NAME"
 check "own bundle identifier" "$(plist "$APP" CFBundleIdentifier)" "com.openai.codex.doppel-$SLUG"
 check "own profile" "$(plist "$APP" LSEnvironment.CODEX_ELECTRON_USER_DATA_PATH)" "$HOME/Library/Application Support/$NAME"
+check "launch-time protocol registration uses the instance scheme" \
+    "$(plist "$APP" LSEnvironment.DOPPEL_URL_SCHEME)" "codex-$SLUG"
+check "deep-link patch recorded" "$(plist "$APP" DoppelDeepLinkScheme)" "codex-$SLUG"
+PATCH_HASH="$(/usr/bin/python3 "$APP/Contents/Resources/Doppel/patch-deep-link.py" \
+    verify "$APP/Contents/Resources/app.asar" 2>/dev/null)"
+check "patched ASAR integrity matches Info.plist" "$PATCH_HASH" "$(asar_integrity_hash "$APP")"
+check "shared codex scheme restored to the primary" \
+    "$("$APP/Contents/Resources/Doppel/bin/doppel-url-handler" get codex)" "com.openai.codex"
 check "sparkle neutralised" "$(plist "$APP" SUFeedURL)" "https://doppel.invalid/no-updates.xml"
 if /usr/bin/codesign --verify --deep --strict "$APP" >/dev/null 2>&1; then
     pass "signature valid"

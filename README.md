@@ -217,9 +217,13 @@ otherwise ask `codesign` to sign with it.
 - "ChatGPT" and its icon belong to OpenAI. Instance names and icons you create are
   your local Finder labels, nothing more. This project is not affiliated with or
   endorsed by OpenAI.
-- Deep links (`codex://`) open in whichever install claims the URL scheme; each
-  instance claims only its own scheme (`codex-personal`, ...) to avoid stealing
-  links from the primary.
+- Launch-time deep-link registration uses each instance's private scheme, but
+  OAuth retains OpenAI's registered `codex://connector/oauth_callback` URI.
+  The instance starting connector authorization claims `codex://` at that
+  moment, so the result returns there instead of to the clone launched most
+  recently. Doppel refuses a rebuild if a vendor release changes either
+  interception point and repairs stale shared-handler ownership from old
+  builds.
 - Instances are unsigned by Apple standards (ad hoc or self-signed), so Gatekeeper
   assessment (`spctl`) rejects them. They launch fine because they are built
   locally and never quarantined.

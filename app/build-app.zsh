@@ -46,6 +46,7 @@ readonly PAYLOAD="$APP/Contents/Resources/doppel"
 /bin/mkdir -p "$PAYLOAD/bin" "$PAYLOAD/engine" "$PAYLOAD/prebuilt"
 /bin/cp "$REPO_ROOT/bin/doppel" "$REPO_ROOT/bin/doppel-signing" "$PAYLOAD/bin/"
 /bin/cp "$REPO_ROOT/engine/doppel-engine.zsh" "$PAYLOAD/engine/"
+/bin/cp "$REPO_ROOT/engine/patch-deep-link.py" "$PAYLOAD/engine/"
 /bin/chmod 755 "$PAYLOAD/bin/doppel" "$PAYLOAD/bin/doppel-signing" "$PAYLOAD/engine/doppel-engine.zsh"
 
 print -r -- "Compiling instance helpers…"
@@ -60,6 +61,8 @@ fi
     -o "$PAYLOAD/prebuilt/doppel-launcher" "$REPO_ROOT/engine/launcher/main.m"
 /usr/bin/clang -fobjc-arc -O2 $arch_flags -framework Cocoa \
     -o "$PAYLOAD/prebuilt/doppel-alert" "$REPO_ROOT/engine/alert/main.m"
+/usr/bin/clang -fobjc-arc -O2 $arch_flags -framework Cocoa \
+    -o "$PAYLOAD/prebuilt/doppel-url-handler" "$REPO_ROOT/engine/url-handler/main.m"
 if [[ "$UNIVERSAL" == "1" ]]; then
     /usr/bin/swiftc -O -target arm64-apple-macos14.0 "$REPO_ROOT/engine/icon/main.swift" \
         -o "$PAYLOAD/prebuilt/doppel-icon.arm64"
