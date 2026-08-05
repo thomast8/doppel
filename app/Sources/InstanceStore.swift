@@ -162,7 +162,6 @@ final class InstanceStore: ObservableObject {
             let labels = grouped[name, default: []].map(\.label).sorted().joined(separator: ", ")
             return "• \(name): \(labels)"
         }.joined(separator: "\n")
-        NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = issues.count == 1
@@ -176,7 +175,7 @@ final class InstanceStore: ObservableObject {
             Open the exact permission from an instance's Privacy Permissions submenu. Doppel no longer treats unused or unconfirmable capabilities as errors.
             """
         alert.addButton(withTitle: "OK")
-        alert.runModal()
+        present(alert)
     }
 
     func handlePermission(_ permission: PermissionIssue) {
@@ -259,7 +258,6 @@ final class InstanceStore: ObservableObject {
         }
         guard force || !promptedUpdateBuilds.contains(update.targetBuild) else { return }
         promptedUpdateBuilds.insert(update.targetBuild)
-        NSApp.activate(ignoringOtherApps: true)
         let alert = updateAlert()
         alert.messageText = "A new version of ChatGPT is available!"
         alert.informativeText = """
@@ -269,7 +267,7 @@ final class InstanceStore: ObservableObject {
             """
         alert.addButton(withTitle: "Install Update")
         alert.addButton(withTitle: "Remind Me Later")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard present(alert) == .alertFirstButtonReturn else { return }
         prepareUpdate(update)
     }
 
@@ -305,7 +303,6 @@ final class InstanceStore: ObservableObject {
     private func promptToRestart(_ update: ChatGPTUpdate, force: Bool = false) {
         guard force || !promptedUpdateBuilds.contains(-update.targetBuild) else { return }
         promptedUpdateBuilds.insert(-update.targetBuild)
-        NSApp.activate(ignoringOtherApps: true)
         let alert = updateAlert()
         alert.messageText = "Ready to Install"
         alert.informativeText = """
@@ -317,7 +314,7 @@ final class InstanceStore: ObservableObject {
             """
         alert.addButton(withTitle: "Restart and Install")
         alert.addButton(withTitle: "Later")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard present(alert) == .alertFirstButtonReturn else { return }
         applyUpdate(update)
     }
 
@@ -355,13 +352,35 @@ final class InstanceStore: ObservableObject {
         return alert
     }
 
-    private func showCurrentAlert() {
+    /// Presents an alert so it is actually seen. Activation is cooperative on
+    /// macOS 14+: a menu-bar app raising a modal from a timer or a finished
+    /// background task can be denied, which leaves the alert behind the
+    /// frontmost app or off the user's full-screen Space — a "Ready to
+    /// Install" prompt nobody sees reads as the updater doing nothing.
+    /// Ordering the panel front regardless and letting it join the active
+    /// Space keeps it visible; it takes keyboard focus only when macOS grants
+    /// activation, so it can't swallow keystrokes meant for another app.
+    @discardableResult
+    private func present(_ alert: NSAlert) -> NSApplication.ModalResponse {
         NSApp.activate(ignoringOtherApps: true)
+        let window = alert.window
+        // runModal does not reliably raise the panel to modal level under the
+        // SwiftUI lifecycle; left at .normal, an inactive menu-bar app's alert
+        // sits behind the frontmost app's windows. canJoinAllSpaces rather
+        // than moveToActiveSpace: the alert pins to whichever Space is active
+        // the moment it appears, and the user may have switched by then.
+        window.level = .modalPanel
+        window.collectionBehavior.insert([.canJoinAllSpaces, .fullScreenAuxiliary])
+        window.orderFrontRegardless()
+        return alert.runModal()
+    }
+
+    private func showCurrentAlert() {
         let alert = updateAlert()
         alert.messageText = "You're up to date!"
         alert.informativeText = "ChatGPT and its managed Doppel instances are using the latest available version."
         alert.addButton(withTitle: "OK")
-        alert.runModal()
+        present(alert)
     }
 
     private func showUpdateComplete(_ update: ChatGPTUpdate, output: String) {
@@ -369,7 +388,6 @@ final class InstanceStore: ObservableObject {
             .split(separator: "\t", omittingEmptySubsequences: false)
         let verified = fields.count > 3 ? fields[3] : "all"
         let reopened = fields.count > 4 ? fields[4] : "all previously running"
-        NSApp.activate(ignoringOtherApps: true)
         let alert = updateAlert()
         alert.messageText = "Update Complete"
         let signingNote = signingReady ? "" : """
@@ -383,7 +401,7 @@ final class InstanceStore: ObservableObject {
             \(signingNote)
             """
         alert.addButton(withTitle: "OK")
-        alert.runModal()
+        present(alert)
     }
 
     /// Creates an instance from just a name and a tint color; the CLI derives
@@ -471,13 +489,12 @@ final class InstanceStore: ObservableObject {
     private func report(_ message: String, for key: String) {
         guard reported[key] != message else { return }
         reported[key] = message
-        NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "Doppel could not finish that"
         alert.informativeText = message
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
-        alert.runModal()
+        present(alert)
     }
 
     private func clearReport(for key: String) {
