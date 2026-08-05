@@ -21,18 +21,52 @@ readonly BUILD_CACHE="$DOPPEL_HOME/build"
 # Inside an installed app the helpers ship prebuilt and sealed by the bundle's
 # signature; from a repo checkout they are compiled on demand.
 readonly PREBUILT_DIR="$REPO_ROOT/prebuilt"
+
+# Installed copies ignore the overrides below unless explicitly put into
+# development mode, so a same-user process cannot redirect an unattended update
+# check or the identity every vendor check compares against.
+#
+# This has to run before the values are read, not merely before they are used:
+# an earlier version of this block sat after the assignments below, which made
+# it a no-op — `readonly PRIMARY_TEAM_ID="${DOPPEL_PRIMARY_TEAM_ID:-...}"` had
+# already captured the caller's value. Keep every override-derived assignment
+# after this point.
+#
+# The signing and state variables are scrubbed here even though this script
+# never reads them, because the engine does and this script is its parent. The
+# engine's own guard only fires for the copy embedded inside an instance
+# bundle; the copy that `rebuild` and `update apply` execute lives under
+# instances/<slug>/, so scrubbing here is the only thing that stops a caller
+# choosing which certificate signs a rebuild and then gets recorded as that
+# instance's pin. DOPPEL_PRIMARY_APP is still forwarded explicitly to the
+# engine by the rebuild path after validation; that is a deliberate handoff,
+# not an inherited override.
+if [[ "${0:A}" == */Doppel.app/Contents/Resources/doppel/* && "${DOPPEL_DEV:-0}" != "1" ]]; then
+    unset DOPPEL_APPCAST_URL DOPPEL_UPDATE_ROOT \
+          DOPPEL_PRIMARY_APP DOPPEL_PRIMARY_BUNDLE_ID \
+          DOPPEL_PRIMARY_SCHEME DOPPEL_PRIMARY_TEAM_ID \
+          DOPPEL_SIGN_IDENTITY DOPPEL_SIGN_IDENTITY_NAME DOPPEL_SIGN_LEAF_SHA1 \
+          DOPPEL_ASSET_ROOT DOPPEL_STATE_ROOT DOPPEL_PIN_ROOT
+fi
+
 readonly PRIMARY_APP="${DOPPEL_PRIMARY_APP:-/Applications/ChatGPT.app}"
 readonly PRIMARY_SCHEME="${DOPPEL_PRIMARY_SCHEME:-codex}"
 readonly PRIMARY_BUNDLE_ID="${DOPPEL_PRIMARY_BUNDLE_ID:-com.openai.codex}"
 readonly PRIMARY_TEAM_ID="${DOPPEL_PRIMARY_TEAM_ID:-2DC432GLL2}"
 # Codex publishes the same production appcast its Sparkle integration uses.
-# Installed copies ignore overrides unless explicitly put into development
-# mode, so a same-user process cannot redirect an unattended update check.
-if [[ "${0:A}" == */Doppel.app/Contents/Resources/doppel/* && "${DOPPEL_DEV:-0}" != "1" ]]; then
-    unset DOPPEL_APPCAST_URL DOPPEL_UPDATE_ROOT
-fi
 readonly APPCAST_URL="${DOPPEL_APPCAST_URL:-https://persistent.oaistatic.com/codex-app-prod/appcast.xml}"
 readonly UPDATE_ROOT="${DOPPEL_UPDATE_ROOT:-$DOPPEL_HOME/updates}"
+
+# Both values are interpolated into a code-signing requirement, so they are
+# checked once here rather than at every use. A value carrying a quote can
+# close the string and append its own clause: a team id of
+# `Z" or ! identifier "zzzzzzzz` makes the whole requirement true for anything.
+# Only reachable from a checkout or under DOPPEL_DEV=1, but the cost of
+# refusing it is one comparison.
+[[ "$PRIMARY_BUNDLE_ID" == [A-Za-z0-9]* && "$PRIMARY_BUNDLE_ID" != *[^A-Za-z0-9.-]* ]] || \
+    { print -u2 -r -- "doppel: the primary bundle identifier may contain only letters, digits, dots and hyphens"; exit 1 }
+[[ ${#PRIMARY_TEAM_ID} -eq 10 && "$PRIMARY_TEAM_ID" != *[^A-Z0-9]* ]] || \
+    { print -u2 -r -- "doppel: the primary team identifier must be 10 upper-case letters or digits"; exit 1 }
 
 die() { print -u2 -r -- "doppel: $1"; exit 1 }
 
@@ -776,17 +810,41 @@ valid_build_number() {
     [[ "$1" == <1-> ]]
 }
 
+# The requirement genuine vendor code has to satisfy, which is the vendor app's
+# own designated requirement. `--verify` on its own only proves a signature
+# seals the bundle it is attached to, which any locally made certificate can
+# also do; the Apple anchor is what makes this mean "OpenAI signed it".
+#
+# The two marker OIDs are not decoration. Without them the requirement accepts
+# any certificate Apple ever issued to that team, including an individual
+# engineer's Apple Development certificate, which is far more widely held than
+# the release key. 6.2.6 is the Developer ID intermediate CA; 6.1.13 is the
+# Developer ID Application leaf. Kept identical to the engine's copy.
+#
+# Interpolated values are validated once at startup rather than here, because
+# this runs inside a command substitution where `die` would only kill the
+# subshell and leave the caller running with an empty requirement.
+vendor_requirement() {
+    print -r -- "=anchor apple generic and identifier \"$PRIMARY_BUNDLE_ID\"\
+ and certificate 1[field.1.2.840.113635.100.6.2.6]\
+ and certificate leaf[field.1.2.840.113635.100.6.1.13]\
+ and certificate leaf[subject.OU] = \"$PRIMARY_TEAM_ID\""
+}
+
 validate_vendor_app() {
-    local app="$1" expected_version="${2:-}" info details actual_version
+    local app="$1" expected_version="${2:-}" info actual_version
     info="$app/Contents/Info.plist"
     [[ -d "$app" && -f "$info" ]] || return 1
     [[ "$(/usr/bin/plutil -extract CFBundleIdentifier raw "$info" 2>/dev/null)" == "$PRIMARY_BUNDLE_ID" ]] || return 1
     actual_version="$(/usr/bin/plutil -extract CFBundleVersion raw "$info" 2>/dev/null)"
     valid_build_number "$actual_version" || return 1
     [[ -z "$expected_version" || "$actual_version" == "$expected_version" ]] || return 1
-    details="$(/usr/bin/codesign -dv --verbose=4 "$app" 2>&1)" || return 1
-    [[ "$details" == *"TeamIdentifier=$PRIMARY_TEAM_ID"* ]] || return 1
-    /usr/bin/codesign --verify --deep --strict "$app" >/dev/null 2>&1 || return 1
+    # No `codesign -dv` text is parsed here on purpose. The old check searched
+    # that output for TeamIdentifier=<team>, but the signing identifier is
+    # echoed into the same stream, so one crafted identifier satisfied it. The
+    # requirement checks the same field without reading attacker-shaped text.
+    /usr/bin/codesign --verify --deep --strict \
+        -R "$(vendor_requirement)" "$app" >/dev/null 2>&1 || return 1
     return 0
 }
 

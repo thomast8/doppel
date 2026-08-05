@@ -154,6 +154,73 @@ run_isolated occupied create --name "Occupied" --tint 3B82F6 --install-to "$APPS
     || fail "the app that was there is untouched" "it was replaced"
 
 print -r -- ""
+print -r -- "vendor verification rejects a signature that only looks like the vendor's"
+# The old check searched `codesign -dv` output for TeamIdentifier=<team>. The
+# signing identifier is echoed into that same output, so an ad-hoc signature
+# whose identifier contained the expected line satisfied it, and an ad-hoc
+# signature passes --verify too. No key needed. Both halves are asserted here:
+# the fixture has to keep demonstrating the old bug, or this proves nothing.
+SPOOF="$SCRATCH/Spoof.app"
+/bin/mkdir -p "$SPOOF/Contents"
+/usr/bin/plutil -create xml1 "$SPOOF/Contents/Info.plist"
+/usr/bin/plutil -insert CFBundleIdentifier -string "com.openai.codex" "$SPOOF/Contents/Info.plist"
+/usr/bin/plutil -insert CFBundleVersion -string "1" "$SPOOF/Contents/Info.plist"
+/usr/bin/codesign --force --sign - -i $'com.openai.codex\nTeamIdentifier=2DC432GLL2' \
+    "$SPOOF" >/dev/null 2>&1
+[[ "$(/usr/bin/codesign -dv --verbose=4 "$SPOOF" 2>&1)" == *"TeamIdentifier=2DC432GLL2"* ]] \
+    && pass "the fixture still satisfies the old substring search" \
+    || fail "the fixture still satisfies the old substring search" "it no longer demonstrates the old bug"
+/usr/bin/codesign --verify --deep --strict "$SPOOF" >/dev/null 2>&1 \
+    && pass "and still passes a plain strict verify" \
+    || fail "and still passes a plain strict verify" "the ad-hoc seal no longer verifies"
+if /usr/bin/codesign --verify --deep --strict \
+    -R '=anchor apple generic and identifier "com.openai.codex" and certificate leaf[subject.OU] = "2DC432GLL2"' \
+    "$SPOOF" >/dev/null 2>&1; then
+    fail "the Apple-anchored requirement rejects it" "the spoofed bundle satisfied the requirement"
+else
+    pass "the Apple-anchored requirement rejects it"
+fi
+# Asserting codesign's behaviour is not enough: the point is that Doppel's own
+# vendor check applies it. Drive the real CLI with the spoof as its primary. The
+# appcast is pointed at a closed port so that if the check ever stops rejecting
+# the spoof, this reports the feed error instead and the assertion fails rather
+# than reaching for the network.
+GUARD_OUT="$(DOPPEL_HOME="$SCRATCH/spoof-home" DOPPEL_PRIMARY_APP="$SPOOF" \
+    DOPPEL_APPCAST_URL="http://127.0.0.1:9/unused.xml" \
+    "$CLI" update check 2>&1)"
+[[ "$GUARD_OUT" == *"not valid vendor-signed code"* ]] \
+    && pass "and Doppel's own vendor check refuses the spoofed primary" \
+    || fail "and Doppel's own vendor check refuses the spoofed primary" "got: $GUARD_OUT"
+
+print -r -- ""
+print -r -- "an installed copy ignores the environment overrides it must not honour"
+# This guard sat below the assignments it was meant to protect once already,
+# which made it a no-op that every existing check still passed. --scheme is
+# compared against the primary scheme before anything touches disk, so a leaked
+# DOPPEL_PRIMARY_SCHEME is observable without a network call or a clone.
+GUARD_FIXTURE="$SCRATCH/Doppel.app/Contents/Resources/doppel/bin"
+/bin/mkdir -p "$GUARD_FIXTURE"
+/bin/cp "$CLI" "$GUARD_FIXTURE/doppel"
+/bin/chmod 755 "$GUARD_FIXTURE/doppel"
+# First prove the probe can detect a leak at all: from a checkout path the
+# override is honoured by design, so the collision message must appear.
+GUARD_OUT="$(DOPPEL_HOME="$SCRATCH/guard-checkout" DOPPEL_PRIMARY_SCHEME="codex-spoof" \
+    "$CLI" create --name "Guard Probe" --tint 3B82F6 --scheme codex-spoof \
+    --install-to "$APPS" 2>&1)"
+[[ "$GUARD_OUT" == *"belongs to the primary app"* ]] \
+    && pass "the probe detects a honoured override from a checkout" \
+    || fail "the probe detects a honoured override from a checkout" "got: $GUARD_OUT"
+# Then the real assertion: from an installed bundle path it must be dropped.
+GUARD_OUT="$(DOPPEL_HOME="$SCRATCH/guard-bundle" DOPPEL_PRIMARY_SCHEME="codex-spoof" \
+    "$GUARD_FIXTURE/doppel" create --name "Guard Probe" --tint 3B82F6 --scheme codex-spoof \
+    --install-to "$APPS" 2>&1)"
+[[ "$GUARD_OUT" != *"belongs to the primary app"* ]] \
+    && pass "an installed copy ignores DOPPEL_PRIMARY_SCHEME" \
+    || fail "an installed copy ignores DOPPEL_PRIMARY_SCHEME" "the override leaked through: $GUARD_OUT"
+[[ ! -d "$APPS/Guard Probe.app" ]] && pass "and the probe installed nothing" \
+    || fail "and the probe installed nothing" "$APPS/Guard Probe.app was created"
+
+print -r -- ""
 print -r -- "building the one instance the rest of the checks share"
 if ! "$CLI" create --name "$NAME" --tint A855F7 --install-to "$APPS" >/dev/null 2>&1; then
     print -u2 -r -- "  ✗ create failed; aborting"

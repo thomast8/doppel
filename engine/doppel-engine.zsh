@@ -18,8 +18,15 @@ readonly ENGINE_VERSION="22"
 # signature-validated bundle at a config, state dir, or signing identity of its
 # choosing. Overrides remain available for development (DOPPEL_DEV=1).
 if [[ "${0:A}" == */*.app/Contents/Resources/Doppel/* && "${DOPPEL_DEV:-0}" != "1" ]]; then
+    # DOPPEL_SIGN_IDENTITY_NAME belongs here with the other two signing
+    # overrides: it does not name an identity directly, but it chooses which
+    # keychain certificate detect_sign_identity finds, which reaches the same
+    # end. Left settable, a rebuild could be made to sign an instance with a
+    # certificate of the caller's choosing and then pin that certificate,
+    # turning detectable tampering into permanently trusted tampering.
     unset DOPPEL_ASSET_ROOT DOPPEL_STATE_ROOT DOPPEL_PIN_ROOT DOPPEL_SIGN_IDENTITY \
-          DOPPEL_SIGN_LEAF_SHA1 DOPPEL_PRIMARY_APP DOPPEL_PRIMARY_BUNDLE_ID \
+          DOPPEL_SIGN_LEAF_SHA1 DOPPEL_SIGN_IDENTITY_NAME \
+          DOPPEL_PRIMARY_APP DOPPEL_PRIMARY_BUNDLE_ID \
           DOPPEL_PRIMARY_SCHEME DOPPEL_PRIMARY_TEAM_ID DOPPEL_INSTALL_ONLY
 fi
 
@@ -40,6 +47,14 @@ readonly PRIMARY_APP="${DOPPEL_PRIMARY_APP:-/Applications/ChatGPT.app}"
 readonly PRIMARY_BUNDLE_ID="${DOPPEL_PRIMARY_BUNDLE_ID:-com.openai.codex}"
 readonly PRIMARY_SCHEME="${DOPPEL_PRIMARY_SCHEME:-codex}"
 readonly PRIMARY_TEAM_ID="${DOPPEL_PRIMARY_TEAM_ID:-2DC432GLL2}"
+# Both are interpolated into a code-signing requirement, so they are checked
+# once here rather than at every use. A value carrying a quote can close the
+# string and append its own clause: a team id of `Z" or ! identifier "zzzzzzzz`
+# makes the whole requirement true for anything.
+[[ "$PRIMARY_BUNDLE_ID" == [A-Za-z0-9]* && "$PRIMARY_BUNDLE_ID" != *[^A-Za-z0-9.-]* ]] || \
+    { print -u2 -r -- "Doppel: the primary bundle identifier may contain only letters, digits, dots and hyphens"; exit 1 }
+[[ ${#PRIMARY_TEAM_ID} -eq 10 && "$PRIMARY_TEAM_ID" != *[^A-Z0-9]* ]] || \
+    { print -u2 -r -- "Doppel: the primary team identifier must be 10 upper-case letters or digits"; exit 1 }
 readonly STATE_ROOT="${DOPPEL_STATE_ROOT:-$HOME/Library/Application Support/Doppel/state/$DOPPEL_BUNDLE_ID}"
 # Where the launcher looks up the requirement a bundle at a given path has to
 # satisfy. Keyed by install path rather than by anything inside the bundle:
@@ -190,20 +205,38 @@ require_engine_assets() {
     [[ -x "$LAUNCHER" ]] || fail_closed "The launcher is not executable: $LAUNCHER"
 }
 
+# The requirement genuine vendor code has to satisfy, which is the vendor app's
+# own designated requirement. `--verify` on its own only proves a signature
+# seals the bundle it is attached to, which any locally made certificate can
+# also do; the Apple anchor is what makes this mean "OpenAI signed it".
+#
+# The two marker OIDs are not decoration. Without them the requirement accepts
+# any certificate Apple ever issued to that team, including an individual
+# engineer's Apple Development certificate, which is far more widely held than
+# the release key. 6.2.6 is the Developer ID intermediate CA; 6.1.13 is the
+# Developer ID Application leaf. Kept identical to the CLI's copy.
+#
+# Interpolated values are validated once at startup rather than here, because
+# this runs inside a command substitution where fail_closed would only kill the
+# subshell and leave the caller running with an empty requirement.
+vendor_requirement() {
+    print -r -- "=anchor apple generic and identifier \"$PRIMARY_BUNDLE_ID\"\
+ and certificate 1[field.1.2.840.113635.100.6.2.6]\
+ and certificate leaf[field.1.2.840.113635.100.6.1.13]\
+ and certificate leaf[subject.OU] = \"$PRIMARY_TEAM_ID\""
+}
+
 validate_primary() {
     [[ -d "$PRIMARY_APP" ]] || fail_closed "The primary app was not found at $PRIMARY_APP"
     [[ "$(plist_value "$PRIMARY_APP/Contents/Info.plist" CFBundleIdentifier)" == "$PRIMARY_BUNDLE_ID" ]] || \
         fail_closed "The primary app has an unexpected bundle identifier. No rebuild was performed."
-    /usr/bin/codesign --verify --deep --strict "$PRIMARY_APP" >/dev/null 2>&1 || \
-        fail_closed "The primary app signature is invalid. No rebuild was performed."
-
-    local signing_details
-    signing_details="$(/usr/bin/codesign -dv --verbose=4 "$PRIMARY_APP" 2>&1)" || \
-        fail_closed "The primary app signing identity could not be read."
-    [[ "$signing_details" == *"Identifier=$PRIMARY_BUNDLE_ID"* ]] || \
-        fail_closed "The primary app signing identifier is unexpected."
-    [[ "$signing_details" == *"TeamIdentifier=$PRIMARY_TEAM_ID"* ]] || \
-        fail_closed "The primary app is not signed by the expected vendor team."
+    # The requirement covers the signing identifier and the team in one check.
+    # The old `codesign -dv` text search for TeamIdentifier=<team> is gone: that
+    # output also echoes the signing identifier, so one crafted identifier
+    # satisfied it.
+    /usr/bin/codesign --verify --deep --strict \
+        -R "$(vendor_requirement)" "$PRIMARY_APP" >/dev/null 2>&1 || \
+        fail_closed "The primary app is not Apple-anchored OpenAI-signed code. No rebuild was performed."
 
     LC_ALL=C /usr/bin/grep -a -q 'CODEX_ELECTRON_USER_DATA_PATH' "$PRIMARY_APP/Contents/Resources/app.asar" || \
         fail_closed "This release no longer exposes the expected separate-profile control. No rebuild was performed."
