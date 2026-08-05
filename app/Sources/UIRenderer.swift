@@ -5,9 +5,9 @@ import AppKit
 ///
 /// Reviewing the interface otherwise needs a screen capture, which macOS gates
 /// behind a permission that a headless or scripted run will not have. Drawing
-/// the real view hierarchy offscreen sidesteps that entirely, at the cost of
-/// the AppKit-backed glass, which has no backdrop to refract and so renders
-/// clear.
+/// the real view hierarchy offscreen sidesteps that entirely. AppKit-backed
+/// glass and controls use matching SwiftUI stand-ins because they cannot
+/// render into ImageRenderer without a window.
 @MainActor
 enum UIRenderer {
     static func render(to url: URL, editing: Bool) {
@@ -20,7 +20,8 @@ enum UIRenderer {
             ?? Instance(id: "sample", name: "ChatGPT Personal",
                         appPath: "", installed: true, tint: "A855F7")
 
-        let view = CreateInstanceView(store: store, editing: editing ? sample : nil)
+        let view = CreateInstanceView(store: store, editing: editing ? sample : nil,
+                                      renderingDocumentation: true)
             .frame(width: 440)
             .background(Color(nsColor: .windowBackgroundColor))
 

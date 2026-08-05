@@ -69,7 +69,10 @@ private struct OriginalSwatch: View {
                         .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
                 }
-                .frame(height: 26)
+                // A height-only frame lets the Circle take an unbounded width
+                // when this view is rendered offscreen for documentation. Keep
+                // the control square so the live picker and renderer agree.
+                .frame(width: 26, height: 26)
                 .padding(2)
                 .overlay {
                     if isSelected { Circle().strokeBorder(Color.accentColor, lineWidth: 2) }

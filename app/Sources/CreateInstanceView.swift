@@ -21,6 +21,10 @@ struct CreateInstanceView: View {
     @ObservedObject var store: InstanceStore
     /// When set, the window edits that instance instead of creating one.
     var editing: Instance?
+    /// The off-screen README renderer has no AppKit window for glass to
+    /// refract. Use ordinary SwiftUI surfaces there, while the live window
+    /// retains its glass-backed controls.
+    var renderingDocumentation = false
     @StateObject private var form = CreateForm()
     @Environment(\.dismiss) private var dismiss
 
@@ -65,11 +69,16 @@ struct CreateInstanceView: View {
                 form.customHue = Color(hex: editing.tint).hueComponent
             }
         }
-        .background(WindowStyler())
-        .background(
-            GlassBackground(cornerRadius: 0, clearStyle: false, fallbackMaterial: .underWindowBackground)
-                .ignoresSafeArea()
-        )
+        .background {
+            if renderingDocumentation {
+                Color(nsColor: .windowBackgroundColor).ignoresSafeArea()
+            } else {
+                WindowStyler()
+                GlassBackground(cornerRadius: 0, clearStyle: false,
+                                fallbackMaterial: .underWindowBackground)
+                    .ignoresSafeArea()
+            }
+        }
     }
 
     // MARK: - Sections
@@ -77,7 +86,8 @@ struct CreateInstanceView: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 16) {
             IconTile(color: form.useOriginal ? Color(white: 0.97) : form.color,
-                     name: trimmedName, radius: Radius.tile)
+                     name: trimmedName, radius: Radius.tile,
+                     renderingDocumentation: renderingDocumentation)
             VStack(alignment: .leading, spacing: 4) {
                 Text(isEditing ? "Edit instance" : "New instance")
                     .font(.system(size: 21, weight: .semibold))
@@ -94,21 +104,28 @@ struct CreateInstanceView: View {
     private var nameField: some View {
         VStack(alignment: .leading, spacing: 7) {
             fieldLabel("Name")
-            TextField("", text: $form.name, prompt: Text("ChatGPT Personal").foregroundStyle(.tertiary))
-                .textFieldStyle(.plain)
-                .font(.system(size: 15))
-                .padding(.horizontal, 13)
-                .padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: Radius.field, style: .continuous)
+            if renderingDocumentation {
+                Text("ChatGPT Personal")
+                    .font(.system(size: 15))
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 10)
+                    .background(RoundedRectangle(cornerRadius: Radius.field, style: .continuous)
                         .fill(.black.opacity(0.06)))
-                .overlay(
-                    RoundedRectangle(cornerRadius: Radius.field, style: .continuous)
+            } else {
+                TextField("", text: $form.name, prompt: Text("ChatGPT Personal").foregroundStyle(.tertiary))
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 15))
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 10)
+                    .background(RoundedRectangle(cornerRadius: Radius.field, style: .continuous)
+                        .fill(.black.opacity(0.06)))
+                    .overlay(RoundedRectangle(cornerRadius: Radius.field, style: .continuous)
                         .strokeBorder(.white.opacity(0.14), lineWidth: 0.5))
-                .onSubmit { if canCreate { submit() } }
-                // The "Name" caption above is a separate Text, so without this
-                // the field announces as an unlabelled text field.
-                .accessibilityLabel("Name")
+                    .onSubmit { if canCreate { submit() } }
+                    .accessibilityLabel("Name")
+            }
         }
     }
 
@@ -188,28 +205,37 @@ struct CreateInstanceView: View {
     /// when the style already draws a capsule.
     @ViewBuilder
     private func glassButton(_ title: String, prominent: Bool, action: @escaping () -> Void) -> some View {
-        let button = Button(title, action: action)
-            .controlSize(.large)
-            .buttonBorderShape(.capsule)
-        Group {
-            if #available(macOS 26.0, *) {
-                if prominent {
-                    button.buttonStyle(.glassProminent)
+        if renderingDocumentation {
+            Text(title)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(prominent ? .white : .primary)
+                .padding(.horizontal, 17)
+                .padding(.vertical, 8)
+                .background(Capsule().fill(prominent ? Color.accentColor : Color.black.opacity(0.08)))
+        } else {
+            let button = Button(title, action: action)
+                .controlSize(.large)
+                .buttonBorderShape(.capsule)
+            Group {
+                if #available(macOS 26.0, *) {
+                    if prominent {
+                        button.buttonStyle(.glassProminent)
+                    } else {
+                        button.buttonStyle(.glass)
+                    }
                 } else {
-                    button.buttonStyle(.glass)
-                }
-            } else {
-                if prominent {
-                    button.buttonStyle(.borderedProminent)
-                } else {
-                    button.buttonStyle(.bordered)
+                    if prominent {
+                        button.buttonStyle(.borderedProminent)
+                    } else {
+                        button.buttonStyle(.bordered)
+                    }
                 }
             }
+            .clipShape(Capsule(style: .continuous))
+            // The clip wraps the button in a plain container, which leaves the
+            // control with no accessible name of its own.
+            .accessibilityLabel(title)
         }
-        .clipShape(Capsule(style: .continuous))
-        // The clip wraps the button in a plain container, which leaves the
-        // control with no accessible name of its own.
-        .accessibilityLabel(title)
     }
 
     private func submit() {
@@ -248,6 +274,7 @@ struct IconTile: View {
     let color: Color
     let name: String
     let radius: CGFloat
+    var renderingDocumentation = false
 
     private var initials: String {
         let letters = name.split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined()
@@ -256,7 +283,12 @@ struct IconTile: View {
 
     var body: some View {
         ZStack {
-            GlassBackground(cornerRadius: radius, tint: color, interactive: true)
+            if renderingDocumentation {
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .fill(color.gradient)
+            } else {
+                GlassBackground(cornerRadius: radius, tint: color, interactive: true)
+            }
             Text(initials)
                 .font(.system(size: 21, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white)
