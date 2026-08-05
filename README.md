@@ -1,5 +1,10 @@
 # Doppel
 
+<p align="center">
+  <img src="docs/images/instance-icons.png" width="540"
+       alt="The installed ChatGPT icon beside three Doppel instances, each with its own tinted identity">
+</p>
+
 Run one macOS app as several truly separate apps: separate accounts, separate data,
 separate name and icon in the Dock, Finder, Spotlight and the Cmd-Tab switcher.
 
@@ -10,6 +15,11 @@ its own data directories, and re-signs the clone locally. No vendor code ships
 with this project; every clone is generated on your machine from your own
 installed copy. When an update is available, Doppel downloads it only from the
 official OpenAI appcast and verifies the vendor signature before installation.
+
+<p align="center">
+  <img src="docs/images/menu-permissions.png" width="820"
+       alt="Doppel's menu bar menu with a managed instance's Privacy Permissions submenu open, showing granted microphone access">
+</p>
 
 ## Why not just a launcher script?
 
@@ -41,6 +51,16 @@ download changes nothing; a failed install restores the previous primary; and a
 partial rebuild keeps the restart manifest and reports the exact instance.
 
 ## Usage
+
+The menu bar app covers the everyday flows; **New Instance…** asks for a name
+and a colour and derives everything else:
+
+<p align="center">
+  <img src="docs/images/new-instance.png" width="440"
+       alt="The New Instance window: a name field and an icon colour picker">
+</p>
+
+The CLI drives the same engine:
 
 ```sh
 bin/doppel create --name "ChatGPT Personal" \
