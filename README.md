@@ -38,8 +38,12 @@ inside every instance and checks OpenAI's production appcast itself.
 The menu app checks shortly after launch and every six hours. Its native prompt
 uses the primary ChatGPT icon and the same two-stage flow as the standard updater:
 download or remind later, then restart and install or wait. The download is
-resumable and nothing closes until the staged app has the expected bundle ID,
-build number, OpenAI Team ID and a valid strict code signature.
+resumable, its URL has to match OpenAI's own release path, and nothing closes until
+the staged app has the expected bundle ID, build number and a signature satisfying
+the vendor app's own designated requirement: Apple-anchored, Developer ID, and
+OpenAI's Team ID. An update also has to be strictly newer than the installed build,
+so an older genuine release cannot be replayed. See
+[the threat model](docs/THREAT-MODEL.md) for what these checks do and do not cover.
 
 On restart Doppel records which instances were open, closes all managed apps,
 atomically replaces the untouched primary while keeping a rollback, rebuilds
@@ -295,6 +299,10 @@ Keep the private key in a keychain you lock; any process running as you can
 otherwise ask `codesign` to sign with it.
 
 ## Honest limitations
+
+A fuller account of what Doppel protects, what it does not, and where a clone is
+genuinely weaker than the app it was copied from is in
+[docs/THREAT-MODEL.md](docs/THREAT-MODEL.md). The summary below is the short form.
 
 - The vendor's terms may not contemplate running modified copies. Doppel keeps
   everything local and personal-use; do not redistribute a built instance.
