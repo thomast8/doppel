@@ -22,6 +22,8 @@ final class InstanceStore: ObservableObject {
     @Published var checkingForUpdates = false
     @Published var permissionStatuses: [PermissionIssue] = []
     @Published var checkingPermissions = false
+    @Published var nativeToolsStatus: NativeToolsStatus?
+    @Published var checkingNativeTools = false
 
     var permissionIssues: [PermissionIssue] { permissionStatuses.filter(\.needsAttention) }
 
@@ -89,7 +91,10 @@ final class InstanceStore: ObservableObject {
             Task { @MainActor in self?.checkForUpdates() }
         }
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 5 * 60, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.checkPermissions() }
+            Task { @MainActor in
+                self?.checkPermissions()
+                self?.checkNativeTools()
+            }
         }
     }
 
@@ -115,6 +120,7 @@ final class InstanceStore: ObservableObject {
                     self.clearReport(for: "list")
                     self.instances = Self.parsePorcelain(stdout).sorted { $0.name < $1.name }
                     self.checkPermissions()
+                    self.checkNativeTools()
                 }
             }
         }
@@ -127,6 +133,50 @@ final class InstanceStore: ObservableObject {
     func rebuild(_ instance: Instance) {
         runCLI(["rebuild", instance.name], busyKey: instance.id) { [weak self] failure in
             if failure == nil { self?.checkPermissions() }
+        }
+    }
+
+    // MARK: - Native tools
+
+    func checkNativeTools() {
+        guard !checkingNativeTools, let cli = discoveredCLI else { return }
+        checkingNativeTools = true
+        Task.detached { [weak self] in
+            let result = Self.runProcess(
+                cli: cli, arguments: ["native-tools", "status", "--porcelain"])
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.checkingNativeTools = false
+                switch result {
+                case .failure(let message):
+                    self.report(message, for: "native-tools-status")
+                case .success(let output):
+                    self.clearReport(for: "native-tools-status")
+                    self.nativeToolsStatus = NativeToolsStatus.parse(output)
+                }
+            }
+        }
+    }
+
+    func repairNativeTools() {
+        runCLI(["native-tools", "repair"], busyKey: "native-tools") { [weak self] failure in
+            if failure == nil {
+                self?.checkNativeTools()
+            }
+        }
+    }
+
+    // An instance that has never run has no browser extension host of its own
+    // to point at, and the CLI refuses rather than writing a dangling path. Its
+    // refusal explains what to do, so it is surfaced as-is.
+    /// Passing a browser assigns just that one, so two instances can hold two
+    /// different browsers at once. Omitting it assigns every registration.
+    func claimBrowserHost(for instance: Instance, browser: String? = nil) {
+        var arguments = ["native-tools", "claim-browser"]
+        if let browser { arguments += ["--browser", browser] }
+        arguments.append(instance.name)
+        runCLI(arguments, busyKey: "native-tools") { [weak self] _ in
+            self?.checkNativeTools()
         }
     }
 

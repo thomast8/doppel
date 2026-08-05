@@ -36,6 +36,54 @@ readonly UPDATE_ROOT="${DOPPEL_UPDATE_ROOT:-$DOPPEL_HOME/updates}"
 
 die() { print -u2 -r -- "doppel: $1"; exit 1 }
 
+# A rollback must remain byte-for-byte restorable, but leaving its signed
+# Contents/Info.plist in the normal bundle location makes macOS and Computer
+# Use discover it as another installed copy of the live app. Move only that
+# plist out of the bundle layout while it is stored. Moving the same bytes back
+# restores the original code seal; no identifier or signature is rewritten.
+readonly ROLLBACK_INFO_NAME="Info.plist.doppel-rollback"
+
+mask_rollback_app() {
+    local app="$1" info hidden
+    info="$app/Contents/Info.plist"
+    hidden="$app/Contents/$ROLLBACK_INFO_NAME"
+    [[ -d "$app" ]] || return 1
+    [[ -f "$hidden" && ! -e "$info" ]] && return 0
+    [[ -f "$info" && ! -e "$hidden" ]] || return 1
+    "$LSREGISTER" -u "$app" >/dev/null 2>&1 || true
+    /bin/mv "$info" "$hidden"
+}
+
+discoverable_rollback_count() {
+    local count=0 backup
+    for backup in "$DOPPEL_HOME/state"/*/Backups/*(N/) "$UPDATE_ROOT/Backups"/*(N/); do
+        [[ -f "$backup/Contents/Info.plist" ]] || continue
+        count=$(( count + 1 ))
+    done
+    print -r -- "$count"
+}
+
+repair_rollback_discovery() {
+    local repaired=0 backup
+    for backup in "$DOPPEL_HOME/state"/*/Backups/*(N/); do
+        [[ -f "$backup/Contents/Info.plist" ]] || continue
+        mask_rollback_app "$backup" || die "could not hide stored rollback from app discovery: $backup"
+        repaired=$(( repaired + 1 ))
+    done
+    local hidden_root="$UPDATE_ROOT/.Backups" target
+    for backup in "$UPDATE_ROOT/Backups"/*(N/); do
+        [[ -f "$backup/Contents/Info.plist" ]] || continue
+        /bin/mkdir -p "$hidden_root"
+        target="$hidden_root/${backup:t}"
+        [[ ! -e "$target" ]] || die "the hidden primary rollback already exists: $target"
+        "$LSREGISTER" -u "$backup" >/dev/null 2>&1 || true
+        /bin/mv "$backup" "$target" || \
+            die "could not move the protected primary rollback into hidden storage: $backup"
+        repaired=$(( repaired + 1 ))
+    done
+    print -r -- "$repaired"
+}
+
 slugify() {
     print -r -- "$1" | /usr/bin/tr '[:upper:]' '[:lower:]' | /usr/bin/sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g'
 }
@@ -616,20 +664,102 @@ cmd_rebuild() {
     bundle_id="$(config_value "$dir" DOPPEL_BUNDLE_ID)"
     /usr/bin/pgrep -f "${app}/Contents/MacOS/" >/dev/null 2>&1 && was_running=1
     (( was_running )) && quit_instance "$app" "$bundle_id" "$1"
+    prepare_rebuild_primary
+    trap 'release_rebuild_primary' EXIT INT TERM
     compile_helpers
     install_engine_assets "$dir"
-    engine_output="$(/bin/zsh "$dir/doppel-engine.zsh" install "$app")"
+    engine_output="$(DOPPEL_PRIMARY_APP="$REBUILD_PRIMARY_APP" \
+        /bin/zsh "$dir/doppel-engine.zsh" install "$app")"
+    release_rebuild_primary
+    trap - EXIT INT TERM
     refresh_icon_caches "$app"
-    if (( was_running )) && [[ "${DOPPEL_RELAUNCH:-1}" != "0" ]]; then
-        /usr/bin/open -na "$app" >/dev/null 2>&1 || true
+    # A rebuild selected by the user is also a request to use the rebuilt app.
+    # Relaunch even when the caller had to quit a scheduled-task warning before
+    # retrying; otherwise that confirmation loses the original running state
+    # and a successful rebuild appears to do nothing. Automated maintenance can
+    # still opt out explicitly with DOPPEL_RELAUNCH=0.
+    if [[ "${DOPPEL_RELAUNCH:-1}" != "0" ]]; then
+        /usr/bin/open -na "$app" >/dev/null 2>&1 || \
+            die "the instance was rebuilt but could not be reopened: $app"
+        wait_for_managed_instance "$app" || \
+            die "the instance was rebuilt but did not finish reopening: $app"
     fi
     # A rebuild of a bundle that is already in step does nothing, and saying
     # "rebuilt" anyway made a no-op look like a repair.
     if [[ "$engine_output" == *already-healthy* ]]; then
-        print -r -- "already up to date: $app"
+        if [[ "${DOPPEL_RELAUNCH:-1}" != "0" ]]; then
+            print -r -- "already up to date and reopened: $app"
+        else
+            print -r -- "already up to date: $app"
+        fi
     else
-        print -r -- "rebuilt: $app"
+        if [[ "${DOPPEL_RELAUNCH:-1}" != "0" ]]; then
+            print -r -- "rebuilt and reopened: $app"
+        else
+            print -r -- "rebuilt: $app"
+        fi
     fi
+}
+
+# Recent OpenAI installers can validate while mounted inside their notarized
+# disk image yet fail the older standalone strict check after Finder copies the
+# byte-identical app into /Applications. Keep rebuilds fail-closed: when the
+# installed primary is not acceptable, use only an exact-build DMG that Doppel
+# previously verified and preserved under updates/Official/<build>/ChatGPT.dmg.
+# The image is checksum-verified, mounted read-only, and its app must still pass
+# the normal bundle ID, build, Team ID and strict nested-signature checks.
+typeset -g REBUILD_PRIMARY_APP=""
+typeset -g REBUILD_PRIMARY_MOUNT=""
+typeset -g REBUILD_PRIMARY_DEVICE=""
+
+release_rebuild_primary() {
+    [[ -n "$REBUILD_PRIMARY_MOUNT" ]] || return 0
+    if [[ -n "$REBUILD_PRIMARY_DEVICE" ]]; then
+        /usr/bin/hdiutil detach "$REBUILD_PRIMARY_DEVICE" >/dev/null 2>&1 || \
+            print -u2 -r -- "doppel: warning: could not unmount $REBUILD_PRIMARY_MOUNT"
+    fi
+    /bin/rmdir "$REBUILD_PRIMARY_MOUNT" 2>/dev/null || true
+    REBUILD_PRIMARY_APP=""
+    REBUILD_PRIMARY_MOUNT=""
+    REBUILD_PRIMARY_DEVICE=""
+}
+
+prepare_rebuild_primary() {
+    REBUILD_PRIMARY_APP="$PRIMARY_APP"
+    REBUILD_PRIMARY_MOUNT=""
+    REBUILD_PRIMARY_DEVICE=""
+    validate_vendor_app "$PRIMARY_APP" && return 0
+
+    local version dmg mount attach_output device mounted_app
+    version="$(primary_version)"
+    valid_build_number "$version" || \
+        die "the installed primary is not valid vendor-signed code and its build number could not be read"
+    dmg="$UPDATE_ROOT/Official/$version/ChatGPT.dmg"
+    [[ -f "$dmg" ]] || \
+        die "the installed primary signature is invalid and no verified official installer is cached for build $version"
+    /usr/bin/hdiutil verify "$dmg" >/dev/null 2>&1 || \
+        die "the cached official ChatGPT installer failed its disk-image checksum"
+    mount="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/doppel-primary.XXXXXXXX")" || \
+        die "a temporary mount point for the official ChatGPT installer could not be created"
+    if ! attach_output="$(/usr/bin/hdiutil attach -readonly -nobrowse -mountpoint "$mount" "$dmg")"; then
+        /bin/rmdir "$mount" 2>/dev/null || true
+        die "the cached official ChatGPT installer could not be mounted read-only"
+    fi
+    device="$(print -r -- "$attach_output" | /usr/bin/awk -v target="$mount" '$NF == target { print $1; exit }')"
+    if [[ "$device" != /dev/disk* ]]; then
+        /usr/bin/hdiutil detach "$mount" >/dev/null 2>&1 || true
+        /bin/rmdir "$mount" 2>/dev/null || true
+        die "the official ChatGPT installer mounted on an unexpected device"
+    fi
+    REBUILD_PRIMARY_MOUNT="$mount"
+    REBUILD_PRIMARY_DEVICE="$device"
+    mounted_app="$mount/ChatGPT.app"
+    if ! validate_vendor_app "$mounted_app" "$version"; then
+        release_rebuild_primary
+        die "the app inside the cached official installer failed vendor verification"
+    fi
+    REBUILD_PRIMARY_APP="$mounted_app"
+    print -r -- "using verified official installer for ChatGPT build $version"
 }
 
 # MARK: - Primary-first coordinated updates
@@ -853,6 +983,20 @@ wait_for_instance() {
     return 1
 }
 
+wait_for_managed_instance() {
+    local app="$1" waited=0
+    # The small Doppel launcher immediately execs ChatGPT.real. Waiting for any
+    # process under Contents/MacOS can catch that launcher in the hand-off gap
+    # and report success just before the real app appears (or fails). Require
+    # the preserved vendor executable instead.
+    while (( waited < 30 )); do
+        /usr/bin/pgrep -f "${app}/Contents/MacOS/ChatGPT.real" >/dev/null 2>&1 && return 0
+        /bin/sleep 1
+        waited=$(( waited + 1 ))
+    done
+    return 1
+}
+
 rebuild_instance_for_update() {
     local dir="$1" expected_version="$2" app
     app="$(app_path_for "$dir")"
@@ -925,8 +1069,11 @@ cmd_update_apply() {
     done
 
     stamp="$(/bin/date '+%Y%m%d-%H%M%S')"
-    /bin/mkdir -p "$UPDATE_ROOT/Backups"
-    backup="$UPDATE_ROOT/Backups/ChatGPT.$current.$stamp.app"
+    # Keep the untouched vendor-signed rollback whole. macOS can deny edits
+    # inside it through App Management, while placing the complete bundle in a
+    # dot-directory keeps it out of app discovery without changing its seal.
+    /bin/mkdir -p "$UPDATE_ROOT/.Backups"
+    backup="$UPDATE_ROOT/.Backups/ChatGPT.$current.$stamp.app"
     [[ ! -e "$backup" ]] || die "the primary rollback path already exists: $backup"
     "$LSREGISTER" -u "$PRIMARY_APP" >/dev/null 2>&1 || true
     /bin/mv "$PRIMARY_APP" "$backup" || die "moving the current primary ChatGPT app into rollback storage failed"
@@ -1185,6 +1332,309 @@ cmd_permissions() {
     esac
 }
 
+# MARK: - Chromium extension-host ownership
+#
+# The in-app browser cannot work in a managed instance at all: the vendor gates
+# its browser socket on the connecting process, its parent AND its grandparent
+# each carrying OpenAI's Team ID, and the grandparent is the instance's own
+# locally signed executable. A clone can never satisfy that, so the ChatGPT
+# browser extension is an instance's only route to a real browser.
+#
+# That route arrives through one global native-messaging manifest per Chromium
+# browser, and every ChatGPT app rewrites it to its own extension host during
+# startup. Ownership therefore goes to whichever app launched last, silently,
+# and every other instance is left with no browser of any kind. Doppel cannot
+# stop the vendor writing that file, but it can say who holds it and hand it
+# back to a chosen instance deliberately.
+readonly BROWSER_HOST_MANIFEST_NAME="com.openai.codexextension.json"
+# Overridable so QA can exercise claiming without touching a real browser
+# profile; every path below is relative to it.
+readonly BROWSER_SUPPORT_ROOT="${DOPPEL_BROWSER_SUPPORT_ROOT:-$HOME/Library/Application Support}"
+typeset -gA BROWSER_HOST_MANIFEST_DIRS=(
+    Chrome   "$BROWSER_SUPPORT_ROOT/Google/Chrome/NativeMessagingHosts"
+    Edge     "$BROWSER_SUPPORT_ROOT/Microsoft Edge/NativeMessagingHosts"
+    Chromium "$BROWSER_SUPPORT_ROOT/Chromium/NativeMessagingHosts"
+    Brave    "$BROWSER_SUPPORT_ROOT/BraveSoftware/Brave-Browser/NativeMessagingHosts"
+)
+
+# The host binary ships per architecture, so the slice is globbed rather than
+# assumed: an Intel Mac stores it under macos/x86_64.
+browser_host_binary_for_home() {
+    local home="$1" candidate
+    for candidate in \
+        "$home/plugins/cache/openai-bundled/chrome/latest/extension-host/macos"/*/"ChatGPT for Chrome"(N); do
+        print -r -- "$candidate"
+        return 0
+    done
+    return 1
+}
+
+browser_host_home_from_binary() {
+    local path="$1"
+    [[ "$path" == */plugins/cache/openai-bundled/chrome/* ]] || return 1
+    print -r -- "${path%%/plugins/cache/openai-bundled/chrome/*}"
+}
+
+# Several instances may legitimately share one CODEX_HOME, and an instance may
+# share it with the primary app, so every match is reported rather than the
+# first one found.
+#
+# With annotate=1 the result is prose for a human reading `status`. Without it
+# the result is data: bare display names, comma-separated, so a caller can match
+# one against an instance name. The note about sharing the primary's runtime
+# would otherwise end up inside the name and match nothing.
+browser_host_owner_label() {
+    local home="$1" annotate="${2:-0}" dir matched=""
+    for dir in "$INSTANCES_ROOT"/*(N/); do
+        is_instance_dir "$dir" || continue
+        [[ "$(config_value "$dir" DOPPEL_CODEX_HOME)" == "$home" ]] || continue
+        matched="${matched:+$matched, }$(config_value "$dir" DOPPEL_DISPLAY_NAME)"
+    done
+    if [[ -n "$matched" ]]; then
+        (( annotate )) && [[ "$home" == "$HOME/.codex" ]] && \
+            matched="$matched (shared with the primary app)"
+        print -r -- "$matched"
+        return 0
+    fi
+    [[ "$home" == "$HOME/.codex" ]] && { print -r -- "ChatGPT (primary app)"; return 0 }
+    print -r -- "unrecognised runtime at $home"
+}
+
+browser_host_manifest_binary() {
+    local manifest="$1"
+    /usr/bin/python3 - "$manifest" <<'PYREAD' 2>/dev/null
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        print(json.load(f).get("path", ""))
+except Exception:
+    pass
+PYREAD
+}
+
+# Only the path is rewritten. The origins, host name and transport are the
+# vendor's and are left exactly as found, so this claims an existing
+# registration rather than manufacturing one.
+browser_host_claim_manifest() {
+    local manifest="$1" binary="$2"
+    /usr/bin/python3 - "$manifest" "$binary" <<'PYCLAIM'
+import json, os, sys, tempfile
+manifest, binary = sys.argv[1], sys.argv[2]
+with open(manifest) as f:
+    data = json.load(f)
+if data.get("path") == binary:
+    raise SystemExit(2)
+data["path"] = binary
+directory = os.path.dirname(manifest)
+handle, staged = tempfile.mkstemp(dir=directory, prefix=".doppel-host-")
+try:
+    with os.fdopen(handle, "w") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+    os.replace(staged, manifest)
+except BaseException:
+    os.unlink(staged)
+    raise
+PYCLAIM
+}
+
+# Each Chromium browser has its own registration, so two instances can hold two
+# different browsers at the same time. Without --browser every registration goes
+# to one instance, which is what a single-browser machine wants.
+cmd_native_tools_claim_browser() {
+    # Declared up front: a bare `local` on an already-local name prints it, and
+    # the loop below would otherwise redeclare on every browser.
+    local name="$1" only="${2:-}" dir home binary browser manifest label failed="" outcome
+    local -i claimed=0 unchanged=0
+    if [[ -n "$only" ]]; then
+        # Sorted through an array: the join flag does not order the keys on its
+        # own, so listing them inline printed them in hash order.
+        local -a known
+        known=(${(ko)BROWSER_HOST_MANIFEST_DIRS})
+        [[ -n "${BROWSER_HOST_MANIFEST_DIRS[$only]:-}" ]] || \
+            die "unknown browser: $only (known: ${(j:, :)known})"
+    fi
+    dir="$(instance_dir_for "$name")"
+    home="$(config_value "$dir" DOPPEL_CODEX_HOME)"
+    [[ -n "$home" ]] || die "that instance does not record a CODEX_HOME: $name"
+    binary="$(browser_host_binary_for_home "$home")" || \
+        die "that instance has no browser extension host yet; launch it once so ChatGPT installs one, then claim again"
+    [[ -x "$binary" ]] || die "the instance's browser extension host is not executable: $binary"
+    label="$(config_value "$dir" DOPPEL_DISPLAY_NAME)"
+
+    # One unreadable registration must not decide how many of the others were
+    # rewritten, so the loop records the failure and keeps going, in a fixed
+    # order, and the command reports what actually moved before it fails.
+    for browser in ${(ko)BROWSER_HOST_MANIFEST_DIRS}; do
+        [[ -z "$only" || "$browser" == "$only" ]] || continue
+        manifest="${BROWSER_HOST_MANIFEST_DIRS[$browser]}/$BROWSER_HOST_MANIFEST_NAME"
+        [[ -f "$manifest" ]] || continue
+        # `|| outcome=$?` rather than a bare call: this script runs under
+        # errexit, which would abort the whole command on the first registration
+        # that is already correct or cannot be read.
+        outcome=0
+        browser_host_claim_manifest "$manifest" "$binary" 2>/dev/null || outcome=$?
+        if (( outcome == 0 )); then
+            print -r -- "claimed $browser for $label"
+            claimed+=1
+        elif (( outcome == 2 )); then
+            print -r -- "$browser already points at $label"
+            unchanged+=1
+        else
+            failed="${failed:+$failed, }$browser"
+        fi
+    done
+
+    (( claimed + unchanged > 0 )) || [[ -n "$failed" ]] || \
+        die "no ChatGPT browser-extension registration was found${only:+ for $only}; install the ChatGPT extension in ${only:-a Chromium browser} first"
+    if (( claimed )); then
+        print -r -- "reconnect the extension (or reload the browser tab) for the change to take effect"
+    fi
+    if (( claimed + unchanged )); then
+        print -r -- "the next managed app to launch will take this back; re-claim after launching another instance"
+    fi
+    [[ -z "$failed" ]] || \
+        die "these registrations could not be rewritten and were left alone: $failed"
+}
+
+# MARK: - Native-tool health
+
+native_tools_status() {
+    local porcelain="${1:-0}" computer_state="idle" socket
+    socket="$HOME/Library/Group Containers/$PRIMARY_TEAM_ID.com.openai.sky.CUAService/IPC/computeruse.sock"
+    [[ -S "$socket" ]] && computer_state="ready"
+
+    local chronicle_state="stopped" chronicle_host="" chronicle_app="" frame_age="-1"
+    local status_file="${TMPDIR%/}/codex_chronicle/chronicle-started.pid" pid="" command=""
+    if [[ -r "$status_file" ]]; then
+        pid="$(<"$status_file")"
+        if [[ "$pid" == <1-> ]]; then
+            command="$(/bin/ps -p "$pid" -o command= 2>/dev/null || true)"
+        fi
+    fi
+    if [[ "$command" == */Contents/Resources/codex_chronicle* ]]; then
+        chronicle_state="running"
+        chronicle_app="${command%%/Contents/Resources/codex_chronicle*}"
+        chronicle_host="$(/usr/bin/plutil -extract CFBundleDisplayName raw \
+            "$chronicle_app/Contents/Info.plist" 2>/dev/null || true)"
+        [[ -n "$chronicle_host" ]] || chronicle_host="${chronicle_app:t:r}"
+    fi
+
+    local recording_root="${TMPDIR%/}/chronicle/screen_recording" newest_frame="" now modified
+    local -a frames
+    frames=("$recording_root"/*-latest.jpg(N.om))
+    if (( ${#frames} > 0 )); then
+        newest_frame="${frames[1]}"
+        modified="$(/usr/bin/stat -f '%m' "$newest_frame" 2>/dev/null || true)"
+        now="$(/bin/date '+%s')"
+        [[ "$modified" == <1-> && "$now" == <1-> ]] && frame_age=$(( now - modified ))
+    fi
+
+    local rollback_count
+    rollback_count="$(discoverable_rollback_count)"
+
+    # Declared before the loop, not inside it: a bare `local` on a name that is
+    # already local displays its current value, which printed the internals of
+    # this scan into the status output.
+    local browser owner_home manifest binary owner owner_prose
+    local -a browser_rows browser_lines
+    for browser in ${(ko)BROWSER_HOST_MANIFEST_DIRS}; do
+        manifest="${BROWSER_HOST_MANIFEST_DIRS[$browser]}/$BROWSER_HOST_MANIFEST_NAME"
+        [[ -f "$manifest" ]] || continue
+        binary="$(browser_host_manifest_binary "$manifest")"
+        owner_home=""
+        if [[ -z "$binary" ]]; then
+            owner="unreadable registration"
+            owner_prose="$owner"
+        elif owner_home="$(browser_host_home_from_binary "$binary")"; then
+            owner="$(browser_host_owner_label "$owner_home")"
+            owner_prose="$(browser_host_owner_label "$owner_home" 1)"
+            [[ -x "$binary" ]] || owner_prose="$owner_prose (host binary missing)"
+        else
+            owner="unrecognised host at $binary"
+            owner_prose="$owner"
+            owner_home=""
+        fi
+        browser_rows+=("$browser	$owner	$owner_home	$manifest")
+        browser_lines+=("Browser extension host: $browser belongs to $owner_prose")
+    done
+
+    if (( porcelain )); then
+        printf 'computer-use\t%s\n' "$computer_state"
+        printf 'chronicle\t%s\t%s\t%s\t%s\n' \
+            "$chronicle_state" "$chronicle_host" "$chronicle_app" "$frame_age"
+        printf 'rollbacks\t%s\n' "$rollback_count"
+        printf 'in-app-browser\tunavailable-in-instances\n'
+        local row
+        for row in "${browser_rows[@]}"; do
+            printf 'browser-host\t%s\n' "$row"
+        done
+        # The trailing field says whether this instance has a browser extension
+        # host of its own yet, which is what decides whether it can be handed
+        # the registration. An instance that has never run has none.
+        local dir name app claimable
+        for dir in "$INSTANCES_ROOT"/*(N/); do
+            is_instance_dir "$dir" || continue
+            name="$(config_value "$dir" DOPPEL_DISPLAY_NAME)"
+            app="$(app_path_for "$dir")"
+            claimable=no
+            browser_host_binary_for_home "$(config_value "$dir" DOPPEL_CODEX_HOME)" \
+                >/dev/null 2>&1 && claimable=yes
+            printf 'instance\t%s\t%s\t%s\t%s\t%s\n' "${dir:t}" "$name" "$app" \
+                "$(config_value "$dir" DOPPEL_BUNDLE_ID)" "$claimable"
+        done
+        return 0
+    fi
+
+    print -r -- "Computer Use: $computer_state"
+    if [[ "$chronicle_state" == "running" ]]; then
+        print -r -- "Chronicle: shared by $chronicle_host (latest frame ${frame_age}s ago)"
+    else
+        print -r -- "Chronicle: stopped"
+    fi
+    print -r -- "Discoverable rollback apps: $rollback_count"
+    print -r -- "In-app browser: unavailable in managed instances (needs an OpenAI-signed app)"
+    if (( ${#browser_lines} == 0 )); then
+        print -r -- "Browser extension host: no ChatGPT registration found in any Chromium browser"
+    else
+        print -rl -- "${browser_lines[@]}"
+    fi
+}
+
+cmd_native_tools() {
+    local action="${1:-status}"
+    (( $# > 0 )) && shift
+    case "$action" in
+        status)
+            local porcelain=0
+            if [[ $# -eq 1 && "$1" == "--porcelain" ]]; then
+                porcelain=1
+            elif [[ $# -ne 0 ]]; then
+                die "usage: doppel native-tools status [--porcelain]"
+            fi
+            native_tools_status "$porcelain"
+            ;;
+        repair)
+            [[ $# -eq 0 ]] || die "usage: doppel native-tools repair"
+            local repaired
+            repaired="$(repair_rollback_discovery)"
+            print -r -- "repaired $repaired stored rollback app(s); active instances were not changed"
+            native_tools_status 0
+            ;;
+        claim-browser)
+            local claim_only=""
+            if [[ "${1:-}" == --browser ]]; then
+                [[ -n "${2:-}" ]] || die "usage: doppel native-tools claim-browser [--browser <Chrome|Edge|Chromium|Brave>] <name>"
+                claim_only="$2"; shift 2
+            fi
+            [[ $# -eq 1 && -n "$1" ]] || \
+                die "usage: doppel native-tools claim-browser [--browser <Chrome|Edge|Chromium|Brave>] <name>"
+            cmd_native_tools_claim_browser "$1" "$claim_only"
+            ;;
+        *) die "usage: doppel native-tools {status [--porcelain]|repair|claim-browser [--browser <name>] <name>}" ;;
+    esac
+}
+
 # Rollback copies are whole app bundles, about 1.4GB each, and one is kept
 # every time an instance is rebuilt — which a vendor update does on its own.
 # Nothing used to remove them, so they simply accumulated.
@@ -1258,6 +1708,7 @@ case "${1:-}" in
     remove) shift; cmd_remove "$@" ;;
     update) shift; cmd_update "$@" ;;
     permissions) shift; cmd_permissions "$@" ;;
+    native-tools) shift; cmd_native_tools "$@" ;;
     prune) shift; [[ $# -le 1 ]] || die "usage: doppel prune [<name>]"; cmd_prune "${1:-}" ;;
-    *) die "usage: doppel {create|list|launch|rebuild|edit|remove|update|permissions|prune} ..." ;;
+    *) die "usage: doppel {create|list|launch|rebuild|edit|remove|update|permissions|native-tools|prune} ..." ;;
 esac

@@ -203,6 +203,38 @@ check "prune keeps one rollback" \
     "$(/bin/ls -d "$BACKUPS"/*.rollback(N/) 2>/dev/null | /usr/bin/wc -l | /usr/bin/tr -d ' ')" "1"
 
 print -r -- ""
+print -r -- "stored rollback apps do not appear as duplicate installed apps"
+DISCOVERABLE="$SCRATCH/native-tools/state/com.example.native/Backups/Old.app.rollback"
+VENDOR_BACKUP="$SCRATCH/native-tools/updates/Backups/ChatGPT.app"
+/bin/mkdir -p "$DISCOVERABLE/Contents"
+/usr/bin/plutil -create xml1 "$DISCOVERABLE/Contents/Info.plist"
+/usr/bin/plutil -insert CFBundleIdentifier -string com.example.native \
+    "$DISCOVERABLE/Contents/Info.plist"
+/bin/mkdir -p "$VENDOR_BACKUP/Contents"
+/usr/bin/plutil -create xml1 "$VENDOR_BACKUP/Contents/Info.plist"
+/usr/bin/plutil -insert CFBundleIdentifier -string com.openai.codex \
+    "$VENDOR_BACKUP/Contents/Info.plist"
+run_isolated native-tools native-tools repair
+[[ -f "$DISCOVERABLE/Contents/Info.plist.doppel-rollback" ]] \
+    && pass "repair hides the signed plist from app discovery" \
+    || fail "repair hides the signed plist from app discovery" "the plist stayed in bundle position"
+[[ ! -e "$DISCOVERABLE/Contents/Info.plist" ]] \
+    && pass "the stored directory is no longer an application bundle" \
+    || fail "the stored directory is no longer an application bundle" "Info.plist is still discoverable"
+[[ -f "$SCRATCH/native-tools/updates/.Backups/ChatGPT.app/Contents/Info.plist" ]] \
+    && pass "the protected primary rollback moves whole into hidden storage" \
+    || fail "the protected primary rollback moves whole into hidden storage" "the vendor bundle did not move intact"
+run_isolated native-tools native-tools status --porcelain
+[[ "$OUT" == *$'rollbacks\t0'* ]] \
+    && pass "native-tool status confirms app discovery is clean" \
+    || fail "native-tool status confirms app discovery is clean" "got: $OUT"
+/bin/mv "$DISCOVERABLE/Contents/Info.plist.doppel-rollback" \
+    "$DISCOVERABLE/Contents/Info.plist"
+check "the original identifier is byte-for-byte restorable" \
+    "$(/usr/bin/plutil -extract CFBundleIdentifier raw "$DISCOVERABLE/Contents/Info.plist")" \
+    "com.example.native"
+
+print -r -- ""
 print -r -- "data the instance does not own is never purged"
 ORIGINAL_PROFILE="$(config_field "$DIR" DOPPEL_PROFILE_ROOT)"
 for guarded in "$HOME" "$HOME/Documents" "$HOME/.codex" "$HOME/Library/Application Support/Codex"; do
@@ -263,6 +295,146 @@ if /usr/bin/pgrep -f "${APP}/Contents/MacOS/" >/dev/null 2>&1; then
 else
     pass "a closed instance stays closed"
 fi
+
+print -r -- ""
+print -r -- "claiming the browser extension host moves only the path it is told to"
+# Against a throwaway browser-support root, so a real Chrome profile is never
+# written to. The instance needs an extension host on disk to be claimable,
+# which is what a launched instance would have installed itself.
+BROWSER_ROOT="$SCRATCH/browser-support"
+CLAIM_HOME="$SCRATCH/codex-claim"
+CLAIM_HOST="$CLAIM_HOME/plugins/cache/openai-bundled/chrome/latest/extension-host/macos/arm64"
+/bin/mkdir -p "$CLAIM_HOST"
+: > "$CLAIM_HOST/ChatGPT for Chrome"
+/bin/chmod 755 "$CLAIM_HOST/ChatGPT for Chrome"
+
+# Chrome and Edge both, because "Microsoft Edge" is the directory with a space
+# in it and so the one that would catch a missing quote.
+write_host_manifest() {
+    /bin/mkdir -p "${1:h}"
+    /bin/cat > "$1" <<JSON
+{
+  "allowed_origins": [ "chrome-extension://hehggadaopoacecdllhhajmbjkdcmajg/" ],
+  "description": "ChatGPT browser native messaging host",
+  "name": "com.openai.codexextension",
+  "path": "$HOME/.codex-someone-else/plugins/cache/openai-bundled/chrome/latest/extension-host/macos/arm64/ChatGPT for Chrome",
+  "type": "stdio"
+}
+JSON
+}
+CLAIM_MANIFEST="$BROWSER_ROOT/Google/Chrome/NativeMessagingHosts/com.openai.codexextension.json"
+CLAIM_MANIFEST_EDGE="$BROWSER_ROOT/Microsoft Edge/NativeMessagingHosts/com.openai.codexextension.json"
+write_host_manifest "$CLAIM_MANIFEST"
+write_host_manifest "$CLAIM_MANIFEST_EDGE"
+
+# Same capture contract as run_real, plus the per-run browser root this feature
+# needs, so these cases assert on exit status and not just on wording.
+run_claim() {
+    OUT="$(DOPPEL_BROWSER_SUPPORT_ROOT="$1" "$CLI" "${@:2}" 2>&1)"
+    STATUS=$?
+    return 0
+}
+manifest_field() {
+    /usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2"
+}
+
+CLAIM_DIR="$DOPPEL_DIR/instances/$SLUG"
+set_codex_home() {
+    write_config_file "$1" \
+        "$(config_field "$1" DOPPEL_DISPLAY_NAME)" \
+        "$(config_field "$1" DOPPEL_BUNDLE_ID)" \
+        "$(config_field "$1" DOPPEL_URL_SCHEME)" \
+        "$(config_field "$1" DOPPEL_PROFILE_ROOT)" \
+        "$2" \
+        "$(config_field "$1" DOPPEL_TINT)"
+}
+CLAIM_SAVED_HOME="$(config_field "$CLAIM_DIR" DOPPEL_CODEX_HOME)"
+set_codex_home "$CLAIM_DIR" "$CLAIM_HOME"
+
+run_claim "$BROWSER_ROOT" native-tools claim-browser "$NAME Renamed"
+check "claiming succeeds" "$STATUS" "0"
+[[ "$OUT" == *"claimed Chrome"* && "$OUT" == *"claimed Edge"* ]] && \
+    pass "the claim reports every browser it moved" \
+    || fail "the claim reports every browser it moved" "got: $OUT"
+check "the path now points at this instance's own host" \
+    "$(manifest_field "$CLAIM_MANIFEST" path)" "$CLAIM_HOST/ChatGPT for Chrome"
+check "a browser directory with a space in it is rewritten too" \
+    "$(manifest_field "$CLAIM_MANIFEST_EDGE" path)" "$CLAIM_HOST/ChatGPT for Chrome"
+check "the vendor's own host name is left alone" \
+    "$(manifest_field "$CLAIM_MANIFEST" name)" "com.openai.codexextension"
+check "and so are the origins it allows" \
+    "$(/usr/bin/python3 -c 'import json,sys; print(",".join(json.load(open(sys.argv[1]))["allowed_origins"]))' "$CLAIM_MANIFEST")" \
+    "chrome-extension://hehggadaopoacecdllhhajmbjkdcmajg/"
+
+print -r -- ""
+print -r -- "status names the instance that holds the extension host"
+# Asserted while the instance still owns the claim, and on the owner column
+# itself: the attribution is the only part of this that has to be right.
+run_claim "$BROWSER_ROOT" native-tools status --porcelain
+[[ "$OUT" == *$'in-app-browser\tunavailable-in-instances'* ]] && \
+    pass "the in-app browser is reported unavailable in instances" \
+    || fail "the in-app browser is reported unavailable in instances" "got: $OUT"
+check "the owner column names this instance" \
+    "$(print -r -- "$OUT" | /usr/bin/awk -F'\t' '$1 == "browser-host" && $2 == "Chrome" {print $3}')" \
+    "$NAME Renamed"
+
+print -r -- ""
+print -r -- "one browser can be assigned without disturbing the others"
+# This is what lets two instances browse at the same time, one per browser.
+write_host_manifest "$CLAIM_MANIFEST"
+write_host_manifest "$CLAIM_MANIFEST_EDGE"
+run_claim "$BROWSER_ROOT" native-tools claim-browser --browser Chrome "$NAME Renamed"
+check "a single-browser claim succeeds" "$STATUS" "0"
+[[ "$OUT" == *"claimed Chrome"* && "$OUT" != *"claimed Edge"* ]] && \
+    pass "only the named browser is reported" \
+    || fail "only the named browser is reported" "got: $OUT"
+check "the named browser moved" \
+    "$(manifest_field "$CLAIM_MANIFEST" path)" "$CLAIM_HOST/ChatGPT for Chrome"
+check "and the other one was left where it was" \
+    "$(manifest_field "$CLAIM_MANIFEST_EDGE" path)" \
+    "$HOME/.codex-someone-else/plugins/cache/openai-bundled/chrome/latest/extension-host/macos/arm64/ChatGPT for Chrome"
+
+run_claim "$BROWSER_ROOT" native-tools claim-browser --browser Safari "$NAME Renamed"
+check "a browser Doppel does not know is refused" "$STATUS" "1"
+[[ "$OUT" == *"unknown browser: Safari"* && "$OUT" == *"Brave, Chrome, Chromium, Edge"* ]] && \
+    pass "and the refusal lists the ones it does know, in order" \
+    || fail "and the refusal lists the ones it does know, in order" "got: $OUT"
+
+print -r -- ""
+print -r -- "claiming is idempotent and never invents a registration"
+# From a state where every registration already belongs to this instance, so a
+# second claim has to report nothing moved at all.
+run_claim "$BROWSER_ROOT" native-tools claim-browser "$NAME Renamed"
+run_claim "$BROWSER_ROOT" native-tools claim-browser "$NAME Renamed"
+check "claiming twice still succeeds" "$STATUS" "0"
+[[ "$OUT" == *"already points at"* && "$OUT" != *claimed* ]] && \
+    pass "claiming twice is a no-op, not a rewrite" \
+    || fail "claiming twice is a no-op, not a rewrite" "got: $OUT"
+
+run_claim "$SCRATCH/no-browser-here" native-tools claim-browser "$NAME Renamed"
+check "a missing registration is an error" "$STATUS" "1"
+[[ "$OUT" == *"no ChatGPT browser-extension registration was found"* ]] && \
+    pass "with no registration installed it says so instead of creating one" \
+    || fail "with no registration installed it says so instead of creating one" "got: $OUT"
+[[ ! -e "$SCRATCH/no-browser-here/Google/Chrome/NativeMessagingHosts/com.openai.codexextension.json" ]] && \
+    pass "and it invents no manifest of its own" \
+    || fail "and it invents no manifest of its own" "one was created"
+
+print -r -- ""
+print -r -- "an unreadable registration is reported, not half-applied in silence"
+write_host_manifest "$CLAIM_MANIFEST"
+print -r -- "not json at all" > "$CLAIM_MANIFEST_EDGE"
+run_claim "$BROWSER_ROOT" native-tools claim-browser "$NAME Renamed"
+check "the command fails" "$STATUS" "1"
+[[ "$OUT" == *"could not be rewritten and were left alone: Edge"* ]] && \
+    pass "it names the registration it could not rewrite" \
+    || fail "it names the registration it could not rewrite" "got: $OUT"
+[[ "$OUT" != *Traceback* ]] && pass "and does not leak a Python traceback" \
+    || fail "and does not leak a Python traceback" "got: $OUT"
+check "the readable one still moved" \
+    "$(manifest_field "$CLAIM_MANIFEST" path)" "$CLAIM_HOST/ChatGPT for Chrome"
+
+set_codex_home "$CLAIM_DIR" "$CLAIM_SAVED_HOME"
 
 print -r -- ""
 print -r -- "$PASSED passed, $FAILED failed"

@@ -53,6 +53,10 @@ bin/doppel create --name "ChatGPT Personal" \
 bin/doppel list
 bin/doppel launch "ChatGPT Personal"
 bin/doppel rebuild "ChatGPT Personal"
+bin/doppel native-tools status
+bin/doppel native-tools repair
+bin/doppel native-tools claim-browser "ChatGPT Personal"
+bin/doppel native-tools claim-browser --browser Edge "ChatGPT Work"
 bin/doppel update check
 bin/doppel update prepare
 bin/doppel update apply
@@ -63,6 +67,18 @@ bin/doppel remove "ChatGPT Personal" --purge-data    # data to the Trash too
 bin/doppel prune                                     # drop old rollback copies
 bin/doppel prune "ChatGPT Personal"                  # just this instance's
 ```
+
+`rebuild` opens the rebuilt instance when it succeeds, even if the instance was
+closed before the command began. Set `DOPPEL_RELAUNCH=0` for maintenance or QA
+that should rebuild without opening the app. The menu labels this action
+**Rebuild & Reopen**.
+
+If a current OpenAI release validates only inside its notarized disk image and
+the byte-identical `/Applications/ChatGPT.app` fails the older standalone
+strict-signature check, Doppel can rebuild from the exact-build verified image
+preserved at `updates/Official/<build>/ChatGPT.dmg`. It mounts that image
+read-only for the rebuild, applies the same bundle ID, build, Team ID and strict
+nested-signature checks, and unmounts it before reopening the instance.
 
 `edit` renames an instance, changes its icon colour, or both, and reopens the
 instance afterwards if it was running, so the change is visible immediately.
@@ -91,6 +107,14 @@ rebuilds on its own, so `prune` exists to drop the ones you no longer need. It
 keeps the most recent rollback per instance (`DOPPEL_KEEP_BACKUPS` to change
 that) and clears any staging left by a build that died. Rebuilds prune as they
 go, so this is only needed to reclaim what earlier versions left behind.
+
+Stored rollbacks are deliberately kept out of normal macOS app discovery. For
+locally signed instances, Doppel moves the signed `Contents/Info.plist` aside
+without editing it; restoration moves the exact file back before verification.
+The untouched vendor-primary rollback stays whole under a hidden `.Backups`
+directory because macOS App Management can prohibit changes inside vendor code.
+`native-tools repair` applies those reversible migrations to rollbacks created
+by older Doppel versions; it does not change active apps or account data.
 
 `create` clones the primary app, tints its real icon with the colour you chose,
 installs the instance into `~/Applications`, and stores the instance definition in
@@ -127,6 +151,46 @@ Doppel itself, and checks again every five minutes and after a rebuild. Managed
 apps no longer raise a broad permission assistant at launch. Optional access is
 requested either by ChatGPT when a feature needs it or by selecting that one row
 in Doppel.
+
+### Native tools
+
+The menu's **Native Tools** section reports whether the shared Computer Use
+service is ready, which running app currently owns Chronicle's shared recorder,
+the age of its latest screen frame, and whether an old rollback is still being
+discovered as a duplicate app.
+
+`doppel native-tools status` additionally reports which app owns each ChatGPT
+browser-extension registration. The in-app browser never works in a managed
+instance (see the limitation below), so the extension is an instance's only
+route to a real browser, and it arrives through one native-messaging
+registration per Chromium browser. Every ChatGPT app rewrites that registration
+to its own extension host while starting, so the owner is whichever app launched
+last.
+
+Sharing one browser between instances does **not** require owning the
+registration. It only decides whose extension host Chrome launches; once that
+host is running, its socket is listed in a machine-wide registry that every
+managed instance can read, so several instances can drive the same Chrome at the
+same time. They share its tabs, and the browser API's tab claiming is what keeps
+two agents off the same one. That coordination is the vendor's, not Doppel's:
+ChatGPT builds the environment its browser client runs in from scratch, so none
+of Doppel's variables reach it and there is no window or profile preference for
+Doppel to pin. Giving two instances different browsers is the only separation
+Doppel can actually enforce.
+
+Ownership still matters when it is wrong: if it points at a runtime whose host
+binary is missing, Chrome launches nothing and no instance gets a browser, and if
+it points at a stale runtime, every instance uses that older host.
+`native-tools claim-browser <name>` moves it, changing only the path inside the
+vendor's existing registration and leaving its host name and allowed origins
+untouched. Reconnect the extension afterwards. Each browser is separate, so
+`--browser <name>` moves one without disturbing the rest; the menu lists every
+registration with its current owner and assigns them the same way. A claim holds
+until another managed app launches and takes it back, which `status` will show. `doppel native-tools status --porcelain` exposes
+the same evidence plus each managed instance's exact installed path and bundle
+identifier for diagnostics. Computer Use can run while several managed instances
+are open; agents should use those exact active paths when a display name is not
+unique.
 
 ### Dependencies
 
@@ -224,6 +288,21 @@ otherwise ask `codesign` to sign with it.
   recently. Doppel refuses a rebuild if a vendor release changes either
   interception point and repairs stale shared-handler ownership from old
   builds.
+- **The in-app browser cannot work in an instance, and this one is permanent.**
+  ChatGPT gates its browser socket with a native peer check that requires the
+  connecting process, its parent *and* its grandparent to each carry OpenAI's
+  Team ID and an allow-listed signing identifier. In an instance the first two
+  are the vendor's own `node_repl` and `codex`, but the grandparent is the
+  instance's main executable, which had to be re-signed locally to carry its own
+  bundle identifier and so has no Team ID at all. Requesting it fails with
+  `Browser is not available: iab`, and the app records
+  `rejected socket peer reason=missing-code-signing-identity` in
+  `~/Library/Logs/com.openai.codex/`. Nothing short of OpenAI's signing key
+  satisfies that check, so a local identity from `doppel-signing` does not help
+  either. Use the browser extension instead: its check stops at the parent
+  process, so browser control works normally in an instance, and several
+  instances can share one browser. Doppel reports both facts in
+  `native-tools status` rather than leaving them to be rediscovered.
 - Instances are unsigned by Apple standards (ad hoc or self-signed), so Gatekeeper
   assessment (`spctl`) rejects them. They launch fine because they are built
   locally and never quarantined.

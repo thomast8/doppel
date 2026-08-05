@@ -11,7 +11,7 @@
 set -u
 setopt PIPE_FAIL
 
-readonly ENGINE_VERSION="20"
+readonly ENGINE_VERSION="21"
 
 # When this engine copy runs from inside an installed bundle, environment
 # overrides are ignored: otherwise a same-uid process could point a
@@ -56,6 +56,7 @@ readonly ICON_ICNS="$ASSET_ROOT/assets/icon.icns"
 readonly ICON_PNG="$ASSET_ROOT/assets/icon.png"
 readonly LOG_FILE="$STATE_ROOT/engine.log"
 readonly LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+readonly ROLLBACK_INFO_NAME="Info.plist.doppel-rollback"
 
 # Ad-hoc signatures change on every rebuild, so keychain "Always Allow" grants
 # die with each vendor update. If the user has created a stable local signing
@@ -124,6 +125,31 @@ record_pinned_requirement() {
     print -r -- "identifier \"$DOPPEL_BUNDLE_ID\" and certificate leaf H\"$SIGN_LEAF_SHA1\"" > "$pin" || \
         fail_closed "Recording the pinned requirement failed."
     /bin/chmod 600 "$pin"
+}
+
+# A stored rollback with Contents/Info.plist still looks like an installed app
+# to Launch Services and Computer Use. Move that signed file aside without
+# editing it; moving the exact bytes back before restoration recovers the
+# original bundle layout and code seal.
+mask_rollback_app() {
+    local app="$1" info hidden
+    info="$app/Contents/Info.plist"
+    hidden="$app/Contents/$ROLLBACK_INFO_NAME"
+    [[ -d "$app" ]] || return 1
+    [[ -f "$hidden" && ! -e "$info" ]] && return 0
+    [[ -f "$info" && ! -e "$hidden" ]] || return 1
+    "$LSREGISTER" -u "$app" >/dev/null 2>&1 || true
+    /bin/mv "$info" "$hidden"
+}
+
+unmask_rollback_app() {
+    local app="$1" info hidden
+    info="$app/Contents/Info.plist"
+    hidden="$app/Contents/$ROLLBACK_INFO_NAME"
+    [[ -d "$app" ]] || return 1
+    [[ -f "$info" && ! -e "$hidden" ]] && return 0
+    [[ -f "$hidden" && ! -e "$info" ]] || return 1
+    /bin/mv "$hidden" "$info"
 }
 
 # A rollback is a whole copy of the app. One is kept every time an instance is
@@ -558,10 +584,14 @@ launch_instance() {
     backup="$backup_root/$DOPPEL_DISPLAY_NAME.$timestamp.$$.app.rollback"
     if [[ -e "$app" ]]; then
         /bin/mv "$app" "$backup" || fail_closed "The existing instance could not be preserved as a rollback backup."
+        if ! mask_rollback_app "$backup"; then
+            /bin/mv "$backup" "$app" 2>/dev/null || true
+            fail_closed "The previous app could not be hidden safely in rollback storage; it was restored."
+        fi
     fi
     if ! /bin/mv "$staging" "$app"; then
         if [[ -e "$backup" ]]; then
-            if /bin/mv "$backup" "$app" 2>/dev/null; then
+            if unmask_rollback_app "$backup" && /bin/mv "$backup" "$app" 2>/dev/null; then
                 fail_closed "Installing the rebuilt instance failed; the previous app was restored."
             else
                 fail_closed "Installing the rebuilt instance failed AND the previous app could not be restored; recover it manually from $backup"
@@ -570,7 +600,6 @@ launch_instance() {
         fail_closed "Installing the rebuilt instance failed."
     fi
 
-    [[ -e "$backup" ]] && "$LSREGISTER" -u "$backup" >/dev/null 2>&1 || true
     "$LSREGISTER" -f "$app" >/dev/null 2>&1 || true
     # A pre-fix clone may have left an explicit preference claiming the
     # vendor's codex:// scheme. New clones never register that scheme, and the

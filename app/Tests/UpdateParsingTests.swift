@@ -80,6 +80,55 @@ import Foundation
             permission: "unknown-capability", status: "not-requested")
         expect(unknown.action == .unavailable && unknown.settingsURL == nil,
                "unknown capabilities must never be forwarded to the launcher")
+
+        let nativeTools = NativeToolsStatus.parse("""
+            computer-use\tready
+            chronicle\trunning\tChatGPT Veridue\t/Users/me/Applications/ChatGPT Veridue.app\t12
+            rollbacks\t3
+            in-app-browser\tunavailable-in-instances
+            browser-host\tChrome\tChatGPT Personal\t/Users/me/.codex-secondary\t/Users/me/Chrome.json
+            browser-host\tEdge\tChatGPT Personal\t/Users/me/.codex-secondary\t/Users/me/Edge.json
+            instance\tpersonal\tChatGPT Personal\t/Users/me/Applications/ChatGPT Personal.app\tcom.openai.codex.secondary\tyes
+            instance\tfresh\tChatGPT Fresh\t/Users/me/Applications/ChatGPT Fresh.app\tcom.openai.codex.fresh\tno
+            """)
+        expect(nativeTools?.computerUse == .ready, "Computer Use readiness should parse")
+        expect(nativeTools?.chronicleHost == "ChatGPT Veridue", "shared Chronicle host should parse")
+        expect(nativeTools?.chronicleIsFresh == true, "a recent Chronicle frame should be fresh")
+        expect(nativeTools?.discoverableRollbacks == 3, "discoverable rollback count should parse")
+        expect(nativeTools?.inAppBrowserUnavailable == true,
+               "the in-app browser should report as unavailable in instances")
+        expect(nativeTools?.browserHosts.count == 2, "every browser registration should parse")
+        expect(nativeTools?.sharedBrowserOwner == "ChatGPT Personal",
+               "browsers that agree on an owner should report it once")
+        expect(nativeTools?.instancesWithBrowserHost == ["ChatGPT Personal"],
+               "only an instance with its own extension host can be offered the registration")
+        expect(nativeTools?.browserOwnerNames == ["ChatGPT Personal"],
+               "the owner column should resolve to an instance name")
+
+        // Two instances sharing one CODEX_HOME are both named in the column, and
+        // neither should then be offered the registration it already holds.
+        let shared = NativeToolsStatus.parse(
+            "browser-host\tChrome\tChatGPT Veridue, ChatGPT Spare\t/Users/me/.codex\t/Users/me/Chrome.json")
+        expect(shared?.browserOwnerNames == ["ChatGPT Veridue", "ChatGPT Spare"],
+               "every instance sharing the owning runtime should be recognised")
+
+        // A registration rewritten for one browser but not another is a real
+        // state the menu has to distinguish from agreement.
+        let split = NativeToolsStatus.parse("""
+            computer-use\tidle
+            browser-host\tChrome\tChatGPT Personal\t/Users/me/.codex-secondary\t/Users/me/Chrome.json
+            browser-host\tEdge\tChatGPT Veridue\t/Users/me/.codex\t/Users/me/Edge.json
+            """)
+        expect(split?.sharedBrowserOwner == nil, "browsers that disagree should not report one owner")
+        expect(split?.browserHosts.count == 2, "both sides of a split should be kept")
+        expect(split?.inAppBrowserUnavailable == false,
+               "an absent in-app-browser row should not claim unavailability")
+
+        // A row a newer CLI adds must not make the whole status unreadable.
+        let future = NativeToolsStatus.parse("computer-use\tready\nsome-new-row\twhatever\n")
+        expect(future?.computerUse == .ready, "an unknown row should be skipped, not fatal")
+        expect(NativeToolsStatus.parse("nothing-recognizable\there") == nil,
+               "output with no known rows should not parse")
         print("Update and permission parsing tests passed")
     }
 }

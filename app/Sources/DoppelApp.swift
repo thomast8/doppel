@@ -204,7 +204,7 @@ struct MenuContent: View {
                 Divider()
                 Button("Launch") { store.launch(instance) }
                     .disabled(store.busy.contains(instance.id))
-                Button("Rebuild") { store.rebuild(instance) }
+                Button("Rebuild & Reopen") { store.rebuild(instance) }
                     .disabled(store.busy.contains(instance.id))
                 Button("Rename or Recolour…") {
                     openWindow(id: "edit-instance", value: instance.id)
@@ -232,6 +232,100 @@ struct MenuContent: View {
             }
         } else if store.checkingPermissions {
             Text("Checking Managed App Permissions…")
+        }
+        Menu("Native Tools") {
+            if let status = store.nativeToolsStatus {
+                Label(status.computerUse == .ready
+                      ? "Computer Use — Ready"
+                      : "Computer Use — Available on demand",
+                      systemImage: status.computerUse == .ready
+                          ? "checkmark.circle.fill" : "circle.dotted")
+                if status.chronicle == .running {
+                    Label(status.chronicleIsFresh
+                          ? "Chronicle — Recording"
+                          : "Chronicle — Recording is stale",
+                          systemImage: status.chronicleIsFresh
+                              ? "record.circle.fill" : "exclamationmark.circle")
+                    if !status.chronicleHost.isEmpty {
+                        Text("Shared recorder: \(status.chronicleHost)")
+                    }
+                } else {
+                    Label("Chronicle — Not running", systemImage: "pause.circle")
+                }
+                Divider()
+                // Owning a registration is not what lets an instance browse:
+                // any instance can use a running extension host. It decides
+                // whose host Chrome launches, which matters when that one is
+                // missing or older than the rest.
+                if status.inAppBrowserUnavailable {
+                    Label("In-app browser — Not available in instances",
+                          systemImage: "xmark.circle")
+                    Text("ChatGPT only opens it for an app signed by OpenAI.")
+                }
+                if status.browserHosts.isEmpty {
+                    Label("Browser extension — Not installed", systemImage: "circle.dotted")
+                } else {
+                    // Only instances that already have an extension host of
+                    // their own are offered: the CLI refuses the rest rather
+                    // than pointing the registration at a path that is not
+                    // there, so offering them would be a dead end.
+                    let eligible = store.instances.filter {
+                        $0.installed && status.instancesWithBrowserHost.contains($0.name)
+                    }
+                    let hidden = store.instances.filter {
+                        $0.installed && !status.instancesWithBrowserHost.contains($0.name)
+                    }
+                    // Each browser is assigned on its own, because each has its
+                    // own registration and so two instances can browse at the
+                    // same time in two different browsers.
+                    ForEach(status.browserHosts, id: \.browser) { host in
+                        if eligible.isEmpty {
+                            Label("\(host.browser) — \(host.owner)",
+                                  systemImage: "checkmark.circle.fill")
+                        } else {
+                            Menu("\(host.browser) — \(host.owner)") {
+                                ForEach(eligible) { instance in
+                                    Button(instance.name) {
+                                        store.claimBrowserHost(for: instance, browser: host.browser)
+                                    }
+                                    .disabled(host.ownerNames.contains(instance.name)
+                                              || store.busy.contains("native-tools"))
+                                }
+                            }
+                        }
+                    }
+                    if status.browserHosts.count > 1, !eligible.isEmpty {
+                        Menu("Give Every Browser To") {
+                            ForEach(eligible) { instance in
+                                Button(instance.name) {
+                                    store.claimBrowserHost(for: instance)
+                                }
+                                .disabled(status.browserOwnerNames.contains(instance.name)
+                                          || store.busy.contains("native-tools"))
+                            }
+                        }
+                    }
+                    if !hidden.isEmpty {
+                        Text(hidden.count == 1
+                             ? "\(hidden[0].name) must run once before it can hold one."
+                             : "\(hidden.count) instances must run once before they can hold one.")
+                    }
+                    Text("Any instance can use a running one; this picks whose host starts it.")
+                }
+                Divider()
+                if status.discoverableRollbacks > 0 {
+                    let noun = status.discoverableRollbacks == 1 ? "Entry" : "Entries"
+                    Button("Repair \(status.discoverableRollbacks) Duplicate App \(noun)") {
+                        store.repairNativeTools()
+                    }
+                    .disabled(store.busy.contains("native-tools"))
+                } else {
+                    Label("App discovery — Clean", systemImage: "checkmark.circle.fill")
+                }
+                Text("Managed instances are resolved by exact installed path.")
+            } else {
+                Text(store.checkingNativeTools ? "Checking…" : "Status unavailable")
+            }
         }
         Button("New Instance…") {
             openWindow(id: "create-instance")
