@@ -154,6 +154,117 @@ run_isolated occupied create --name "Occupied" --tint 3B82F6 --install-to "$APPS
     || fail "the app that was there is untouched" "it was replaced"
 
 print -r -- ""
+print -r -- "vendor verification rejects a signature that only looks like the vendor's"
+# The old check searched `codesign -dv` output for TeamIdentifier=<team>. The
+# signing identifier is echoed into that same output, so an ad-hoc signature
+# whose identifier contained the expected line satisfied it, and an ad-hoc
+# signature passes --verify too. No key needed. Both halves are asserted here:
+# the fixture has to keep demonstrating the old bug, or this proves nothing.
+SPOOF="$SCRATCH/Spoof.app"
+/bin/mkdir -p "$SPOOF/Contents"
+/usr/bin/plutil -create xml1 "$SPOOF/Contents/Info.plist"
+/usr/bin/plutil -insert CFBundleIdentifier -string "com.openai.codex" "$SPOOF/Contents/Info.plist"
+/usr/bin/plutil -insert CFBundleVersion -string "1" "$SPOOF/Contents/Info.plist"
+/usr/bin/codesign --force --sign - -i $'com.openai.codex\nTeamIdentifier=2DC432GLL2' \
+    "$SPOOF" >/dev/null 2>&1
+[[ "$(/usr/bin/codesign -dv --verbose=4 "$SPOOF" 2>&1)" == *"TeamIdentifier=2DC432GLL2"* ]] \
+    && pass "the fixture still satisfies the old substring search" \
+    || fail "the fixture still satisfies the old substring search" "it no longer demonstrates the old bug"
+/usr/bin/codesign --verify --deep --strict "$SPOOF" >/dev/null 2>&1 \
+    && pass "and still passes a plain strict verify" \
+    || fail "and still passes a plain strict verify" "the ad-hoc seal no longer verifies"
+if /usr/bin/codesign --verify --deep --strict \
+    -R '=anchor apple generic and identifier "com.openai.codex" and certificate leaf[subject.OU] = "2DC432GLL2"' \
+    "$SPOOF" >/dev/null 2>&1; then
+    fail "the Apple-anchored requirement rejects it" "the spoofed bundle satisfied the requirement"
+else
+    pass "the Apple-anchored requirement rejects it"
+fi
+# Asserting codesign's behaviour is not enough: the point is that Doppel's own
+# vendor check applies it. Drive the real CLI with the spoof as its primary. The
+# appcast is pointed at a closed port so that if the check ever stops rejecting
+# the spoof, this reports the feed error instead and the assertion fails rather
+# than reaching for the network.
+GUARD_OUT="$(DOPPEL_HOME="$SCRATCH/spoof-home" DOPPEL_PRIMARY_APP="$SPOOF" \
+    DOPPEL_APPCAST_URL="http://127.0.0.1:9/unused.xml" \
+    "$CLI" update check 2>&1)"
+[[ "$GUARD_OUT" == *"not valid vendor-signed code"* ]] \
+    && pass "and Doppel's own vendor check refuses the spoofed primary" \
+    || fail "and Doppel's own vendor check refuses the spoofed primary" "got: $GUARD_OUT"
+# The engine keeps its own copy of the requirement, so the CLI passing proves
+# nothing about it: editing only the engine's copy would otherwise pass the
+# suite. Give it the minimum assets its preflight demands, then point it at the
+# spoof.
+ENGINE_DIR="$SCRATCH/engine-probe"
+/bin/mkdir -p "$ENGINE_DIR/bin" "$ENGINE_DIR/assets"
+write_config_file "$ENGINE_DIR" "Engine Probe" "com.example.engine-probe" \
+    "codex-engine-probe" "$SCRATCH/engine-profile" "$SCRATCH/engine-codex" "3B82F6"
+for asset in bin/doppel-launcher bin/doppel-alert bin/doppel-url-handler \
+             patch-deep-link.py assets/icon.icns assets/icon.png; do
+    : > "$ENGINE_DIR/$asset"
+done
+/bin/chmod 755 "$ENGINE_DIR/bin/doppel-launcher"
+GUARD_OUT="$(DOPPEL_NO_ALERT=1 DOPPEL_ASSET_ROOT="$ENGINE_DIR" \
+    DOPPEL_STATE_ROOT="$SCRATCH/engine-state" DOPPEL_PRIMARY_APP="$SPOOF" \
+    /bin/zsh "$REPO_ROOT/engine/doppel-engine.zsh" install "$SCRATCH/EngineProbe.app" 2>&1)"
+[[ "$GUARD_OUT" == *"not Apple-anchored OpenAI-signed code"* ]] \
+    && pass "and the engine's own copy of the check refuses it too" \
+    || fail "and the engine's own copy of the check refuses it too" "got: $GUARD_OUT"
+
+print -r -- ""
+print -r -- "an installed copy ignores the environment overrides it must not honour"
+# This guard sat below the assignments it was meant to protect once already,
+# which made it a no-op that every existing check still passed. --scheme is
+# compared against the primary scheme before anything touches disk, so a leaked
+# DOPPEL_PRIMARY_SCHEME is observable without a network call or a clone.
+GUARD_FIXTURE="$SCRATCH/Doppel.app/Contents/Resources/doppel/bin"
+/bin/mkdir -p "$GUARD_FIXTURE"
+/bin/cp "$CLI" "$GUARD_FIXTURE/doppel"
+/bin/chmod 755 "$GUARD_FIXTURE/doppel"
+# First prove the probe can detect a leak at all: from a checkout path the
+# override is honoured by design, so the collision message must appear.
+GUARD_OUT="$(DOPPEL_HOME="$SCRATCH/guard-checkout" DOPPEL_PRIMARY_SCHEME="codex-spoof" \
+    "$CLI" create --name "Guard Probe" --tint 3B82F6 --scheme codex-spoof \
+    --install-to "$APPS" 2>&1)"
+[[ "$GUARD_OUT" == *"belongs to the primary app"* ]] \
+    && pass "the probe detects a honoured override from a checkout" \
+    || fail "the probe detects a honoured override from a checkout" "got: $GUARD_OUT"
+# Then the real assertion: from an installed bundle path it must be dropped.
+GUARD_OUT="$(DOPPEL_HOME="$SCRATCH/guard-bundle" DOPPEL_PRIMARY_SCHEME="codex-spoof" \
+    "$GUARD_FIXTURE/doppel" create --name "Guard Probe" --tint 3B82F6 --scheme codex-spoof \
+    --install-to "$APPS" 2>&1)"
+[[ "$GUARD_OUT" != *"belongs to the primary app"* ]] \
+    && pass "an installed copy ignores DOPPEL_PRIMARY_SCHEME" \
+    || fail "an installed copy ignores DOPPEL_PRIMARY_SCHEME" "the override leaked through: $GUARD_OUT"
+[[ ! -d "$APPS/Guard Probe.app" ]] && pass "and the probe installed nothing" \
+    || fail "and the probe installed nothing" "$APPS/Guard Probe.app was created"
+# The signing variables matter more than the scheme, and the CLI is the only
+# thing that scrubs them: the engine copy that rebuild and update apply execute
+# lives under instances/<slug>/, which its own guard does not match. A leak
+# there lets a caller choose the certificate that signs a rebuild and have it
+# recorded as that instance's pin. Observed through a stub engine, because the
+# CLI never reads these itself and only passes them on.
+SIGN_HOME="$SCRATCH/sign-home"
+SIGN_DIR="$SIGN_HOME/instances/sign-probe"
+/bin/mkdir -p "$SIGN_DIR"
+write_config_file "$SIGN_DIR" "Sign Probe" "com.example.sign-probe" \
+    "codex-sign-probe" "$SCRATCH/sign-profile" "$SCRATCH/sign-codex" "3B82F6"
+print -r -- "$SCRATCH/sign-apps" > "$SIGN_DIR/install-root"
+# Exits non-zero so cmd_edit reports the stub's output instead of swallowing it.
+{
+    print -r -- "#!/bin/zsh"
+    print -r -- 'print -r -- "leaked-sha1:${DOPPEL_SIGN_LEAF_SHA1:-none}"'
+    print -r -- "exit 1"
+} > "$SIGN_DIR/doppel-engine.zsh"
+/bin/chmod 755 "$SIGN_DIR/doppel-engine.zsh"
+GUARD_OUT="$(DOPPEL_HOME="$SIGN_HOME" \
+    DOPPEL_SIGN_LEAF_SHA1="DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF" \
+    "$GUARD_FIXTURE/doppel" edit "Sign Probe" --rename "Sign Probe Renamed" 2>&1)"
+[[ "$GUARD_OUT" == *"leaked-sha1:none"* ]] \
+    && pass "an installed copy scrubs DOPPEL_SIGN_LEAF_SHA1 before the engine runs" \
+    || fail "an installed copy scrubs DOPPEL_SIGN_LEAF_SHA1 before the engine runs" "got: $GUARD_OUT"
+
+print -r -- ""
 print -r -- "building the one instance the rest of the checks share"
 if ! "$CLI" create --name "$NAME" --tint A855F7 --install-to "$APPS" >/dev/null 2>&1; then
     print -u2 -r -- "  ✗ create failed; aborting"
