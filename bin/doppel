@@ -987,6 +987,9 @@ cmd_update_apply() {
     fi
     /bin/rm -f "$restart_manifest"
     UPDATE_ABORT_MANIFEST=""
+    # The installed app was moved out of $prepared_root; update.plist stays
+    # behind and would make a bare rmdir fail silently every time.
+    /bin/rm -f "$prepared_root/update.plist"
     /bin/rmdir "$prepared_root" 2>/dev/null || true
     release_update_lock
     trap - EXIT INT TERM
