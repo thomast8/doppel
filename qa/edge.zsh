@@ -191,6 +191,25 @@ GUARD_OUT="$(DOPPEL_HOME="$SCRATCH/spoof-home" DOPPEL_PRIMARY_APP="$SPOOF" \
 [[ "$GUARD_OUT" == *"not valid vendor-signed code"* ]] \
     && pass "and Doppel's own vendor check refuses the spoofed primary" \
     || fail "and Doppel's own vendor check refuses the spoofed primary" "got: $GUARD_OUT"
+# The engine keeps its own copy of the requirement, so the CLI passing proves
+# nothing about it: editing only the engine's copy would otherwise pass the
+# suite. Give it the minimum assets its preflight demands, then point it at the
+# spoof.
+ENGINE_DIR="$SCRATCH/engine-probe"
+/bin/mkdir -p "$ENGINE_DIR/bin" "$ENGINE_DIR/assets"
+write_config_file "$ENGINE_DIR" "Engine Probe" "com.example.engine-probe" \
+    "codex-engine-probe" "$SCRATCH/engine-profile" "$SCRATCH/engine-codex" "3B82F6"
+for asset in bin/doppel-launcher bin/doppel-alert bin/doppel-url-handler \
+             patch-deep-link.py assets/icon.icns assets/icon.png; do
+    : > "$ENGINE_DIR/$asset"
+done
+/bin/chmod 755 "$ENGINE_DIR/bin/doppel-launcher"
+GUARD_OUT="$(DOPPEL_NO_ALERT=1 DOPPEL_ASSET_ROOT="$ENGINE_DIR" \
+    DOPPEL_STATE_ROOT="$SCRATCH/engine-state" DOPPEL_PRIMARY_APP="$SPOOF" \
+    /bin/zsh "$REPO_ROOT/engine/doppel-engine.zsh" install "$SCRATCH/EngineProbe.app" 2>&1)"
+[[ "$GUARD_OUT" == *"not Apple-anchored OpenAI-signed code"* ]] \
+    && pass "and the engine's own copy of the check refuses it too" \
+    || fail "and the engine's own copy of the check refuses it too" "got: $GUARD_OUT"
 
 print -r -- ""
 print -r -- "an installed copy ignores the environment overrides it must not honour"
@@ -219,6 +238,31 @@ GUARD_OUT="$(DOPPEL_HOME="$SCRATCH/guard-bundle" DOPPEL_PRIMARY_SCHEME="codex-sp
     || fail "an installed copy ignores DOPPEL_PRIMARY_SCHEME" "the override leaked through: $GUARD_OUT"
 [[ ! -d "$APPS/Guard Probe.app" ]] && pass "and the probe installed nothing" \
     || fail "and the probe installed nothing" "$APPS/Guard Probe.app was created"
+# The signing variables matter more than the scheme, and the CLI is the only
+# thing that scrubs them: the engine copy that rebuild and update apply execute
+# lives under instances/<slug>/, which its own guard does not match. A leak
+# there lets a caller choose the certificate that signs a rebuild and have it
+# recorded as that instance's pin. Observed through a stub engine, because the
+# CLI never reads these itself and only passes them on.
+SIGN_HOME="$SCRATCH/sign-home"
+SIGN_DIR="$SIGN_HOME/instances/sign-probe"
+/bin/mkdir -p "$SIGN_DIR"
+write_config_file "$SIGN_DIR" "Sign Probe" "com.example.sign-probe" \
+    "codex-sign-probe" "$SCRATCH/sign-profile" "$SCRATCH/sign-codex" "3B82F6"
+print -r -- "$SCRATCH/sign-apps" > "$SIGN_DIR/install-root"
+# Exits non-zero so cmd_edit reports the stub's output instead of swallowing it.
+{
+    print -r -- "#!/bin/zsh"
+    print -r -- 'print -r -- "leaked-sha1:${DOPPEL_SIGN_LEAF_SHA1:-none}"'
+    print -r -- "exit 1"
+} > "$SIGN_DIR/doppel-engine.zsh"
+/bin/chmod 755 "$SIGN_DIR/doppel-engine.zsh"
+GUARD_OUT="$(DOPPEL_HOME="$SIGN_HOME" \
+    DOPPEL_SIGN_LEAF_SHA1="DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF" \
+    "$GUARD_FIXTURE/doppel" edit "Sign Probe" --rename "Sign Probe Renamed" 2>&1)"
+[[ "$GUARD_OUT" == *"leaked-sha1:none"* ]] \
+    && pass "an installed copy scrubs DOPPEL_SIGN_LEAF_SHA1 before the engine runs" \
+    || fail "an installed copy scrubs DOPPEL_SIGN_LEAF_SHA1 before the engine runs" "got: $GUARD_OUT"
 
 print -r -- ""
 print -r -- "building the one instance the rest of the checks share"

@@ -251,10 +251,11 @@ Things a reviewer should know are still open, rather than discovering them.
 - `app/Tests/UpdateParsingTests.swift` exists but is not wired to a test target, so
   `swift test` reports no tests. The zsh QA suites under `qa/` are what actually
   cover behaviour today.
-- **There is no private vulnerability-reporting channel yet.** GitHub's private
-  reporting is not enabled on the repository and there is no `SECURITY.md`. Until
-  that is fixed, please open an issue asking for a private channel *without* the
-  exploit details, rather than posting a working reproduction publicly.
+## Reporting a vulnerability
+
+Use GitHub's private vulnerability reporting on the repository, under the Security
+tab. It is enabled, so a report reaches the maintainer without the details being
+public first. Please do not open a public issue containing a working reproduction.
 
 ## Changelog of security-relevant fixes
 
@@ -325,12 +326,14 @@ codesign --verify --deep --strict Spoof.app  # passes: an ad-hoc seal verifies
 
 Both are also wired up as assertions, so a future edit that drops the requirement
 fails the suite rather than passing quietly. `qa/edge.zsh` builds that same spoof
-bundle and asserts Doppel's own vendor check refuses it as a primary, and asserts
-that a CLI running from an installed-bundle path ignores an injected
-`DOPPEL_PRIMARY_SCHEME`. Both assertions were confirmed to fail against a
-deliberately regressed copy, which is the only way to know a test is load-bearing.
-`qa/e2e.zsh` covers the surrounding clone, sign, rebuild and rename behaviour
-against the real vendor app.
+bundle and asserts that both the CLI's and the engine's copy of the check refuse it
+(they are separate copies, so covering one proves nothing about the other), and that
+a CLI running from an installed-bundle path drops both an injected
+`DOPPEL_PRIMARY_SCHEME` and an injected `DOPPEL_SIGN_LEAF_SHA1` before the engine
+runs. Every one of those assertions was confirmed to fail against a deliberately
+regressed copy, which is the only way to know a test is load-bearing rather than
+decorative. `qa/e2e.zsh` covers the surrounding clone, sign, rebuild and rename
+behaviour against the real vendor app.
 
 ---
 
