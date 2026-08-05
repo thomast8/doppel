@@ -64,6 +64,15 @@ struct PermissionIssue: Hashable, Identifiable {
         }
     }
 
+    /// Accessibility and Screen Recording never confirm a completed request:
+    /// their APIs stay boolean, so a row can still read "missing" after the
+    /// native flow ran. Conclusive statuses (microphone, camera, notifications)
+    /// either prompt or move to granted/denied, so repeating their native
+    /// request is always meaningful and must not fall back to Settings.
+    var nativeRequestCanStayInconclusive: Bool {
+        status == "missing" || status == "unconfirmed"
+    }
+
     /// An app that has never requested microphone/camera access does not exist
     /// in that System Settings list yet. Those and the boolean-only checks must
     /// first run Apple's native request as the managed app. Explicit denials

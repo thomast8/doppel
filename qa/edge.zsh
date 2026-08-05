@@ -193,6 +193,43 @@ run_real rebuild "$NAME"
 [[ "$OUT" == *"already up to date"* ]] && pass "no-op reported as a no-op" \
     || fail "no-op reported as a no-op" "got: $OUT"
 
+# tccd's hardened-runtime prompting policy denies microphone and camera to a
+# process without the matching device entitlements — silently: no prompt, no
+# System Settings row. The launcher is the process that runs the menu's native
+# requests, so its signature has to carry the vendor's device entitlements.
+print -r -- ""
+print -r -- "the launcher can pass tccd's hardened-runtime prompting policy"
+LAUNCHER_ENTITLEMENTS="$(/usr/bin/codesign -d --entitlements - --xml "$APP/Contents/MacOS/ChatGPT" 2>/dev/null)"
+[[ "$LAUNCHER_ENTITLEMENTS" == *com.apple.security.device.audio-input* ]] \
+    && pass "the launcher carries the microphone entitlement" \
+    || fail "the launcher carries the microphone entitlement" "tccd would deny the prompt silently"
+[[ "$LAUNCHER_ENTITLEMENTS" == *com.apple.security.device.camera* ]] \
+    && pass "the launcher carries the camera entitlement" \
+    || fail "the launcher carries the camera entitlement" "tccd would deny the prompt silently"
+
+print -r -- ""
+print -r -- "an instance built before the entitlement fix is reported as needing a rebuild"
+INFO="$APP/Contents/Info.plist"
+/bin/cp "$INFO" "$SCRATCH/Info.plist.saved"
+/usr/bin/plutil -replace DoppelEngineVersion -string "21" "$INFO"
+run_real permissions check --porcelain "$NAME"
+[[ "$OUT" == *$'permission-check\toutdated'* ]] \
+    && pass "permissions check flags the stale engine instead of probing it" \
+    || fail "permissions check flags the stale engine instead of probing it" "got: $OUT"
+run_real permissions request "$NAME" microphone
+[[ $STATUS -ne 0 && "$OUT" == *"must be rebuilt"* ]] \
+    && pass "a microphone request on a stale engine fails with the rebuild hint" \
+    || fail "a microphone request on a stale engine fails with the rebuild hint" "got ($STATUS): $OUT"
+run_real permissions request "$NAME"
+[[ $STATUS -ne 0 && "$OUT" == *"must be rebuilt"* ]] \
+    && pass "a bulk request on a stale engine fails instead of skipping devices silently" \
+    || fail "a bulk request on a stale engine fails instead of skipping devices silently" "got ($STATUS): $OUT"
+/bin/cp "$SCRATCH/Info.plist.saved" "$INFO"
+run_real permissions check --porcelain "$NAME"
+[[ "$OUT" == *$'microphone\t'* && "$OUT" != *$'permission-check\toutdated'* ]] \
+    && pass "an in-step instance reports live permission statuses" \
+    || fail "an in-step instance reports live permission statuses" "got: $OUT"
+
 print -r -- ""
 print -r -- "rollback copies do not pile up"
 BACKUPS="$DOPPEL_DIR/state/com.openai.codex.doppel-$SLUG/Backups"

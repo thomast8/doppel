@@ -11,7 +11,7 @@
 set -u
 setopt PIPE_FAIL
 
-readonly ENGINE_VERSION="21"
+readonly ENGINE_VERSION="22"
 
 # When this engine copy runs from inside an installed bundle, environment
 # overrides are ignored: otherwise a same-uid process could point a
@@ -310,6 +310,49 @@ patch_plist() {
     /usr/bin/plutil -replace DoppelSourceExecutableSHA256 -string "$executable_hash" "$info"
 }
 
+# Extracts the entitlements of the executable at $1 into $2 and strips what a
+# local signature cannot carry. Restricted entitlements (team identity, push,
+# keychain/app groups) need a provisioning profile; under an ad-hoc signature
+# AMFI kills the process at spawn, so they are stripped. Library validation
+# must be disabled because the ad-hoc main binary loads the vendor-signed
+# frameworks.
+write_filtered_entitlements() {
+    local source_binary="$1" out="$2"
+    /usr/bin/codesign -d --entitlements - --xml "$source_binary" > "$out" 2>/dev/null || return 1
+    [[ -s "$out" ]] || return 1
+    /usr/bin/python3 - "$out" <<'PYFILTER'
+import plistlib, sys
+path = sys.argv[1]
+with open(path, "rb") as f:
+    ent = plistlib.load(f)
+restricted = ("com.apple.application-identifier", "com.apple.developer.",
+              "com.apple.security.application-groups", "keychain-access-groups")
+ent = {k: v for k, v in ent.items() if not any(k == p or k.startswith(p) for p in restricted)}
+ent["com.apple.security.cs.disable-library-validation"] = True
+with open(path, "wb") as f:
+    plistlib.dump(ent, f)
+PYFILTER
+}
+
+# Re-asserts the filtered key set immediately before signing: anything that
+# reintroduced a restricted or dyld-relaxing entitlement between filtering and
+# use must not reach codesign.
+verify_filtered_entitlements() {
+    /usr/bin/python3 - "$1" <<'PYVERIFY'
+import plistlib, sys
+with open(sys.argv[1], "rb") as f:
+    ent = plistlib.load(f)
+banned = ("com.apple.application-identifier", "com.apple.developer.",
+          "com.apple.security.application-groups", "keychain-access-groups",
+          "com.apple.security.get-task-allow",
+          "com.apple.security.cs.allow-dyld-environment-variables",
+          "com.apple.security.cs.disable-executable-page-protection")
+bad = [k for k in ent if any(k == b or k.startswith(b) for b in banned)]
+if bad or ent.get("com.apple.security.cs.disable-library-validation") is not True:
+    sys.exit(1)
+PYVERIFY
+}
+
 build_instance() {
     local target="$1"
     local version="$2"
@@ -350,10 +393,6 @@ build_instance() {
 
     # The vendor's entitlements are extracted from the copy itself, so a
     # release that changes its entitlements still re-signs correctly.
-    # Restricted entitlements (team identity, push, keychain/app groups) need a
-    # provisioning profile; under an ad-hoc signature AMFI kills the process at
-    # spawn, so they are stripped. Library validation must be disabled because
-    # the ad-hoc main binary loads the vendor-signed frameworks.
     # The plist lives in a private per-run directory (0700, unpredictable name)
     # and is re-validated immediately before signing, so it cannot be swapped
     # between filtering and use.
@@ -362,22 +401,8 @@ build_instance() {
         fail_closed "Creating the private entitlements directory failed."
     /bin/chmod 700 "$entitlements_dir"
     entitlements="$entitlements_dir/entitlements.plist"
-    /usr/bin/codesign -d --entitlements - --xml \
-        "$target/Contents/MacOS/ChatGPT.real" > "$entitlements" 2>/dev/null || \
-        fail_closed "Extracting the vendor entitlements failed."
-    [[ -s "$entitlements" ]] || fail_closed "The extracted vendor entitlements were empty."
-    /usr/bin/python3 - "$entitlements" <<'PYFILTER' || fail_closed "Filtering the vendor entitlements failed."
-import plistlib, sys
-path = sys.argv[1]
-with open(path, "rb") as f:
-    ent = plistlib.load(f)
-restricted = ("com.apple.application-identifier", "com.apple.developer.",
-              "com.apple.security.application-groups", "keychain-access-groups")
-ent = {k: v for k, v in ent.items() if not any(k == p or k.startswith(p) for p in restricted)}
-ent["com.apple.security.cs.disable-library-validation"] = True
-with open(path, "wb") as f:
-    plistlib.dump(ent, f)
-PYFILTER
+    write_filtered_entitlements "$target/Contents/MacOS/ChatGPT.real" "$entitlements" || \
+        fail_closed "Extracting and filtering the vendor entitlements failed."
 
     /bin/cp "$LAUNCHER" "$target/Contents/MacOS/ChatGPT" || fail_closed "Installing the durable launcher failed."
     /bin/chmod 755 "$target/Contents/MacOS/ChatGPT"
@@ -405,22 +430,8 @@ PYFILTER
     # and make an otherwise valid staged bundle fail code-signature sealing.
     /usr/bin/xattr -cr "$target" || fail_closed "Removing staging-only filesystem metadata failed."
 
-    # Re-assert the filtered key set right before signing: anything that
-    # reintroduced a restricted or dyld-relaxing entitlement in the meantime
-    # must not reach codesign.
-    /usr/bin/python3 - "$entitlements" <<'PYVERIFY' || fail_closed "The entitlements plist changed after filtering; refusing to sign."
-import plistlib, sys
-with open(sys.argv[1], "rb") as f:
-    ent = plistlib.load(f)
-banned = ("com.apple.application-identifier", "com.apple.developer.",
-          "com.apple.security.application-groups", "keychain-access-groups",
-          "com.apple.security.get-task-allow",
-          "com.apple.security.cs.allow-dyld-environment-variables",
-          "com.apple.security.cs.disable-executable-page-protection")
-bad = [k for k in ent if any(k == b or k.startswith(b) for b in banned)]
-if bad or ent.get("com.apple.security.cs.disable-library-validation") is not True:
-    sys.exit(1)
-PYVERIFY
+    verify_filtered_entitlements "$entitlements" || \
+        fail_closed "The entitlements plist changed after filtering; refusing to sign."
 
     # -i pins the code-signing identifier to this instance, so each instance has
     # its own code identity: keychain ACLs and TCC grants no longer transfer
@@ -428,10 +439,16 @@ PYVERIFY
     /usr/bin/codesign --force --sign "$SIGN_IDENTITY" -i "$DOPPEL_BUNDLE_ID" --options runtime \
         --entitlements "$entitlements" \
         "$target/Contents/MacOS/ChatGPT.real" >/dev/null || fail_closed "Signing the preserved vendor executable failed."
-    /bin/rm -rf "$entitlements_dir"
     /usr/bin/xattr -cr "$target" || fail_closed "Removing intermediate signing metadata failed."
+    # The bundle signature covers the launcher, the process that runs Apple's
+    # native permission requests for the menu. tccd's hardened-runtime
+    # prompting policy silently denies microphone and camera to a process
+    # without the matching device entitlements — no prompt, no Settings row —
+    # so the launcher must carry the same filtered vendor set.
     /usr/bin/codesign --force --sign "$SIGN_IDENTITY" -i "$DOPPEL_BUNDLE_ID" --options runtime \
+        --entitlements "$entitlements" \
         "$target" >/dev/null || fail_closed "Signing the instance bundle failed."
+    /bin/rm -rf "$entitlements_dir"
     /usr/bin/xattr -cr "$target" || fail_closed "Removing post-signing Finder metadata failed."
     /usr/bin/codesign --verify --deep --strict "$target" >/dev/null 2>&1 || \
         fail_closed "The staged instance bundle failed signature verification."
@@ -484,8 +501,23 @@ restyle_instance() {
     /usr/bin/plutil -replace CFBundleURLTypes.0.CFBundleURLName -string "$DOPPEL_DISPLAY_NAME" "$info"
 
     /usr/bin/xattr -cr "$app" || fail_closed "Removing filesystem metadata failed."
+    # The re-sign covers the launcher, so it must keep the device entitlements
+    # the build gave it; signing without them would silently break the next
+    # microphone or camera prompt. The preserved executable already carries
+    # the filtered set, so it is the source of truth here.
+    local entitlements_dir entitlements
+    entitlements_dir="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/doppel-ent.XXXXXXXX")" || \
+        fail_closed "Creating the private entitlements directory failed."
+    /bin/chmod 700 "$entitlements_dir"
+    entitlements="$entitlements_dir/entitlements.plist"
+    write_filtered_entitlements "$app/Contents/MacOS/ChatGPT.real" "$entitlements" || \
+        fail_closed "Extracting the preserved entitlements failed."
+    verify_filtered_entitlements "$entitlements" || \
+        fail_closed "The entitlements plist changed after filtering; refusing to sign."
     /usr/bin/codesign --force --sign "$SIGN_IDENTITY" -i "$DOPPEL_BUNDLE_ID" --options runtime \
+        --entitlements "$entitlements" \
         "$app" >/dev/null || fail_closed "Re-signing the restyled bundle failed."
+    /bin/rm -rf "$entitlements_dir"
     /usr/bin/xattr -cr "$app" || true
     /usr/bin/codesign --verify --deep --strict "$app" >/dev/null 2>&1 || \
         fail_closed "The restyled bundle failed signature verification."

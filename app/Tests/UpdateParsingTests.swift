@@ -54,6 +54,10 @@ import Foundation
                "an unconfirmed boolean permission should run its native request first")
         expect(statuses[4].action == .requestNative,
                "a not-requested capability must request natively so macOS registers the app")
+        expect(!statuses[4].nativeRequestCanStayInconclusive,
+               "a conclusive not-requested row must stay retryable, never parked on Settings")
+        expect(statuses[3].nativeRequestCanStayInconclusive,
+               "a boolean-only check should fall back to Settings after one native attempt")
         expect(statuses[0].settingsURL?.absoluteString.contains("Privacy_Microphone") == true,
                "permission rows should open their exact System Settings pane")
         let notification = PermissionIssue(

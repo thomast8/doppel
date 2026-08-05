@@ -1197,7 +1197,12 @@ permission_rows_for_dir() {
     name="$(config_value "$dir" DOPPEL_DISPLAY_NAME)"
     slug="${dir:t}"
     engine="$(/usr/bin/plutil -extract DoppelEngineVersion raw "$app/Contents/Info.plist" 2>/dev/null || true)"
-    if [[ "$engine" != <18-> || ! -x "$app/Contents/MacOS/ChatGPT" ]]; then
+    # Engines before 22 signed the launcher without the vendor's device
+    # entitlements, so its microphone and camera requests were silently denied
+    # by tccd: no prompt, no System Settings row, status forever not-requested.
+    # Reporting such a bundle as outdated is what raises the menu-bar warning
+    # and points the user at the rebuild that actually fixes it.
+    if [[ "$engine" != <22-> || ! -x "$app/Contents/MacOS/ChatGPT" ]]; then
         printf '%s\t%s\t%s\t%s\n' "$slug" "$name" "permission-check" "outdated"
         return 0
     fi
@@ -1282,7 +1287,10 @@ cmd_permissions_request() {
     [[ -d "$app" ]] || die "'$name' is not installed"
     engine="$(/usr/bin/plutil -extract DoppelEngineVersion raw "$app/Contents/Info.plist" 2>/dev/null || true)"
     if [[ -z "$permission" ]]; then
-        [[ "$engine" == <15-> ]] || die "'$name' must be rebuilt before Doppel can request permissions"
+        # The bulk request includes microphone and camera whenever they are
+        # not-requested, and a pre-22 launcher has no device entitlements, so
+        # tccd would skip them silently: no prompt, no Settings row, exit 0.
+        [[ "$engine" == <22-> ]] || die "'$name' must be rebuilt before Doppel can request permissions"
         /usr/bin/open -n -W "$app" --args --doppel-request-permissions || \
             die "'$name' could not start its native permission requests"
         return 0
@@ -1290,6 +1298,12 @@ cmd_permissions_request() {
 
     [[ "$engine" == <18-> ]] || \
         die "'$name' must be rebuilt before Doppel can request one permission at a time"
+    # A pre-22 launcher carries no device entitlements, so tccd denies its
+    # microphone and camera requests without a prompt or a Settings row.
+    # Failing here turns that silent no-op into an actionable message.
+    if [[ "$permission" == (microphone|camera) && "$engine" != <22-> ]]; then
+        die "'$name' must be rebuilt before Doppel can request $permission access"
+    fi
 
     # `open -W` does not reliably forward the launched application's exit
     # status. Capture and validate the helper's one-row result instead, using a

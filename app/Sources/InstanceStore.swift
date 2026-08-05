@@ -231,7 +231,9 @@ final class InstanceStore: ObservableObject {
     func handlePermission(_ permission: PermissionIssue) {
         switch permission.action {
         case .requestNative where !requestedPermissionIDs.contains(permission.id):
-            requestedPermissionIDs.insert(permission.id)
+            if permission.nativeRequestCanStayInconclusive {
+                requestedPermissionIDs.insert(permission.id)
+            }
             runCLI(
                 ["permissions", "request", permission.instanceName, permission.permission],
                 busyKey: "permissions"
