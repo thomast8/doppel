@@ -359,7 +359,38 @@ struct MenuContent: View {
             set: { store.setLoginItem($0) }
         ))
         Divider()
+        // Which Doppel, and which ChatGPT it is managing. Both matter when
+        // reporting a problem, and the vendor build is the one number that
+        // explains why an instance might be mid-rebuild or flagged outdated.
+        Text(Self.doppelVersionLabel)
+        if let installed = store.installedChatGPT {
+            Text("ChatGPT \(installed.display)")
+        }
+        Divider()
         Button("Quit Doppel") { NSApplication.shared.terminate(nil) }
+    }
+
+    /// Doppel's own marketing version and build, from the bundle it is running
+    /// out of.
+    static let doppelVersionLabel: String = versionLabel(
+        short: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
+        build: Bundle.main.infoDictionary?["CFBundleVersion"] as? String)
+
+    /// Split from the bundle lookup so the formatting is testable. A build from
+    /// source with missing or blank version keys still has to read sensibly
+    /// rather than showing "Doppel  ()".
+    static func versionLabel(short: String?, build: String?) -> String {
+        func cleaned(_ value: String?) -> String? {
+            guard let trimmed = value?.trimmingCharacters(in: .whitespaces),
+                  !trimmed.isEmpty else { return nil }
+            return trimmed
+        }
+        switch (cleaned(short), cleaned(build)) {
+        case let (short?, build?): return "Doppel \(short) (\(build))"
+        case let (short?, .none): return "Doppel \(short)"
+        case let (.none, build?): return "Doppel build \(build)"
+        case (.none, .none): return "Doppel (version unknown)"
+        }
     }
 
     /// Removal moves the app to the Trash and keeps account data unless the

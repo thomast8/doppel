@@ -5,6 +5,10 @@ let package = Package(
     name: "DoppelMenuBar",
     platforms: [.macOS(.v14)],
     targets: [
-        .executableTarget(name: "DoppelMenuBar", path: "Sources")
+        .executableTarget(name: "DoppelMenuBar", path: "Sources"),
+        // The parsing types live in the executable target, so the tests reach
+        // them with @testable rather than the app being split into a library
+        // just to be testable.
+        .testTarget(name: "DoppelMenuBarTests", dependencies: ["DoppelMenuBar"], path: "Tests"),
     ]
 )

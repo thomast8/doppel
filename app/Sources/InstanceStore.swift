@@ -19,6 +19,8 @@ final class InstanceStore: ObservableObject {
     @Published var primaryInstalled = false
     @Published var signingReady = false
     @Published var chatGPTUpdate: ChatGPTUpdate?
+    /// The installed vendor build, shown in the menu even when it is current.
+    @Published var installedChatGPT: InstalledChatGPT?
     @Published var checkingForUpdates = false
     @Published var permissionStatuses: [PermissionIssue] = []
     @Published var checkingPermissions = false
@@ -45,9 +47,22 @@ final class InstanceStore: ObservableObject {
     /// The CLI location. The copy inside this bundle comes first: it ships with
     /// the app, is covered by the app's signature, and means a downloaded
     /// Doppel needs no repository checkout at all.
+    ///
+    /// `DOPPEL_CLI` is honoured only in development mode. It used to be followed
+    /// unconditionally, which made it the one environment override an installed
+    /// Doppel still obeyed: pointing it elsewhere replaced the signed, bundled
+    /// CLI outright, and none of the scrubbing the CLI and engine do could run
+    /// because a different program was running instead. The same `DOPPEL_DEV`
+    /// gate those two use applies here, and the override still has to name a
+    /// binary that is not group- or world-writable.
     private var discoveredCLI: URL? {
-        if let override = ProcessInfo.processInfo.environment["DOPPEL_CLI"] {
-            return URL(fileURLWithPath: override)
+        let environment = ProcessInfo.processInfo.environment
+        if let override = environment["DOPPEL_CLI"], environment["DOPPEL_DEV"] == "1" {
+            if FileManager.default.isExecutableFile(atPath: override),
+               !Self.isGroupOrWorldWritable(override) {
+                return URL(fileURLWithPath: override)
+            }
+            return nil
         }
         if let bundled = Bundle.main.resourceURL?
             .appendingPathComponent("doppel/bin/doppel"),
@@ -279,6 +294,9 @@ final class InstanceStore: ObservableObject {
                     if userInitiated { self.report(message, for: "update-check") }
                 case .success(let output):
                     self.clearReport(for: "update-check")
+                    // Recorded whether or not there is an update to offer, so
+                    // the menu can show the installed build either way.
+                    self.installedChatGPT = InstalledChatGPT.parse(output)
                     guard let update = ChatGPTUpdate.parse(output) else {
                         self.chatGPTUpdate = nil
                         if userInitiated { self.showCurrentAlert() }
@@ -532,7 +550,7 @@ final class InstanceStore: ObservableObject {
 
     // MARK: - Reporting failures
 
-    static let missingCLIMessage = "The doppel command-line tool could not be found. Set DOPPEL_CLI to its path."
+    static let missingCLIMessage = "The doppel command-line tool could not be found. Reinstall Doppel, or for a build from source set DOPPEL_DEV=1 and DOPPEL_CLI to its path."
 
     /// Failures are raised as an alert when they happen. The menu stays a list
     /// of instances and the things you can do to them — never a log of what
