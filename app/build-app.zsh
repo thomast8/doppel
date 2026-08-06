@@ -18,6 +18,11 @@ readonly INSTALL_ROOT="${1:-$HOME/Applications}"
 readonly APP="$INSTALL_ROOT/Doppel.app"
 # DOPPEL_UNIVERSAL=1 builds arm64 + x86_64 (used for release artifacts).
 readonly UNIVERSAL="${DOPPEL_UNIVERSAL:-0}"
+# Ad hoc by default, which is what a local build wants. Set DOPPEL_SIGN_ID to a
+# "Developer ID Application" identity (its name or its SHA-1) to produce a
+# distributable build; from there notarisation is only notarytool plus stapling.
+# Everything else about the signing below is already what notarisation expects.
+readonly SIGN_ID="${DOPPEL_SIGN_ID:--}"
 
 cd "$APP_SRC"
 typeset binary
@@ -125,7 +130,45 @@ print -r -- '</plist>' >> "$APP/Contents/Info.plist"
 /usr/bin/printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 /usr/bin/xattr -cr "$APP"
-/usr/bin/codesign --force --sign - --options runtime --deep "$APP" >/dev/null
-/usr/bin/codesign --verify --strict "$APP" >/dev/null
+
+# Signed inside out, not with --deep. Apple documents --deep as a fix-up tool
+# rather than a signing strategy: it applies one set of options to everything it
+# finds, which is exactly wrong once nested code needs its own treatment, and it
+# is the shape notarisation rejects. The nested helpers are standalone Mach-O
+# executables shipped in Resources, so each is signed first and the outer bundle
+# last, where its signature seals them along with Contents/MacOS/Doppel.
+print -r -- "Signing (identity: $SIGN_ID)…"
+typeset -a sign_flags
+sign_flags=(--force --options runtime --sign "$SIGN_ID")
+# A secure timestamp needs a real identity; an ad-hoc signature cannot carry one.
+[[ "$SIGN_ID" != "-" ]] && sign_flags+=(--timestamp)
+
+typeset -a nested
+nested=(
+    "$PAYLOAD/prebuilt/doppel-launcher"
+    "$PAYLOAD/prebuilt/doppel-alert"
+    "$PAYLOAD/prebuilt/doppel-url-handler"
+    "$PAYLOAD/prebuilt/doppel-icon"
+)
+typeset helper
+for helper in $nested; do
+    [[ -f "$helper" ]] || { print -u2 -r -- "expected a nested helper at $helper"; exit 1 }
+    /usr/bin/codesign $sign_flags "$helper" >/dev/null
+done
+/usr/bin/codesign $sign_flags "$APP" >/dev/null
+
+# Verify what was actually produced rather than assuming. --deep here is a
+# verification request, which is what it is for, unlike --deep signing above.
+for helper in $nested; do
+    /usr/bin/codesign --verify --strict "$helper" >/dev/null
+done
+/usr/bin/codesign --verify --deep --strict "$APP" >/dev/null
+if [[ "$SIGN_ID" != "-" ]]; then
+    # Fail the build rather than ship an archive that cannot be notarised.
+    /usr/bin/codesign -dv --verbose=4 "$APP" 2>&1 | /usr/bin/grep -q "^Authority=Developer ID Application" || {
+        print -u2 -r -- "the outer bundle is not signed by a Developer ID Application certificate"; exit 1
+    }
+    print -r -- "Signed for distribution. Next: notarytool submit, then stapler staple."
+fi
 
 print -r -- "Installed: $APP"
