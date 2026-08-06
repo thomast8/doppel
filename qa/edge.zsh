@@ -212,6 +212,38 @@ GUARD_OUT="$(DOPPEL_NO_ALERT=1 DOPPEL_ASSET_ROOT="$ENGINE_DIR" \
     || fail "and the engine's own copy of the check refuses it too" "got: $GUARD_OUT"
 
 print -r -- ""
+print -r -- "the cached-installer fallback refuses anything it cannot verify"
+# When the installed primary fails verification a rebuild may fall back to an
+# exact-build official DMG that Doppel previously verified and kept. Nothing
+# exercised that arm, so its guards are asserted here with the spoofed primary
+# above: no 1.4GB image needed, because each guard fires before the mount.
+FALLBACK_HOME="$SCRATCH/fallback-home"
+FALLBACK_DIR="$FALLBACK_HOME/instances/fallback-probe"
+/bin/mkdir -p "$FALLBACK_DIR"
+write_config_file "$FALLBACK_DIR" "Fallback Probe" "com.example.fallback-probe" \
+    "codex-fallback-probe" "$SCRATCH/fallback-profile" "$SCRATCH/fallback-codex" "3B82F6"
+print -r -- "$SCRATCH/fallback-apps" > "$FALLBACK_DIR/install-root"
+# The spoof reports CFBundleVersion 1, so the fallback looks for build 1.
+FALLBACK_OUT="$(DOPPEL_HOME="$FALLBACK_HOME" DOPPEL_PRIMARY_APP="$SPOOF" \
+    DOPPEL_UPDATE_ROOT="$SCRATCH/fallback-updates" \
+    "$CLI" rebuild "Fallback Probe" 2>&1)"
+[[ "$FALLBACK_OUT" == *"no verified official installer is cached for build 1"* ]] \
+    && pass "an unverifiable primary with no cached installer is refused" \
+    || fail "an unverifiable primary with no cached installer is refused" "got: $FALLBACK_OUT"
+# A file at the expected path is not enough; it has to pass its own checksum.
+/bin/mkdir -p "$SCRATCH/fallback-updates/Official/1"
+print -r -- "not a disk image" > "$SCRATCH/fallback-updates/Official/1/ChatGPT.dmg"
+FALLBACK_OUT="$(DOPPEL_HOME="$FALLBACK_HOME" DOPPEL_PRIMARY_APP="$SPOOF" \
+    DOPPEL_UPDATE_ROOT="$SCRATCH/fallback-updates" \
+    "$CLI" rebuild "Fallback Probe" 2>&1)"
+[[ "$FALLBACK_OUT" == *"failed its disk-image checksum"* ]] \
+    && pass "a cached installer that is not a valid image is refused" \
+    || fail "a cached installer that is not a valid image is refused" "got: $FALLBACK_OUT"
+[[ ! -d "$SCRATCH/fallback-apps/Fallback Probe.app" ]] \
+    && pass "and neither refusal built anything" \
+    || fail "and neither refusal built anything" "an app was produced"
+
+print -r -- ""
 print -r -- "an installed copy ignores the environment overrides it must not honour"
 # This guard sat below the assignments it was meant to protect once already,
 # which made it a no-op that every existing check still passed. --scheme is

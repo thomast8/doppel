@@ -1,14 +1,23 @@
-import Foundation
+import XCTest
+@testable import DoppelMenuBar
 
-@main enum UpdateParsingTests {
-    static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
-        guard condition() else {
-            FileHandle.standardError.write(Data("FAIL: \(message)\n".utf8))
-            exit(1)
-        }
+// XCTest rather than swift-testing: the Command Line Tools carry Testing's
+// swiftmodule but not a loadable Testing.framework, so swift-testing compiles
+// there and then fails at launch. Both frameworks need Xcode's toolchain in
+// practice, so this uses the mature one. `app/test.zsh` finds a toolchain that
+// has it, whatever `xcode-select` happens to point at.
+final class UpdateParsingTests: XCTestCase {
+    // Kept so every assertion below reads exactly as it did when this was a
+    // standalone program. The only change is that a failure now reports its own
+    // call site and the run keeps going instead of exiting on the first one.
+    private func expect(
+        _ condition: @autoclosure () -> Bool, _ message: String,
+        file: StaticString = #filePath, line: UInt = #line
+    ) {
+        XCTAssertTrue(condition(), message, file: file, line: line)
     }
 
-    static func main() {
+    func testUpdateAndPermissionParsing() {
         let output = "available\t6067\t26.727.40816\t6119\t26.727.51351\thttps://example.invalid/update.zip\n"
         expect(
             ChatGPTUpdate.parse(output) == ChatGPTUpdate(
@@ -28,6 +37,38 @@ import Foundation
         expect(ChatGPTUpdate.parse(
             "available\t6119\tnewer\t6067\tolder\thttps://example.invalid/update.zip\n") == nil,
             "backwards update should not prompt")
+
+        // The installed build is shown in the menu even when nothing is being
+        // offered, so it has to survive the case that produces no prompt.
+        expect(InstalledChatGPT.parse(
+            "current\t6119\t26.727.51351\t6119\t26.727.51351\thttps://example.invalid/update.zip\n")
+            == InstalledChatGPT(build: 6119, version: "26.727.51351"),
+            "an up-to-date check should still yield the installed build")
+        expect(InstalledChatGPT.parse(output) == InstalledChatGPT(build: 6067, version: "26.727.40816"),
+               "an available update should report the build still installed, not the target")
+        expect(InstalledChatGPT.parse(ready)?.build == 6067,
+               "a prepared update should also report the installed build")
+        expect(InstalledChatGPT.parse(output)?.display == "26.727.40816 (6067)",
+               "the menu label should read version then build")
+        expect(InstalledChatGPT.parse("available\tbroken") == nil,
+               "a malformed line should yield no version rather than a wrong one")
+        expect(InstalledChatGPT.parse("rollbacks\t3\tsomething") == nil,
+               "a row from another command must not be read as a version")
+        expect(InstalledChatGPT.parse("current\t6119\t\n") == nil,
+               "an empty version field should be rejected")
+
+        // A source build can be missing either version key, and the menu row
+        // must still read like a version rather than "Doppel  ()".
+        expect(MenuContent.versionLabel(short: "0.4.5", build: "9") == "Doppel 0.4.5 (9)",
+               "both keys present should read version then build")
+        expect(MenuContent.versionLabel(short: "0.4.5", build: nil) == "Doppel 0.4.5",
+               "a missing build should not leave empty parentheses")
+        expect(MenuContent.versionLabel(short: nil, build: "9") == "Doppel build 9",
+               "a build alone should say so rather than posing as a version")
+        expect(MenuContent.versionLabel(short: nil, build: nil) == "Doppel (version unknown)",
+               "no version information should be stated plainly")
+        expect(MenuContent.versionLabel(short: "  ", build: "") == "Doppel (version unknown)",
+               "blank keys should be treated as absent, not printed")
 
         let permissionOutput = """
             personal\tChatGPT Personal\tmicrophone\tdenied
@@ -133,6 +174,5 @@ import Foundation
         expect(future?.computerUse == .ready, "an unknown row should be skipped, not fatal")
         expect(NativeToolsStatus.parse("nothing-recognizable\there") == nil,
                "output with no known rows should not parse")
-        print("Update and permission parsing tests passed")
     }
 }
