@@ -229,21 +229,38 @@ Tools.
 
 ```sh
 app/build-app.zsh          # builds and installs ~/Applications/Doppel.app
+app/build-app.zsh /tmp/out # or somewhere else, to leave your installed copy alone
 open -a ~/Applications/Doppel.app
+app/test.zsh               # unit tests for the menu app's parsing
 ```
+
+Builds are signed ad hoc. Set `DOPPEL_SIGN_ID` to a **Developer ID Application**
+identity to produce a distributable one; the nested helpers are signed
+individually before the outer bundle, with hardened runtime and a secure
+timestamp, which is the shape notarisation expects.
+
+`app/test.zsh` rather than a bare `swift test`: XCTest ships inside Xcode, not
+with the Command Line Tools, and a Mac can have Xcode installed while
+`xcode-select` still points at the Command Line Tools. The script finds a
+toolchain that has XCTest instead of asking you to change that global setting.
+The `qa/` suites need nothing beyond macOS.
 
 A menu-bar-only front end (`LSUIElement`, so no Dock icon): list instances,
 launch, rebuild, rename, recolour or remove them, coordinate ChatGPT updates,
 create a new one from a name plus a colour picker, and toggle **Start at Login**.
+The foot of the menu shows Doppel's own version and the ChatGPT build it is
+managing, which is what you want to hand over when reporting a problem.
 
 The app is self-contained. The CLI, the engine and the compiled helpers all ship
 inside `Contents/Resources/doppel`, sealed by the app's own signature, so a
 downloaded copy works on its own — no checkout, no package manager, no developer
 tools. Every action still goes through that bundled CLI, so the two can never
-disagree. `$DOPPEL_CLI` overrides the choice; a checkout at a standard location
-is used when the app is run from source, skipping any path that is group- or
-world-writable. An advisory lock stops launchd and Finder producing two menu-bar
-icons.
+disagree. A checkout at a standard location is used when the app is run from
+source, skipping any path that is group- or world-writable. `$DOPPEL_CLI` can
+point somewhere else, but only with `DOPPEL_DEV=1` set and only at a binary that
+is not group- or world-writable: an installed copy otherwise follows the CLI it
+shipped with, the same way the CLI and engine ignore their own overrides. An
+advisory lock stops launchd and Finder producing two menu-bar icons.
 
 Start at Login installs a user LaunchAgent (`ai.doppel.menubar`) rather than using
 SMAppService, which needs a Developer ID-signed bundle that local ad-hoc builds

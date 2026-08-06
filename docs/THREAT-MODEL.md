@@ -208,7 +208,7 @@ front of someone who is still deciding whether to trust you.
 | MITM on the update feed or download | Addressed. HTTPS, allowlisted release URL, Apple-anchored signature check on the downloaded app. |
 | Malicious app planted at `/Applications/ChatGPT.app` and then cloned | Addressed. The Apple-anchored requirement rejects any bundle not signed by OpenAI. Previously bypassable; see the changelog note below. |
 | Replaying an older genuine vendor build | Addressed. An update must be strictly newer than the installed build. |
-| Environment variables redirecting an installed copy's vendor checks or signing identity | Addressed for the vendor-identity, appcast and signing variables: the bundled CLI and the in-bundle engine both drop them unless `DOPPEL_DEV=1`. Not addressed for `DOPPEL_CLI`, which the menu app honours unconditionally; see Known gaps. |
+| Environment variables redirecting an installed copy's vendor checks, signing identity, or the CLI it runs | Addressed. The bundled CLI and the in-bundle engine drop the vendor-identity, appcast and signing variables unless `DOPPEL_DEV=1`, and the menu app applies the same gate to `DOPPEL_CLI`, which it used to follow unconditionally. |
 | Vendor updater running inside a clone and destroying account routing | Addressed. Sparkle is disabled in clones via the vendor's own switch, plus feed and scheduled-check safeguards. |
 | A vendor release changing the assumptions Doppel patches | Addressed by failing closed. A rebuild refuses rather than producing a half-working clone. |
 | `--purge-data` deleting data an instance does not own | Addressed. Shared, system and primary-owned paths are refused before anything moves. |
@@ -223,34 +223,32 @@ front of someone who is still deciding whether to trust you.
 
 Things a reviewer should know are still open, rather than discovering them.
 
-- The distributed app is not signed or notarised. This is the top item.
-- `DOPPEL_CLI` is honoured unconditionally by the menu app, with no `DOPPEL_DEV`
-  gate, so setting it replaces the bundled CLI outright and no scrubbing runs at
-  all. It is a documented developer convenience and it does not cross a privilege
-  boundary (anyone who can set it can already run code as you), but it is the one
-  environment override an installed Doppel still follows.
-- `DOPPEL_HOME` also remains overridable for the bundled CLI. It relocates state
-  rather than changing what counts as trusted vendor code, and the QA harness
-  depends on it, so it was left alone deliberately.
+- The distributed app is not signed or notarised. This is the top item, and the
+  only one here that needs something Doppel cannot do for itself: an Apple
+  Developer Program membership. `app/build-app.zsh` is otherwise ready for it, so
+  the remaining work is a `notarytool` submission and stapling the ticket.
+- `DOPPEL_HOME` remains overridable for the bundled CLI. It relocates state rather
+  than changing what counts as trusted vendor code, and the QA harness depends on
+  it, so it was left alone deliberately.
 - The vendor check fails closed with no escape hatch. If a legitimate future
   release stopped satisfying the requirement (a changed signing identifier, say, or
   a move off Developer ID), every path refuses: `update check`, `prepare`, `apply`
   and `rebuild`. The cached-DMG fallback cannot rescue it, because the cached image
   holds the same signature and is validated by the same function, and an installed
   copy has no override left. Failing closed is the right posture for a trust check,
-  but the recovery story is "ship a new Doppel", and nothing in `qa/` exercises the
-  DMG arm at all.
+  but the recovery story is "ship a new Doppel". The fallback's refusals are now
+  covered in `qa/edge.zsh`; its successful mount-and-rebuild arm still is not,
+  because that needs a real verified official image on disk.
 - Clones inherit the vendor's `allow-jit` and `allow-unsigned-executable-memory`
   entitlements, which are neither stripped nor banned. These are not clone-specific
   regressions, so they sit outside the comparison above, but read the
   `DYLD_INSERT_LIBRARIES` claim as being about dyld injection specifically, not as
   a general in-process code-integrity guarantee.
-- `app/build-app.zsh` signs the release with `codesign --deep`, which Apple
-  deprecates for signing. It should sign nested helpers inside-out before the outer
-  bundle. Wanted as part of the notarisation work rather than before it.
-- `app/Tests/UpdateParsingTests.swift` exists but is not wired to a test target, so
-  `swift test` reports no tests. The zsh QA suites under `qa/` are what actually
-  cover behaviour today.
+- Unit tests need Xcode. `app/test.zsh` finds a toolchain that has XCTest, but the
+  Command Line Tools alone do not ship one, and swift-testing is no help: they
+  carry its module but not a loadable framework, so it compiles and then fails at
+  launch. The `qa/` suites need nothing beyond macOS; only the Swift tests do.
+
 ## Reporting a vulnerability
 
 Use GitHub's private vulnerability reporting on the repository, under the Security
