@@ -173,8 +173,31 @@ struct MenuContent: View {
         ForEach(store.instances) { instance in
             let issues = store.permissionIssues.filter { $0.instanceID == instance.id }
             let permissions = store.permissionStatuses.filter { $0.instanceID == instance.id }
+            let engineBusy = store.engineOperationBusy
             Menu {
-                Menu("Privacy Permissions") {
+                if instance.usesBuiltInBrowser {
+                    Label("Engine — Official ChatGPT", systemImage: "checkmark.shield.fill")
+                    Text("Built-in browser assigned")
+                    Button("Release Built-in Browser") {
+                        store.releaseBuiltInBrowser()
+                    }
+                    .disabled(engineBusy)
+                } else {
+                    Label("Engine — Doppel", systemImage: "square.stack.3d.up")
+                    Button("Assign Built-in Browser") {
+                        store.assignBuiltInBrowser(to: instance)
+                    }
+                    .disabled(engineBusy || !store.primaryInstalled)
+                }
+                Divider()
+                Menu(instance.usesBuiltInBrowser
+                     ? "Fallback Doppel Permissions"
+                     : "Privacy Permissions") {
+                    if instance.usesBuiltInBrowser {
+                        Text("Official ChatGPT uses its own macOS permissions.")
+                        Text("These grants apply only after releasing Built-in Browser.")
+                        Divider()
+                    }
                     if permissions.isEmpty {
                         Text(store.checkingPermissions ? "Checking…" : "No status available")
                     } else {
@@ -202,18 +225,20 @@ struct MenuContent: View {
                     }
                 }
                 Divider()
-                Button("Launch") { store.launch(instance) }
-                    .disabled(store.busy.contains(instance.id))
+                Button(instance.usesBuiltInBrowser
+                       ? "Launch with Built-in Browser"
+                       : "Launch") { store.launch(instance) }
+                    .disabled(engineBusy)
                 Button("Rebuild & Reopen") { store.rebuild(instance) }
-                    .disabled(store.busy.contains(instance.id))
+                    .disabled(engineBusy)
                 Button("Rename or Recolour…") {
                     openWindow(id: "edit-instance", value: instance.id)
                     NSApp.activate(ignoringOtherApps: true)
                 }
-                .disabled(store.busy.contains(instance.id))
+                .disabled(engineBusy)
                 Divider()
                 Button("Remove…") { confirmRemove(instance) }
-                    .disabled(store.busy.contains(instance.id))
+                    .disabled(engineBusy)
                 if store.busy.contains(instance.id) {
                     Text("Working…")
                 }
@@ -257,10 +282,23 @@ struct MenuContent: View {
                 // any instance can use a running extension host. It decides
                 // whose host Chrome launches, which matters when that one is
                 // missing or older than the rest.
-                if status.inAppBrowserUnavailable {
+                if !status.inAppBrowserInstanceName.isEmpty {
+                    Label(status.inAppBrowserRunning
+                          ? "Built-in browser — Running"
+                          : "Built-in browser — Assigned",
+                          systemImage: status.inAppBrowserVendorValid
+                              ? "checkmark.circle.fill" : "exclamationmark.circle")
+                    Text(status.inAppBrowserInstanceName)
+                    if !status.inAppBrowserVendorValid {
+                        Text("Official ChatGPT failed signature verification.")
+                    }
+                } else if status.inAppBrowserUnavailable {
                     Label("In-app browser — Not available in instances",
                           systemImage: "xmark.circle")
                     Text("ChatGPT only opens it for an app signed by OpenAI.")
+                } else {
+                    Label("Built-in browser — Not assigned", systemImage: "circle.dotted")
+                    Text("Assign the official engine from an instance menu.")
                 }
                 if status.browserHosts.isEmpty {
                     Label("Browser extension — Not installed", systemImage: "circle.dotted")
@@ -331,6 +369,7 @@ struct MenuContent: View {
             openWindow(id: "create-instance")
             NSApp.activate(ignoringOtherApps: true)
         }
+        .disabled(store.engineOperationBusy)
         Button("Refresh") { store.reload() }
         if store.busy.contains("update") {
             Text("Updating ChatGPT and managed instances…")
@@ -419,4 +458,5 @@ struct MenuContent: View {
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         store.remove(instance, purgeData: purge.state == .on)
     }
+
 }

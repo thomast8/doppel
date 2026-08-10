@@ -69,11 +69,12 @@ else
 fi
 
 RESTORE_MARKERS="$(LC_ALL=C /usr/bin/grep -a -o 'DOPPEL_URL_HANDLER_HELPER' "$TEST_ASAR" | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
-if [[ "$RESTORE_MARKERS" == "2" ]]; then
+RESTORE_SPAWNS="$(LC_ALL=C /usr/bin/grep -a -o 'require("node:child_process").spawn(process.env.DOPPEL_URL_HANDLER_HELPER' "$TEST_ASAR" | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
+if [[ "$RESTORE_MARKERS" == "2" && "$RESTORE_SPAWNS" == "1" ]]; then
     pass "a completed callback restores primary codex ownership"
 else
     fail "a completed callback restores primary codex ownership" \
-        "found $RESTORE_MARKERS restoration markers"
+        "found $RESTORE_MARKERS restoration markers and $RESTORE_SPAWNS direct spawn calls"
 fi
 
 print -r -- "$PASSED passed, $FAILED failed"

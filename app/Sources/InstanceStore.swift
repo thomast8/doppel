@@ -1,6 +1,11 @@
 import Foundation
 import AppKit
 
+enum InstanceEngine: String {
+    case clone
+    case vendor
+}
+
 struct Instance: Identifiable {
     let id: String        // stable slug assigned at creation
     let name: String
@@ -8,6 +13,10 @@ struct Instance: Identifiable {
     let installed: Bool
     /// RRGGBB the icon was tinted with; empty for a custom .icns.
     let tint: String
+    /// The profile is stable; only the process used to open it changes.
+    let engine: InstanceEngine
+
+    var usesBuiltInBrowser: Bool { engine == .vendor }
 }
 
 /// All instance knowledge comes from the CLI (`doppel list --porcelain`), so
@@ -142,13 +151,37 @@ final class InstanceStore: ObservableObject {
     }
 
     func launch(_ instance: Instance) {
-        runCLI(["launch", instance.name], busyKey: instance.id)
+        runCLI(["launch", instance.name], busyKey: instance.id) { [weak self] failure in
+            if failure == nil { self?.checkNativeTools() }
+        }
+    }
+
+    func assignBuiltInBrowser(to instance: Instance) {
+        runCLI(["browser", "assign", instance.name], busyKey: "iab-slot") { [weak self] failure in
+            if failure == nil { self?.reload() }
+        }
+    }
+
+    func releaseBuiltInBrowser() {
+        runCLI(["browser", "release"], busyKey: "iab-slot") { [weak self] failure in
+            if failure == nil { self?.reload() }
+        }
     }
 
     func rebuild(_ instance: Instance) {
         runCLI(["rebuild", instance.name], busyKey: instance.id) { [weak self] failure in
-            if failure == nil { self?.checkPermissions() }
+            if failure == nil {
+                self?.checkPermissions()
+                self?.checkNativeTools()
+            }
         }
+    }
+
+    /// Mirrors the CLI's global engine-operation lock so the menu avoids
+    /// offering operations that would only be refused as concurrent work.
+    var engineOperationBusy: Bool {
+        busy.contains("iab-slot") || busy.contains("update") || busy.contains("signing") ||
+            busy.contains("create") || instances.contains { busy.contains($0.id) }
     }
 
     // MARK: - Native tools
@@ -380,6 +413,8 @@ final class InstanceStore: ObservableObject {
 
             Doppel will close every running managed instance, update the primary ChatGPT app, rebuild and verify all managed instances, then reopen only the ones you were using.
 
+            If a profile is using Built-in Browser, quit that official ChatGPT window first. Doppel will otherwise stop before changing any app.
+
             Active local chats will be interrupted. If a managed app asks you to confirm quitting, choose Quit so Doppel can continue safely.
             """
         alert.addButton(withTitle: "Restart and Install")
@@ -571,17 +606,21 @@ final class InstanceStore: ObservableObject {
         reported[key] = nil
     }
 
-    nonisolated private static func parsePorcelain(_ output: String) -> [Instance] {
+    nonisolated static func parsePorcelain(_ output: String) -> [Instance] {
         output.split(separator: "\n").compactMap { line in
             let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
-            // The tint field was added later; older output stays readable.
+            // Tint and engine were added later; older output stays readable
+            // and defaults to the historical locally signed engine.
             guard fields.count >= 4 else { return nil }
             return Instance(
                 id: String(fields[0]),
                 name: String(fields[1]),
                 appPath: String(fields[2]),
                 installed: fields[3] == "installed",
-                tint: fields.count > 4 ? String(fields[4]) : ""
+                tint: fields.count > 4 ? String(fields[4]) : "",
+                engine: fields.count > 5
+                    ? InstanceEngine(rawValue: String(fields[5])) ?? .clone
+                    : .clone
             )
         }
     }

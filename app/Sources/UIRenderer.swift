@@ -18,7 +18,7 @@ enum UIRenderer {
 
         let sample = store.instances.first
             ?? Instance(id: "sample", name: "ChatGPT Personal",
-                        appPath: "", installed: true, tint: "A855F7")
+                        appPath: "", installed: true, tint: "A855F7", engine: .clone)
 
         let view = CreateInstanceView(store: store, editing: editing ? sample : nil,
                                       renderingDocumentation: true)

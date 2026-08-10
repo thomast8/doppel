@@ -116,6 +116,35 @@ run_isolated icon create --name "No Icon" --icon /nope/missing.icns --install-to
     || fail "and leaves no directory either" "$SCRATCH/icon/instances/no-icon survived"
 
 print -r -- ""
+print -r -- "URL scheme ownership is case-insensitive"
+run_isolated scheme-primary create --name "Primary Scheme" --tint 3B82F6 \
+    --scheme CoDeX --install-to "$APPS"
+[[ "$OUT" == *"belongs to the primary app"* ]] \
+    && pass "a case variant cannot claim the primary callback" \
+    || fail "a case variant cannot claim the primary callback" "got: $OUT"
+/bin/mkdir -p "$SCRATCH/scheme-duplicate/instances/existing"
+write_config_file "$SCRATCH/scheme-duplicate/instances/existing" "Existing" \
+    "com.example.existing" "codex-shared" "$SCRATCH/existing-profile" \
+    "$SCRATCH/existing-codex" "3B82F6"
+run_isolated scheme-duplicate create --name "Duplicate Scheme" --tint EF4444 \
+    --scheme CODEX-SHARED --install-to "$APPS"
+[[ "$OUT" == *"already used by instance 'existing'"* ]] \
+    && pass "case variants cannot collide between instances" \
+    || fail "case variants cannot collide between instances" "got: $OUT"
+ENGINE_SCHEME_DIR="$SCRATCH/engine-scheme"
+/bin/mkdir -p "$ENGINE_SCHEME_DIR"
+write_config_file "$ENGINE_SCHEME_DIR" "Legacy Scheme" "com.example.legacy-scheme" \
+    "cOdEx" "$SCRATCH/legacy-profile" "$SCRATCH/legacy-codex" "3B82F6"
+OUT="$(DOPPEL_NO_ALERT=1 DOPPEL_ASSET_ROOT="$ENGINE_SCHEME_DIR" \
+    /bin/zsh "$REPO_ROOT/engine/doppel-engine.zsh" install \
+    "$SCRATCH/Legacy Scheme.app" 2>&1)"
+STATUS=$?
+[[ "$OUT" == *"instance URL scheme belongs to the primary app"* ]] \
+    && pass "an existing case-variant config fails closed before rebuild" \
+    || fail "an existing case-variant config fails closed before rebuild" \
+        "got status $STATUS, output: $OUT"
+
+print -r -- ""
 print -r -- "a directory without a config does not take every command down with it"
 /bin/mkdir -p "$SCRATCH/broken/instances/wreckage"
 run_isolated broken list --porcelain
@@ -196,14 +225,16 @@ GUARD_OUT="$(DOPPEL_HOME="$SCRATCH/spoof-home" DOPPEL_PRIMARY_APP="$SPOOF" \
 # suite. Give it the minimum assets its preflight demands, then point it at the
 # spoof.
 ENGINE_DIR="$SCRATCH/engine-probe"
-/bin/mkdir -p "$ENGINE_DIR/bin" "$ENGINE_DIR/assets"
+/bin/mkdir -p "$ENGINE_DIR/bin" "$ENGINE_DIR/assets" "$ENGINE_DIR/engine"
 write_config_file "$ENGINE_DIR" "Engine Probe" "com.example.engine-probe" \
     "codex-engine-probe" "$SCRATCH/engine-profile" "$SCRATCH/engine-codex" "3B82F6"
 for asset in bin/doppel-launcher bin/doppel-alert bin/doppel-url-handler \
+             bin/doppel engine/doppel-engine.zsh engine/patch-deep-link.py \
              patch-deep-link.py assets/icon.icns assets/icon.png; do
     : > "$ENGINE_DIR/$asset"
 done
-/bin/chmod 755 "$ENGINE_DIR/bin/doppel-launcher"
+/bin/chmod 755 "$ENGINE_DIR/bin/doppel-launcher" "$ENGINE_DIR/bin/doppel" \
+    "$ENGINE_DIR/engine/doppel-engine.zsh"
 GUARD_OUT="$(DOPPEL_NO_ALERT=1 DOPPEL_ASSET_ROOT="$ENGINE_DIR" \
     DOPPEL_STATE_ROOT="$SCRATCH/engine-state" DOPPEL_PRIMARY_APP="$SPOOF" \
     /bin/zsh "$REPO_ROOT/engine/doppel-engine.zsh" install "$SCRATCH/EngineProbe.app" 2>&1)"
@@ -250,8 +281,10 @@ print -r -- "an installed copy ignores the environment overrides it must not hon
 # compared against the primary scheme before anything touches disk, so a leaked
 # DOPPEL_PRIMARY_SCHEME is observable without a network call or a clone.
 GUARD_FIXTURE="$SCRATCH/Doppel.app/Contents/Resources/doppel/bin"
-/bin/mkdir -p "$GUARD_FIXTURE"
+/bin/mkdir -p "$GUARD_FIXTURE" "${GUARD_FIXTURE:h}/engine"
 /bin/cp "$CLI" "$GUARD_FIXTURE/doppel"
+/bin/cp "$REPO_ROOT/engine/doppel-engine.zsh" "$REPO_ROOT/engine/patch-deep-link.py" \
+    "${GUARD_FIXTURE:h}/engine/"
 /bin/chmod 755 "$GUARD_FIXTURE/doppel"
 # First prove the probe can detect a leak at all: from a checkout path the
 # override is honoured by design, so the collision message must appear.
@@ -262,7 +295,9 @@ GUARD_OUT="$(DOPPEL_HOME="$SCRATCH/guard-checkout" DOPPEL_PRIMARY_SCHEME="codex-
     && pass "the probe detects a honoured override from a checkout" \
     || fail "the probe detects a honoured override from a checkout" "got: $GUARD_OUT"
 # Then the real assertion: from an installed bundle path it must be dropped.
-GUARD_OUT="$(DOPPEL_HOME="$SCRATCH/guard-bundle" DOPPEL_PRIMARY_SCHEME="codex-spoof" \
+GUARD_USER_HOME="$SCRATCH/guard-user"
+/bin/mkdir -p "$GUARD_USER_HOME"
+GUARD_OUT="$(HOME="$GUARD_USER_HOME" DOPPEL_HOME="$SCRATCH/guard-bundle" DOPPEL_PRIMARY_SCHEME="codex-spoof" \
     "$GUARD_FIXTURE/doppel" create --name "Guard Probe" --tint 3B82F6 --scheme codex-spoof \
     --install-to "$APPS" 2>&1)"
 [[ "$GUARD_OUT" != *"belongs to the primary app"* ]] \
@@ -276,7 +311,8 @@ GUARD_OUT="$(DOPPEL_HOME="$SCRATCH/guard-bundle" DOPPEL_PRIMARY_SCHEME="codex-sp
 # there lets a caller choose the certificate that signs a rebuild and have it
 # recorded as that instance's pin. Observed through a stub engine, because the
 # CLI never reads these itself and only passes them on.
-SIGN_HOME="$SCRATCH/sign-home"
+SIGN_USER_HOME="$SCRATCH/sign-user"
+SIGN_HOME="$SIGN_USER_HOME/Library/Application Support/Doppel"
 SIGN_DIR="$SIGN_HOME/instances/sign-probe"
 /bin/mkdir -p "$SIGN_DIR"
 write_config_file "$SIGN_DIR" "Sign Probe" "com.example.sign-probe" \
@@ -287,9 +323,9 @@ print -r -- "$SCRATCH/sign-apps" > "$SIGN_DIR/install-root"
     print -r -- "#!/bin/zsh"
     print -r -- 'print -r -- "leaked-sha1:${DOPPEL_SIGN_LEAF_SHA1:-none}"'
     print -r -- "exit 1"
-} > "$SIGN_DIR/doppel-engine.zsh"
-/bin/chmod 755 "$SIGN_DIR/doppel-engine.zsh"
-GUARD_OUT="$(DOPPEL_HOME="$SIGN_HOME" \
+} > "${GUARD_FIXTURE:h}/engine/doppel-engine.zsh"
+/bin/chmod 755 "${GUARD_FIXTURE:h}/engine/doppel-engine.zsh"
+GUARD_OUT="$(HOME="$SIGN_USER_HOME" DOPPEL_HOME="$SCRATCH/ignored-sign-home" \
     DOPPEL_SIGN_LEAF_SHA1="DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF" \
     "$GUARD_FIXTURE/doppel" edit "Sign Probe" --rename "Sign Probe Renamed" 2>&1)"
 [[ "$GUARD_OUT" == *"leaked-sha1:none"* ]] \
@@ -551,9 +587,10 @@ print -r -- "status names the instance that holds the extension host"
 # Asserted while the instance still owns the claim, and on the owner column
 # itself: the attribution is the only part of this that has to be right.
 run_claim "$BROWSER_ROOT" native-tools status --porcelain
-[[ "$OUT" == *$'in-app-browser\tunavailable-in-instances'* ]] && \
-    pass "the in-app browser is reported unavailable in instances" \
-    || fail "the in-app browser is reported unavailable in instances" "got: $OUT"
+[[ "$OUT" == *$'in-app-browser\tassigned\t'* || \
+   "$OUT" == *$'in-app-browser\tunassigned'* ]] && \
+    pass "the movable in-app-browser engine state is reported" \
+    || fail "the movable in-app-browser engine state is reported" "got: $OUT"
 check "the owner column names this instance" \
     "$(print -r -- "$OUT" | /usr/bin/awk -F'\t' '$1 == "browser-host" && $2 == "Chrome" {print $3}')" \
     "$NAME Renamed"

@@ -76,6 +76,9 @@ bin/doppel create --name "ChatGPT Personal" \
 
 bin/doppel list
 bin/doppel launch "ChatGPT Personal"
+bin/doppel browser assign "ChatGPT Personal"  # give this profile the built-in browser
+bin/doppel browser status
+bin/doppel browser release
 bin/doppel rebuild "ChatGPT Personal"
 bin/doppel native-tools status
 bin/doppel native-tools repair
@@ -144,6 +147,47 @@ by older Doppel versions; it does not change active apps or account data.
 installs the instance into `~/Applications`, and stores the instance definition in
 `~/Library/Application Support/Doppel/instances/`.
 
+### Assigning the built-in browser
+
+Doppel treats an account profile and the process that opens it as separate
+things. By default a profile uses its own locally signed Doppel app. One profile
+at a time can instead use the untouched `/Applications/ChatGPT.app` as its
+engine, preserving the OpenAI signature chain required by the built-in browser:
+
+```sh
+bin/doppel browser assign "ChatGPT Personal"
+bin/doppel launch "ChatGPT Personal"
+```
+
+Assignment never closes an app. If the profile's clone or another official
+ChatGPT engine is already running, launch fails with an instruction to close the
+conflicting window first; Doppel never risks two Electron processes opening the
+same profile. Opening the assigned profile's branded app directly from Finder or
+the Dock routes through that same official-engine launch path; it cannot silently
+fall back to the locally signed engine. Assignment refuses an older or modified
+clone until it has been rebuilt with the current signed router. Direct fallback
+launches use the same lock and a private one-shot authorization, so assignment
+cannot cross the moment a clone adopts its Electron profile. `CODEX_HOME`, browser
+data and account state still come from the
+selected Doppel profile. The Dock/window identity is ordinary ChatGPT while that
+engine is active because changing the vendor bundle would invalidate its
+signature. `browser release` returns the profile to its normal Doppel engine and
+also refuses while the official engine is running. Engine changes, launches,
+rebuilds, removals and update installation share one lock, so two concurrent
+Doppel commands cannot cross those checks. If the coordinator is interrupted,
+it keeps that lock until the isolated critical worker has finished, so a launch
+or filesystem operation cannot continue after another command enters. The lock
+lease covers the worker's process group, so a supervisor crash cannot make an
+active operation look stale. The
+official engine is started from a clean environment containing only ordinary
+macOS account values, the SSH agent socket when present, and its intended profile
+inputs. Inherited Codex sandbox/thread variables are never forwarded. Its own
+Sparkle updater is disabled for this session; Doppel updates every engine together,
+and release first verifies that the fallback clone is on the matching build.
+Doppel records the official process PID, start identity and build after launch;
+it will not silently adopt a manually opened process whose `CODEX_HOME` it
+cannot prove.
+
 ### Permissions for managed apps
 
 macOS grants privacy permissions to each app identity separately. A new Doppel
@@ -156,6 +200,9 @@ not asked yet, clicking the row first runs Apple's native request as that one
 managed instance. That request is what registers an otherwise absent app in
 the Microphone, Camera, Screen Recording, or Accessibility list. Doppel then
 refreshes the status; it never requests unrelated permissions at the same time.
+When a profile is assigned Built-in Browser, this submenu is labelled
+**Fallback Doppel Permissions**: official ChatGPT has its own macOS permission
+identity and these grants apply only after the profile returns to its clone.
 
 Camera and microphone are optional until that account uses the relevant feature,
 so `Not requested` is informational and never raises a warning. The public
@@ -183,13 +230,14 @@ service is ready, which running app currently owns Chronicle's shared recorder,
 the age of its latest screen frame, and whether an old rollback is still being
 discovered as a duplicate app.
 
-`doppel native-tools status` additionally reports which app owns each ChatGPT
-browser-extension registration. The in-app browser never works in a managed
-instance (see the limitation below), so the extension is an instance's only
-route to a real browser, and it arrives through one native-messaging
-registration per Chromium browser. Every ChatGPT app rewrites that registration
-to its own extension host while starting, so the owner is whichever app launched
-last.
+`doppel native-tools status` additionally reports the profile assigned the
+official built-in-browser engine and which app owns each ChatGPT
+browser-extension registration. A locally signed engine still uses the extension
+as its route to a real browser; the assigned profile is launched through the
+untouched OpenAI-signed app instead. The extension arrives through one
+native-messaging registration per Chromium browser. Every ChatGPT app rewrites
+that registration to its own extension host while starting, so the owner is
+whichever app launched last.
 
 Sharing one browser between instances does **not** require owning the
 registration. It only decides whose extension host Chrome launches; once that
@@ -328,12 +376,14 @@ genuinely weaker than the app it was copied from is in
   endorsed by OpenAI.
 - Launch-time deep-link registration uses each instance's private scheme, but
   OAuth retains OpenAI's registered `codex://connector/oauth_callback` URI.
-  The instance starting connector authorization claims `codex://` at that
-  moment, so the result returns there instead of to the clone launched most
-  recently. Doppel refuses a rebuild if a vendor release changes either
-  interception point and repairs stale shared-handler ownership from old
+  Each clone declares that callback scheme without claiming it during normal
+  launch. The instance starting connector authorization claims `codex://` only
+  for that authorization, so the result returns there instead of to the clone
+  launched most recently. Doppel refuses a rebuild if a vendor release changes
+  either interception point and repairs stale shared-handler ownership from old
   builds.
-- **The in-app browser cannot work in an instance, and this one is permanent.**
+- **The in-app browser cannot work inside a locally re-signed clone, and this
+  one is permanent.**
   ChatGPT gates its browser socket with a native peer check that requires the
   connecting process, its parent *and* its grandparent to each carry OpenAI's
   Team ID and an allow-listed signing identifier. In an instance the first two
@@ -344,10 +394,13 @@ genuinely weaker than the app it was copied from is in
   `rejected socket peer reason=missing-code-signing-identity` in
   `~/Library/Logs/com.openai.codex/`. Nothing short of OpenAI's signing key
   satisfies that check, so a local identity from `doppel-signing` does not help
-  either. Use the browser extension instead: its check stops at the parent
-  process, so browser control works normally in an instance, and several
-  instances can share one browser. Doppel reports both facts in
-  `native-tools status` rather than leaving them to be rediscovered.
+  either. A normal clone therefore uses the browser extension: its check stops
+  at the parent process, so browser control works normally and several instances
+  can share one browser. Doppel's one movable built-in-browser slot instead
+  launches the selected profile through the untouched official app. It remains
+  the same Doppel account profile, but macOS shows the official ChatGPT identity
+  while it runs. Doppel reports the assigned and active engine in
+  `native-tools status` rather than leaving the distinction implicit.
 - Instances are unsigned by Apple standards (ad hoc or self-signed), so Gatekeeper
   assessment (`spctl`) rejects them. They launch fine because they are built
   locally and never quarantined.

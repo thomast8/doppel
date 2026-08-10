@@ -59,11 +59,11 @@ final class UpdateParsingTests: XCTestCase {
 
         // A source build can be missing either version key, and the menu row
         // must still read like a version rather than "Doppel  ()".
-        expect(MenuContent.versionLabel(short: "0.4.5", build: "9") == "Doppel 0.4.5 (9)",
+        expect(MenuContent.versionLabel(short: "1.0.0", build: "10") == "Doppel 1.0.0 (10)",
                "both keys present should read version then build")
-        expect(MenuContent.versionLabel(short: "0.4.5", build: nil) == "Doppel 0.4.5",
+        expect(MenuContent.versionLabel(short: "1.0.0", build: nil) == "Doppel 1.0.0",
                "a missing build should not leave empty parentheses")
-        expect(MenuContent.versionLabel(short: nil, build: "9") == "Doppel build 9",
+        expect(MenuContent.versionLabel(short: nil, build: "10") == "Doppel build 10",
                "a build alone should say so rather than posing as a version")
         expect(MenuContent.versionLabel(short: nil, build: nil) == "Doppel (version unknown)",
                "no version information should be stated plainly")
@@ -149,6 +149,34 @@ final class UpdateParsingTests: XCTestCase {
                "only an instance with its own extension host can be offered the registration")
         expect(nativeTools?.browserOwnerNames == ["ChatGPT Personal"],
                "the owner column should resolve to an instance name")
+
+        let assignedIAB = NativeToolsStatus.parse(
+            "in-app-browser\tassigned\tpersonal\tChatGPT Personal\trunning\tvalid\n")
+        expect(assignedIAB?.inAppBrowserInstanceID == "personal",
+               "the built-in-browser engine slot should retain the stable profile id")
+        expect(assignedIAB?.inAppBrowserInstanceName == "ChatGPT Personal",
+               "the assigned profile should be shown by name")
+        expect(assignedIAB?.inAppBrowserRunning == true,
+               "a running official engine should remain distinguishable from an assignment")
+        expect(assignedIAB?.inAppBrowserVendorValid == true,
+               "the menu should surface whether the official engine passed verification")
+        expect(assignedIAB?.inAppBrowserUnavailable == false,
+               "an assigned vendor engine must not inherit the clone-only unavailable label")
+
+        let unassignedIAB = NativeToolsStatus.parse("in-app-browser\tunassigned\n")
+        expect(unassignedIAB != nil && unassignedIAB?.inAppBrowserInstanceName.isEmpty == true,
+               "an unassigned engine slot should still be recognized status")
+
+        let instances = InstanceStore.parsePorcelain("""
+            personal\tChatGPT Personal\t/Users/me/ChatGPT Personal.app\tinstalled\tA855F7\tvendor
+            work\tChatGPT Work\t/Users/me/ChatGPT Work.app\tmissing\t1FA97E\tclone
+            legacy\tChatGPT Legacy\t/Users/me/ChatGPT Legacy.app\tinstalled\t
+            """)
+        expect(instances.count == 3, "new and old list rows should parse together")
+        expect(instances[0].usesBuiltInBrowser,
+               "a vendor list row should become the built-in-browser engine")
+        expect(!instances[1].usesBuiltInBrowser && !instances[2].usesBuiltInBrowser,
+               "clone and legacy rows should keep the locally signed engine")
 
         // Two instances sharing one CODEX_HOME are both named in the column, and
         // neither should then be offered the registration it already holds.
