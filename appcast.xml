@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>Doppel Updates</title>
+        <link>https://github.com/thomast8/doppel</link>
+        <description>Signed Doppel releases</description>
+        <language>en</language>
+        <item>
+            <title>1.1.0</title>
+            <pubDate>Mon, 10 Aug 2026 16:14:55 +0100</pubDate>
+            <link>https://github.com/thomast8/doppel</link>
+            <sparkle:version>12</sparkle:version>
+            <sparkle:shortVersionString>1.1.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/thomast8/doppel/releases/download/v1.1.0/Doppel-1.1.0-macOS.zip" length="2936272" type="application/octet-stream" sparkle:edSignature="r1nMvSRnyIuWP2F4chxJiMsgG3fnt0PQ5hEU+jGTMtm0HTh8aJpZdN3IVa9IavOwuPRdl0yZf2NwRK6GMw/RBw=="/>
+        </item>
+    </channel>
+</rss>

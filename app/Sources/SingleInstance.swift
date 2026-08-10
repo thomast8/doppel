@@ -10,13 +10,16 @@ enum SingleInstance {
     private static var lockDescriptor: Int32 = -1
 
     /// Returns false when another instance already holds the lock.
-    static func acquire() -> Bool {
+    static func acquire(lockName: String = "menubar.lock") -> Bool {
         let directory = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/Doppel")
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let lockPath = directory.appendingPathComponent("menubar.lock").path
+        let lockPath = directory.appendingPathComponent(lockName).path
 
-        let descriptor = open(lockPath, O_CREAT | O_RDWR, 0o600)
+        // Sparkle execs updater helpers before the host exits. Do not let those
+        // children inherit the lock and make the relaunched app mistake them
+        // for another menu-bar instance.
+        let descriptor = open(lockPath, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
         guard descriptor >= 0 else { return true }   // can't lock: don't block startup
         if flock(descriptor, LOCK_EX | LOCK_NB) != 0 {
             close(descriptor)

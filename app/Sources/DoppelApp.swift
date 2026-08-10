@@ -1,13 +1,28 @@
 import SwiftUI
+import Sparkle
 
 @main
 struct DoppelApp: App {
     @StateObject private var store = InstanceStore()
+    private let updaterController: SPUStandardUpdaterController
+    private let doppelUpdatesEnabled: Bool
 
     init() {
+        let arguments = ProcessInfo.processInfo.arguments
+        let foregroundUpdateQALaunch = arguments.contains("--check-for-doppel-updates")
+        let backgroundUpdateQALaunch = arguments.contains("--download-doppel-update")
+        let updateQALaunch = foregroundUpdateQALaunch || backgroundUpdateQALaunch
+        let headlessCommand = arguments.contains("--login-item")
+            || arguments.contains("--render-ui")
+        doppelUpdatesEnabled = !(Bundle.main.object(
+            forInfoDictionaryKey: "SUPublicEDKey") as? String ?? "").isEmpty
+        updaterController = SPUStandardUpdaterController(
+            startingUpdater: doppelUpdatesEnabled && !headlessCommand && !updateQALaunch,
+            updaterDelegate: nil,
+            userDriverDelegate: nil)
+
         // Scriptable hook, also how the login-item path is tested without
         // driving the menu: Doppel --login-item {on|off|status}
-        let arguments = ProcessInfo.processInfo.arguments
         if let index = arguments.firstIndex(of: "--login-item") {
             let action = index + 1 < arguments.count ? arguments[index + 1] : "status"
             switch action {
@@ -33,16 +48,42 @@ struct DoppelApp: App {
             exit(0)
         }
 
-        if !SingleInstance.acquire() {
+        let configuredLockName = Bundle.main.object(
+            forInfoDictionaryKey: "DoppelSingleInstanceLockName") as? String
+        let lockName = configuredLockName
+            ?? (updateQALaunch ? "menubar-update-qa.lock" : "menubar.lock")
+        if !SingleInstance.acquire(lockName: lockName) {
             // Another menu-bar instance is already running; a second icon would
             // just confuse. Leave quietly.
             exit(0)
+        }
+
+        // Deterministic production-like QA hook. It drives the same Sparkle
+        // controller as the menu item, after AppKit has entered its event loop.
+        if updateQALaunch {
+            guard doppelUpdatesEnabled else {
+                FileHandle.standardError.write(Data(
+                    "Doppel updates require SUPublicEDKey in the app bundle\n".utf8))
+                exit(2)
+            }
+            DispatchQueue.main.async { [updaterController] in
+                NSApp.activate(ignoringOtherApps: true)
+                updaterController.startUpdater()
+                if backgroundUpdateQALaunch {
+                    updaterController.updater.checkForUpdatesInBackground()
+                } else {
+                    updaterController.checkForUpdates(nil)
+                }
+            }
         }
     }
 
     var body: some Scene {
         MenuBarExtra {
-            MenuContent(store: store)
+            MenuContent(
+                store: store,
+                checkForDoppelUpdates: { updaterController.checkForUpdates(nil) },
+                doppelUpdatesEnabled: doppelUpdatesEnabled)
         } label: {
             MenuBarLabel(store: store)
         }
@@ -163,6 +204,8 @@ private enum DoppelMenuBarMark {
 
 struct MenuContent: View {
     @ObservedObject var store: InstanceStore
+    let checkForDoppelUpdates: () -> Void
+    let doppelUpdatesEnabled: Bool
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -397,6 +440,8 @@ struct MenuContent: View {
             get: { store.loginItemEnabled },
             set: { store.setLoginItem($0) }
         ))
+        Button("Check for Doppel Updates…", action: checkForDoppelUpdates)
+            .disabled(!doppelUpdatesEnabled)
         Divider()
         // Which Doppel, and which ChatGPT it is managing. Both matter when
         // reporting a problem, and the vendor build is the one number that

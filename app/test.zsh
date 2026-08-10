@@ -49,4 +49,19 @@ fi
 
 print -r -- "Toolchain: $chosen"
 cd "$APP_SRC"
-DEVELOPER_DIR="$chosen" swift test "$@"
+DEVELOPER_DIR="$chosen" swift build --build-tests
+
+# SwiftPM links binary frameworks into executable-target tests but does not
+# embed them in the XCTest bundle. Put Sparkle at the @rpath location the test
+# loader already searches, mirroring build-app.zsh's app-bundle assembly.
+readonly SPARKLE_ROOT="${DOPPEL_SPARKLE_ROOT:-$APP_SRC/.build/artifacts/sparkle/Sparkle}"
+readonly SPARKLE_FRAMEWORK="$SPARKLE_ROOT/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
+readonly TEST_FRAMEWORKS="$APP_SRC/.build/out/Products/Debug/PackageFrameworks"
+[[ -d "$SPARKLE_FRAMEWORK" ]] || {
+    print -u2 -r -- "app/test.zsh: Sparkle.framework was not found under $SPARKLE_ROOT"
+    exit 1
+}
+/bin/mkdir -p "$TEST_FRAMEWORKS"
+/usr/bin/ditto "$SPARKLE_FRAMEWORK" "$TEST_FRAMEWORKS/Sparkle.framework"
+
+DEVELOPER_DIR="$chosen" swift test --skip-build "$@"
