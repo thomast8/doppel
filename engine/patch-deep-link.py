@@ -38,6 +38,9 @@ from typing import Any, Iterator
 PATCH_INSERTION = b"process.env.DOPPEL_URL_SCHEME?.trim()||"
 OAUTH_PATCH_MARKER = b"Doppel could not claim codex:// OAuth callback"
 RESTORE_PATCH_MARKER = b"DOPPEL_URL_HANDLER_HELPER"
+RESTORE_SPAWN_MARKER = (
+    b'require("node:child_process").spawn(process.env.' + RESTORE_PATCH_MARKER
+)
 REQUIRED_NEIGHBOURS = (
     b"setAsDefaultProtocolClient",
     b"chatgpt.com",
@@ -62,11 +65,6 @@ OAUTH_CALLBACK_HANDLER = re.compile(
     rb"\}://connector/oauth_callback`\}\)"
 )
 
-CHILD_PROCESS_IMPORT = re.compile(
-    rb"(?:let|const|var) (?P<child>[A-Za-z_$][A-Za-z0-9_$]*)="
-    rb'require\("node:child_process"\)'
-)
-
 OPEN_URL_HANDLER = re.compile(
     rb"return (?P<mac>[A-Za-z_$][A-Za-z0-9_$]*)&&"
     rb"(?P<app>[A-Za-z_$][A-Za-z0-9_$]*)\.on\(`open-url`,\("
@@ -77,6 +75,32 @@ OPEN_URL_HANDLER = re.compile(
     rb"(?P<callback>[A-Za-z_$][A-Za-z0-9_$]*)\?\.\("
     rb"(?P<predicate>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=route)\)\?"
     rb"(?P=url):void 0\),(?P=event)\.preventDefault\(\)\)\}\),"
+)
+
+# Build 6321 moved macOS URL intake into a shared open-path queue. The route
+# behavior is the same, but the listener now delegates to a local function so
+# initial argv URLs and later ``open-url`` events take one path. Match that
+# complete shape: patching only the short ``open-url`` wrapper would not cover
+# an OAuth callback delivered while the app is starting.
+QUEUED_OPEN_URL_HANDLER = re.compile(
+    rb"(?P<prefix>if\((?P<enabled>[A-Za-z_$][A-Za-z0-9_$]*)\)\{let "
+    rb"(?P<handler>[A-Za-z_$][A-Za-z0-9_$]*)=\("
+    rb"(?P<url>[A-Za-z_$][A-Za-z0-9_$]*),(?P<event>[A-Za-z_$][A-Za-z0-9_$]*)"
+    rb"\)=>\{let (?P<route>[A-Za-z_$][A-Za-z0-9_$]*)="
+    rb"(?P<parse>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=url)\);if\((?P=route)\)\{"
+    rb"(?P<queue>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=route)\),"
+    rb"(?P<callback>[A-Za-z_$][A-Za-z0-9_$]*)\?\.\("
+    rb"(?P<predicate>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=route)\)\?"
+    rb"(?P=url):void 0\)),"
+    rb"(?P<suffix>(?P=event)\?\.preventDefault\(\);return\}let "
+    rb"(?P<path>[A-Za-z_$][A-Za-z0-9_$]*)="
+    rb"(?P<parse_path>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=url)\);"
+    rb"(?P=path)&&\((?P<open_path>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=path)\),"
+    rb"(?P=event)\?\.preventDefault\(\)\)\};"
+    rb"(?P<app>[A-Za-z_$][A-Za-z0-9_$]*)\.on\(`open-url`,\("
+    rb"(?P<listener_event>[A-Za-z_$][A-Za-z0-9_$]*),"
+    rb"(?P<listener_url>[A-Za-z_$][A-Za-z0-9_$]*)\)=>\{"
+    rb"(?P=handler)\((?P=listener_url),(?P=listener_event)\)\}\);)"
 )
 
 
@@ -265,7 +289,7 @@ def locate_oauth_member(archive: Archive) -> tuple[Member, bytes, bool]:
     raise PatchError(f"found {count} candidate OAuth members; refusing an ambiguous patch")
 
 
-def patched_open_url_handler(match: re.Match[bytes], child: bytes) -> bytes:
+def patched_open_url_handler(match: re.Match[bytes]) -> bytes:
     mac = match.group("mac")
     app = match.group("app")
     event = match.group("event")
@@ -301,8 +325,7 @@ def patched_open_url_handler(match: re.Match[bytes], child: bytes) -> bytes:
         + b".kind===`connectorOAuthCallback`&&process.env."
         + RESTORE_PATCH_MARKER
         + b"&&process.env.DOPPEL_PRIMARY_APP&&process.env.DOPPEL_PRIMARY_BUNDLE_ID)try{"
-        + child
-        + b".spawn(process.env."
+        + b'require("node:child_process").spawn(process.env.'
         + RESTORE_PATCH_MARKER
         + b",[`set`,`codex`,process.env.DOPPEL_PRIMARY_APP,process.env.DOPPEL_PRIMARY_BUNDLE_ID],{detached:!0,stdio:`ignore`}).unref()}catch{}"
         + event
@@ -310,38 +333,61 @@ def patched_open_url_handler(match: re.Match[bytes], child: bytes) -> bytes:
     )
 
 
+def patched_queued_open_url_handler(match: re.Match[bytes]) -> bytes:
+    route = match.group("route")
+    return (
+        match.group("prefix")
+        + b";if("
+        + route
+        + b".kind===`connectorOAuthCallback`&&process.env."
+        + RESTORE_PATCH_MARKER
+        + b"&&process.env.DOPPEL_PRIMARY_APP&&process.env.DOPPEL_PRIMARY_BUNDLE_ID)try{"
+        + b'require("node:child_process").spawn(process.env.'
+        + RESTORE_PATCH_MARKER
+        + b",[`set`,`codex`,process.env.DOPPEL_PRIMARY_APP,process.env.DOPPEL_PRIMARY_BUNDLE_ID],{detached:!0,stdio:`ignore`}).unref()}catch{};"
+        + match.group("suffix")
+    )
+
+
 def locate_restore_member(archive: Archive) -> tuple[Member, bytes, bool]:
     patched: list[tuple[Member, bytes]] = []
-    unpatched: list[tuple[Member, bytes, re.Match[bytes], bytes]] = []
+    unpatched: list[tuple[Member, bytes, str, re.Match[bytes]]] = []
     for member in members(archive):
         if not member.path.endswith(".js") or member.size == 0:
             continue
         data = read_member(archive, member)
         if RESTORE_PATCH_MARKER in data:
-            if data.count(RESTORE_PATCH_MARKER) != 2:
+            if data.count(RESTORE_PATCH_MARKER) != 2 or data.count(
+                RESTORE_SPAWN_MARKER
+            ) != 1:
                 raise PatchError(
                     f"the OAuth handler restoration patch is malformed in {member.path}"
                 )
             patched.append((member, data))
             continue
-        handler_matches = list(OPEN_URL_HANDLER.finditer(data))
+        handler_matches = [
+            ("legacy", match) for match in OPEN_URL_HANDLER.finditer(data)
+        ] + [
+            ("queued", match) for match in QUEUED_OPEN_URL_HANDLER.finditer(data)
+        ]
         if not handler_matches:
             continue
-        child_matches = list(CHILD_PROCESS_IMPORT.finditer(data))
-        if len(handler_matches) != 1 or len(child_matches) != 1:
+        if len(handler_matches) != 1:
             raise PatchError(
                 f"the callback restoration target is ambiguous in {member.path}"
             )
-        unpatched.append(
-            (member, data, handler_matches[0], child_matches[0].group("child"))
-        )
+        handler_kind, handler_match = handler_matches[0]
+        unpatched.append((member, data, handler_kind, handler_match))
     if patched and unpatched:
         raise PatchError("the archive contains both patched and unpatched callback restorers")
     if len(patched) == 1:
         return patched[0][0], patched[0][1], True
     if len(unpatched) == 1:
-        member, data, match, child = unpatched[0]
-        replacement = patched_open_url_handler(match, child)
+        member, data, handler_kind, match = unpatched[0]
+        if handler_kind == "legacy":
+            replacement = patched_open_url_handler(match)
+        else:
+            replacement = patched_queued_open_url_handler(match)
         return member, data[: match.start()] + replacement + data[match.end() :], False
     count = len(patched) + len(unpatched)
     if count == 0:

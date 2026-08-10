@@ -11,7 +11,7 @@
 set -u
 setopt PIPE_FAIL
 
-readonly ENGINE_VERSION="22"
+readonly ENGINE_VERSION="26"
 
 # When this engine copy runs from inside an installed bundle, environment
 # overrides are ignored: otherwise a same-uid process could point a
@@ -55,6 +55,11 @@ readonly PRIMARY_TEAM_ID="${DOPPEL_PRIMARY_TEAM_ID:-2DC432GLL2}"
     { print -u2 -r -- "Doppel: the primary bundle identifier may contain only letters, digits, dots and hyphens"; exit 1 }
 [[ ${#PRIMARY_TEAM_ID} -eq 10 && "$PRIMARY_TEAM_ID" != *[^A-Z0-9]* ]] || \
     { print -u2 -r -- "Doppel: the primary team identifier must be 10 upper-case letters or digits"; exit 1 }
+# Re-check persisted configs, not only new CLI input. URI schemes are
+# case-insensitive, so an older or hand-edited `Codex` instance would otherwise
+# rebuild into a normal-launch claim on the shared OAuth callback.
+[[ "${DOPPEL_URL_SCHEME:l}" != "${PRIMARY_SCHEME:l}" ]] || \
+    { print -u2 -r -- "Doppel: the instance URL scheme belongs to the primary app"; exit 1; }
 readonly STATE_ROOT="${DOPPEL_STATE_ROOT:-$HOME/Library/Application Support/Doppel/state/$DOPPEL_BUNDLE_ID}"
 # Where the launcher looks up the requirement a bundle at a given path has to
 # satisfy. Keyed by install path rather than by anything inside the bundle:
@@ -66,6 +71,9 @@ readonly PIN_ROOT="${DOPPEL_PIN_ROOT:-$HOME/Library/Application Support/Doppel/p
 readonly LAUNCHER="$ASSET_ROOT/bin/doppel-launcher"
 readonly ALERT_HELPER="$ASSET_ROOT/bin/doppel-alert"
 readonly URL_HANDLER_HELPER="$ASSET_ROOT/bin/doppel-url-handler"
+readonly ROUTER_CLI="$ASSET_ROOT/bin/doppel"
+readonly ROUTER_ENGINE="$ASSET_ROOT/engine/doppel-engine.zsh"
+readonly ROUTER_PATCHER="$ASSET_ROOT/engine/patch-deep-link.py"
 readonly DEEP_LINK_PATCHER="$ASSET_ROOT/patch-deep-link.py"
 readonly ICON_ICNS="$ASSET_ROOT/assets/icon.icns"
 readonly ICON_PNG="$ASSET_ROOT/assets/icon.png"
@@ -199,10 +207,13 @@ is_doppel_instance() {
 
 require_engine_assets() {
     local asset
-    for asset in "$LAUNCHER" "$ALERT_HELPER" "$URL_HANDLER_HELPER" "$DEEP_LINK_PATCHER" "$ICON_ICNS" "$ICON_PNG"; do
+    for asset in "$LAUNCHER" "$ALERT_HELPER" "$URL_HANDLER_HELPER" "$DEEP_LINK_PATCHER" \
+                 "$ROUTER_CLI" "$ROUTER_ENGINE" "$ROUTER_PATCHER" "$ICON_ICNS" "$ICON_PNG"; do
         [[ -f "$asset" ]] || fail_closed "A required engine asset is missing: $asset"
     done
     [[ -x "$LAUNCHER" ]] || fail_closed "The launcher is not executable: $LAUNCHER"
+    [[ -x "$ROUTER_CLI" && -x "$ROUTER_ENGINE" ]] || \
+        fail_closed "The embedded engine router is not executable."
 }
 
 # The requirement genuine vendor code has to satisfy, which is the vendor app's
@@ -254,7 +265,8 @@ instance_is_healthy() {
     local app="$1"
     local expected_version="$2"
     local expected_hash="$3"
-    local info="$app/Contents/Info.plist"
+    local info="$app/Contents/Info.plist" expected_router_hash
+    expected_router_hash="$(sha256_file "$ROUTER_CLI" 2>/dev/null)" || return 1
 
     [[ -d "$app" ]] || return 1
     [[ -x "$app/Contents/MacOS/ChatGPT" ]] || return 1
@@ -271,11 +283,18 @@ instance_is_healthy() {
     [[ "$(plist_value "$info" LSEnvironment.CODEX_SPARKLE_ENABLED)" == "false" ]] || return 1
     [[ "$(plist_value "$info" LSEnvironment.DOPPEL_URL_SCHEME)" == "$DOPPEL_URL_SCHEME" ]] || return 1
     [[ "$(plist_value "$info" CFBundleURLTypes.0.CFBundleURLSchemes.0)" == "$DOPPEL_URL_SCHEME" ]] || return 1
-    [[ -z "$(plist_value "$info" CFBundleURLTypes.0.CFBundleURLSchemes.1)" ]] || return 1
+    [[ "$(plist_value "$info" CFBundleURLTypes.0.CFBundleURLSchemes.1)" == "$PRIMARY_SCHEME" ]] || return 1
+    [[ -z "$(plist_value "$info" CFBundleURLTypes.0.CFBundleURLSchemes.2)" ]] || return 1
     [[ "$(plist_value "$info" SUFeedURL)" == "https://doppel.invalid/no-updates.xml" ]] || return 1
     /usr/bin/cmp -s "$app/Contents/Resources/electron.icns" "$ICON_ICNS" || return 1
     [[ "$(plist_value "$info" DoppelSigningIdentifier)" == "$DOPPEL_BUNDLE_ID" ]] || return 1
     [[ "$(plist_value "$info" DoppelDeepLinkScheme)" == "$DOPPEL_URL_SCHEME" ]] || return 1
+    [[ -x "$app/Contents/Resources/Doppel/bin/doppel" ]] || return 1
+    [[ -x "$app/Contents/Resources/Doppel/engine/doppel-engine.zsh" ]] || return 1
+    [[ -f "$app/Contents/Resources/Doppel/engine/patch-deep-link.py" ]] || return 1
+    [[ "$(plist_value "$info" DoppelRouterSHA256)" == "$expected_router_hash" ]] || return 1
+    [[ "$(sha256_file "$app/Contents/Resources/Doppel/bin/doppel" 2>/dev/null)" == \
+       "$expected_router_hash" ]] || return 1
 
     # This runs on every launch, so it is one verification rather than two, and
     # not --deep: the bundle seal already covers every nested file, so tampering
@@ -308,7 +327,13 @@ patch_plist() {
     /usr/bin/plutil -replace CrProductDirName -string "$DOPPEL_BUNDLE_ID" "$info"
     /usr/bin/plutil -replace CFBundleAlternateNames.0 -string "$DOPPEL_DISPLAY_NAME" "$info"
     /usr/bin/plutil -replace CFBundleURLTypes.0.CFBundleURLName -string "$DOPPEL_DISPLAY_NAME" "$info"
-    /usr/bin/plutil -replace CFBundleURLTypes.0.CFBundleURLSchemes -json "[\"$DOPPEL_URL_SCHEME\"]" "$info"
+    # Electron can only claim a macOS protocol that the bundle declares. Keep
+    # the instance scheme first for ordinary launch-time registration, and
+    # declare the vendor callback scheme second so connector OAuth can claim it
+    # just in time. The ASAR patch still prevents a normal clone launch from
+    # taking codex:// ownership.
+    /usr/bin/plutil -replace CFBundleURLTypes.0.CFBundleURLSchemes -json \
+        "[\"$DOPPEL_URL_SCHEME\",\"$PRIMARY_SCHEME\"]" "$info"
     /usr/bin/plutil -replace LSEnvironment.CODEX_ELECTRON_USER_DATA_PATH -string "$DOPPEL_PROFILE_ROOT" "$info"
     /usr/bin/plutil -replace LSEnvironment.CODEX_HOME -string "$DOPPEL_CODEX_HOME" "$info"
     # Codex now supplies its appcast at runtime, so the traditional Sparkle
@@ -332,6 +357,7 @@ patch_plist() {
     /usr/bin/plutil -replace SUFeedURL -string "https://doppel.invalid/no-updates.xml" "$info"
     /usr/bin/plutil -replace DoppelSigningIdentifier -string "$DOPPEL_BUNDLE_ID" "$info"
     /usr/bin/plutil -replace DoppelDeepLinkScheme -string "$DOPPEL_URL_SCHEME" "$info"
+    /usr/bin/plutil -replace DoppelRouterSHA256 -string "$(sha256_file "$ROUTER_CLI")" "$info"
     if [[ -n "$SIGN_LEAF_SHA1" ]]; then
         /usr/bin/plutil -replace DoppelPinnedRequirement -string \
             "identifier \"$DOPPEL_BUNDLE_ID\" and certificate leaf H\"$SIGN_LEAF_SHA1\"" "$info"
@@ -411,13 +437,18 @@ build_instance() {
         fail_closed "The primary executable changed while the staged copy was being created."
 
     local embedded="$target/Contents/Resources/Doppel"
-    mkdir -p "$embedded/bin" "$embedded/assets"
+    mkdir -p "$embedded/bin" "$embedded/assets" "$embedded/engine"
     /bin/cp "$ASSET_ROOT/doppel-engine.zsh" "$CONFIG_FILE" "$DEEP_LINK_PATCHER" "$embedded/" || \
         fail_closed "Embedding the self-healing engine failed."
     /bin/cp "$LAUNCHER" "$ALERT_HELPER" "$URL_HANDLER_HELPER" "$embedded/bin/" || \
         fail_closed "Embedding the engine executables failed."
+    /bin/cp "$ROUTER_CLI" "$embedded/bin/doppel" || \
+        fail_closed "Embedding the engine router failed."
+    /bin/cp "$ROUTER_ENGINE" "$ROUTER_PATCHER" "$embedded/engine/" || \
+        fail_closed "Embedding the router support files failed."
     /bin/chmod 755 "$embedded/bin/doppel-launcher" "$embedded/bin/doppel-alert" \
-        "$embedded/bin/doppel-url-handler"
+        "$embedded/bin/doppel-url-handler" "$embedded/bin/doppel" \
+        "$embedded/engine/doppel-engine.zsh"
     /bin/cp "$ICON_ICNS" "$ICON_PNG" "$embedded/assets/" || \
         fail_closed "Embedding the icon assets failed."
 
@@ -512,14 +543,19 @@ restyle_instance() {
     # to the previous name and colour — undoing the edit that just happened.
     local embedded="$app/Contents/Resources/Doppel"
     if [[ -d "$embedded" ]]; then
-        /bin/mkdir -p "$embedded/bin" "$embedded/assets"
+        /bin/mkdir -p "$embedded/bin" "$embedded/assets" "$embedded/engine"
         /bin/cp "$CONFIG_FILE" "$embedded/instance-config.zsh" || \
             fail_closed "Updating the embedded config failed."
         /bin/cp "$ASSET_ROOT/doppel-engine.zsh" "$embedded/doppel-engine.zsh" 2>/dev/null || true
         /bin/cp "$DEEP_LINK_PATCHER" "$embedded/patch-deep-link.py" 2>/dev/null || true
         /bin/cp "$URL_HANDLER_HELPER" "$embedded/bin/doppel-url-handler" || \
             fail_closed "Updating the URL-handler repair helper failed."
-        /bin/chmod 755 "$embedded/bin/doppel-url-handler"
+        /bin/cp "$ROUTER_CLI" "$embedded/bin/doppel" || \
+            fail_closed "Updating the embedded engine router failed."
+        /bin/cp "$ROUTER_ENGINE" "$ROUTER_PATCHER" "$embedded/engine/" || \
+            fail_closed "Updating the router support files failed."
+        /bin/chmod 755 "$embedded/bin/doppel-url-handler" "$embedded/bin/doppel" \
+            "$embedded/engine/doppel-engine.zsh"
         /bin/cp "$ICON_ICNS" "$embedded/assets/icon.icns" || fail_closed "Updating the embedded icon failed."
         /bin/cp "$ICON_PNG" "$embedded/assets/icon.png" || fail_closed "Updating the embedded icon failed."
         /bin/chmod 755 "$embedded/doppel-engine.zsh" 2>/dev/null || true
@@ -532,6 +568,7 @@ restyle_instance() {
     /usr/bin/plutil -replace CFBundleName -string "$DOPPEL_DISPLAY_NAME" "$info"
     /usr/bin/plutil -replace CFBundleAlternateNames.0 -string "$DOPPEL_DISPLAY_NAME" "$info"
     /usr/bin/plutil -replace CFBundleURLTypes.0.CFBundleURLName -string "$DOPPEL_DISPLAY_NAME" "$info"
+    /usr/bin/plutil -replace DoppelRouterSHA256 -string "$(sha256_file "$ROUTER_CLI")" "$info"
 
     /usr/bin/xattr -cr "$app" || fail_closed "Removing filesystem metadata failed."
     # The re-sign covers the launcher, so it must keep the device entitlements
@@ -594,9 +631,91 @@ release_rebuild_lock() {
     /bin/rmdir "$lock"
 }
 
+managed_slug_for_this_profile() {
+    local doppel_home="$HOME/Library/Application Support/Doppel"
+    if [[ "${DOPPEL_DEV:-0}" == "1" ]]; then
+        doppel_home="${DOPPEL_HOME:-$doppel_home}"
+    fi
+    local config candidate_bundle_id
+    for config in "$doppel_home/instances"/*/instance-config.zsh(N); do
+        candidate_bundle_id="$(/bin/zsh -c \
+            'source "$1" 2>/dev/null || exit 0; print -r -- "${DOPPEL_BUNDLE_ID:-}"' \
+            doppel-instance "$config" 2>/dev/null || true)"
+        if [[ "$candidate_bundle_id" == "$DOPPEL_BUNDLE_ID" ]]; then
+            print -r -- "${config:h:t}"
+            return 0
+        fi
+    done
+    return 0
+}
+
+consume_clone_launch_authorization() {
+    local marker="$1" slug token doppel_home="$HOME/Library/Application Support/Doppel"
+    if [[ "${DOPPEL_DEV:-0}" == "1" ]]; then
+        doppel_home="${DOPPEL_HOME:-$doppel_home}"
+    fi
+    slug="${marker%%:*}"
+    token="${marker#*:}"
+    [[ -n "$slug" && "$slug" != *[^a-z0-9-]* && ${#token} -eq 64 && \
+       "$token" != *[^a-f0-9]* ]] || return 1
+    local receipt="$doppel_home/state/clone-launch/$slug" saved_token saved_bundle extra owner
+    [[ -r "$receipt" ]] || return 1
+    IFS=$'\t' read -r saved_token saved_bundle extra < "$receipt" || return 1
+    [[ -z "$extra" && "$saved_token" == "$token" && \
+       "$saved_bundle" == "$DOPPEL_BUNDLE_ID" ]] || return 1
+    owner="$(/bin/cat "$doppel_home/state/IABCoordinator.lock/pid" 2>/dev/null || true)"
+    [[ "$owner" == <1-> ]] && /bin/kill -0 "$owner" 2>/dev/null || return 1
+    /bin/rm -f "$receipt" || return 1
+    return 0
+}
+
+route_managed_engine() {
+    local slug output status
+    slug="$(managed_slug_for_this_profile)"
+    [[ -n "$slug" ]] || return 1
+    [[ -x "$ROUTER_CLI" ]] || \
+        fail_closed "This profile owns Built-in Browser, but its signed engine router is missing. Rebuild it from Doppel."
+    log_message "Direct app launch entered locked engine routing"
+    output="$("$ROUTER_CLI" __route-launch "$slug" "$@" 2>&1)"
+    status=$?
+    if (( status != 0 )); then
+        output="${output#doppel: }"
+        [[ -n "$output" ]] || output="The assigned official engine could not be started."
+        fail_closed "$output"
+    fi
+    [[ -n "$output" ]] && log_message "$output"
+    # The official process now owns this profile. Returning to launch_instance
+    # would open ChatGPT.real as well, so a successful handoff always ends the
+    # locally signed launcher process here.
+    exit 0
+}
+
+exec_clone_binary() {
+    local app="$1"
+    shift
+    mkdir -p "$DOPPEL_PROFILE_ROOT" "$DOPPEL_CODEX_HOME"
+    export CODEX_ELECTRON_USER_DATA_PATH="$DOPPEL_PROFILE_ROOT"
+    export CODEX_HOME="$DOPPEL_CODEX_HOME"
+    export DOPPEL_URL_SCHEME
+    export DOPPEL_PRIMARY_APP="$PRIMARY_APP"
+    export DOPPEL_PRIMARY_BUNDLE_ID="$PRIMARY_BUNDLE_ID"
+    export DOPPEL_URL_HANDLER_HELPER="$URL_HANDLER_HELPER"
+    log_message "Launching healthy instance $(source_version)"
+    exec "$app/Contents/MacOS/ChatGPT.real" --user-data-dir="$DOPPEL_PROFILE_ROOT" "$@"
+    fail_closed "The preserved vendor executable could not be started."
+}
+
 launch_instance() {
     local app="$1"
     shift
+    local authorized_clone=0 marker=""
+    if [[ "${1:-}" == --doppel-authorized-clone=* ]]; then
+        marker="${1#--doppel-authorized-clone=}"
+        shift
+        consume_clone_launch_authorization "$marker" || \
+            fail_closed "This clone launch was not authorized by Doppel's active engine coordinator."
+        authorized_clone=1
+    fi
     require_engine_assets
 
     local version executable_hash
@@ -616,20 +735,13 @@ launch_instance() {
             print -r -- "doppel-engine: already-healthy"
             return 0
         fi
-        mkdir -p "$DOPPEL_PROFILE_ROOT" "$DOPPEL_CODEX_HOME"
-        export CODEX_ELECTRON_USER_DATA_PATH="$DOPPEL_PROFILE_ROOT"
-        export CODEX_HOME="$DOPPEL_CODEX_HOME"
-        export DOPPEL_URL_SCHEME
-        export DOPPEL_PRIMARY_APP="$PRIMARY_APP"
-        export DOPPEL_PRIMARY_BUNDLE_ID="$PRIMARY_BUNDLE_ID"
-        export DOPPEL_URL_HANDLER_HELPER="$URL_HANDLER_HELPER"
-        # ChatGPT asks for optional privacy capabilities in the context where
-        # it actually uses them. Doppel used to raise its own broad assistant
-        # on every launch, which nagged for camera and microphone even when the
-        # account never used those features and could disagree with Settings.
-        log_message "Launching healthy instance $version"
-        exec "$app/Contents/MacOS/ChatGPT.real" --user-data-dir="$DOPPEL_PROFILE_ROOT" "$@"
-        fail_closed "The preserved vendor executable could not be started."
+        # Every known managed profile enters the CLI's one authoritative lock,
+        # even when it currently uses the fallback clone. The CLI relaunches a
+        # clone with a private one-shot marker that is consumed above. This
+        # closes Finder-launch versus Browser-assignment races without holding
+        # the global lock for the lifetime of the GUI app.
+        (( authorized_clone )) || route_managed_engine "$@" || true
+        exec_clone_binary "$app" "$@"
     fi
 
     is_doppel_instance "$app" || \
@@ -667,8 +779,9 @@ launch_instance() {
 
     "$LSREGISTER" -f "$app" >/dev/null 2>&1 || true
     # A pre-fix clone may have left an explicit preference claiming the
-    # vendor's codex:// scheme. New clones never register that scheme, and the
-    # stale preference is repaired here without launching the primary app.
+    # vendor's codex:// scheme. New clones declare that scheme for OAuth but do
+    # not claim it during normal launch; stale ownership is repaired here
+    # without launching the primary app.
     if ! "$URL_HANDLER_HELPER" set "$PRIMARY_SCHEME" "$PRIMARY_APP" "$PRIMARY_BUNDLE_ID"; then
         log_message "WARNING: Could not restore $PRIMARY_SCHEME:// to $PRIMARY_BUNDLE_ID"
         print -u2 -r -- "$DOPPEL_DISPLAY_NAME: warning: the primary $PRIMARY_SCHEME:// handler could not be restored."
@@ -680,6 +793,9 @@ launch_instance() {
     log_message "Installed instance $version; rollback preserved at $backup"
     if [[ "${DOPPEL_INSTALL_ONLY:-0}" == "1" ]]; then
         return 0
+    fi
+    if (( authorized_clone )); then
+        exec_clone_binary "$app" "$@"
     fi
     /usr/bin/open -na "$app" || fail_closed "The rebuilt instance was installed but could not be opened."
 }

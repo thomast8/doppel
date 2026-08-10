@@ -100,7 +100,22 @@ check "own bundle identifier" "$(plist "$APP" CFBundleIdentifier)" "com.openai.c
 check "own profile" "$(plist "$APP" LSEnvironment.CODEX_ELECTRON_USER_DATA_PATH)" "$HOME/Library/Application Support/$NAME"
 check "launch-time protocol registration uses the instance scheme" \
     "$(plist "$APP" LSEnvironment.DOPPEL_URL_SCHEME)" "codex-$SLUG"
+check "instance scheme is declared first" \
+    "$(plist "$APP" CFBundleURLTypes.0.CFBundleURLSchemes.0)" "codex-$SLUG"
+check "registered OAuth callback scheme remains eligible" \
+    "$(plist "$APP" CFBundleURLTypes.0.CFBundleURLSchemes.1)" "codex"
 check "deep-link patch recorded" "$(plist "$APP" DoppelDeepLinkScheme)" "codex-$SLUG"
+ROUTER_HASH="$(/usr/bin/shasum -a 256 "$CLI" | /usr/bin/awk '{print $1}')"
+check "transparent engine router version" "$(plist "$APP" DoppelEngineVersion)" "26"
+check "transparent engine router hash recorded" "$(plist "$APP" DoppelRouterSHA256)" "$ROUTER_HASH"
+if [[ -x "$APP/Contents/Resources/Doppel/bin/doppel" && \
+      -x "$APP/Contents/Resources/Doppel/engine/doppel-engine.zsh" && \
+      -f "$APP/Contents/Resources/Doppel/engine/patch-deep-link.py" ]] && \
+   /usr/bin/cmp -s "$CLI" "$APP/Contents/Resources/Doppel/bin/doppel"; then
+    pass "signed transparent engine router embedded"
+else
+    fail "signed transparent engine router embedded" "router assets are missing or stale"
+fi
 PATCH_HASH="$(/usr/bin/python3 "$APP/Contents/Resources/Doppel/patch-deep-link.py" \
     verify "$APP/Contents/Resources/app.asar" 2>/dev/null)"
 check "patched ASAR integrity matches Info.plist" "$PATCH_HASH" "$(asar_integrity_hash "$APP")"
@@ -139,6 +154,12 @@ check "data path unchanged" "$(plist "$RENAMED_APP" LSEnvironment.CODEX_HOME)" "
 check "embedded config renamed" \
     "$(/bin/zsh -c "source '$RENAMED_APP/Contents/Resources/Doppel/instance-config.zsh'; print -r -- \$DOPPEL_DISPLAY_NAME" 2>/dev/null)" \
     "$RENAMED"
+check "restyle preserves current router hash" "$(plist "$RENAMED_APP" DoppelRouterSHA256)" "$ROUTER_HASH"
+if /usr/bin/cmp -s "$CLI" "$RENAMED_APP/Contents/Resources/Doppel/bin/doppel"; then
+    pass "restyle preserves the current embedded router"
+else
+    fail "restyle preserves the current embedded router" "the routed CLI changed or disappeared"
+fi
 got="$(icon_hex "$RENAMED_APP/Contents/Resources/icon-chatgpt.png")"
 if colour_near "$got" "3B82F6"; then pass "icon recoloured blue ($got)"; else fail "icon recoloured blue" "got $got"; fi
 DR_AFTER="$(/usr/bin/codesign -d -r- "$RENAMED_APP" 2>&1 | grep 'designated =>')"
@@ -163,6 +184,22 @@ else
     fail "icon restored to the vendor's own artwork" "the icon still differs from the primary app's"
 fi
 check "recorded as original" "$(/bin/zsh -c "source '$DIR/instance-config.zsh'; print -r -- \$DOPPEL_TINT" 2>/dev/null)" "original"
+
+print -r -- ""
+print -r -- "direct Finder launch enters the locked engine router"
+/usr/bin/open -na "$RENAMED_APP" >/dev/null 2>&1
+for _ in {1..60}; do
+    /usr/bin/pgrep -f "${RENAMED_APP}/Contents/MacOS/ChatGPT.real" >/dev/null 2>&1 && break
+    /bin/sleep 1
+done
+if /usr/bin/pgrep -f "${RENAMED_APP}/Contents/MacOS/ChatGPT.real" >/dev/null 2>&1; then
+    pass "direct branded-app launch adopts the fallback profile"
+else
+    fail "direct branded-app launch adopts the fallback profile" "ChatGPT.real never appeared"
+fi
+[[ ! -e "$HOME/Library/Application Support/Doppel/state/clone-launch/$SLUG" ]] && \
+    pass "one-shot clone authorization is consumed" || \
+    fail "one-shot clone authorization is consumed" "a reusable authorization was left behind"
 
 print -r -- ""
 print -r -- "remove"

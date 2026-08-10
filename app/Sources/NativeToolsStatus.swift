@@ -35,7 +35,12 @@ struct NativeToolsStatus: Equatable {
     var chronicleAppPath = ""
     var chronicleFrameAge: Int?
     var discoverableRollbacks = 0
+    /// True only for output from an older CLI that had no vendor-engine slot.
     var inAppBrowserUnavailable = false
+    var inAppBrowserInstanceID = ""
+    var inAppBrowserInstanceName = ""
+    var inAppBrowserRunning = false
+    var inAppBrowserVendorValid = false
     var browserHosts: [BrowserHost] = []
     /// Display names of instances that have a browser extension host installed,
     /// and so can actually be handed the registration.
@@ -81,7 +86,17 @@ struct NativeToolsStatus: Equatable {
                 status.discoverableRollbacks = max(0, Int(fields[1]) ?? 0)
                 recognized = true
             case "in-app-browser" where fields.count >= 2:
-                status.inAppBrowserUnavailable = fields[1] == "unavailable-in-instances"
+                switch fields[1] {
+                case "assigned" where fields.count >= 6:
+                    status.inAppBrowserInstanceID = fields[2]
+                    status.inAppBrowserInstanceName = fields[3]
+                    status.inAppBrowserRunning = fields[4] == "running"
+                    status.inAppBrowserVendorValid = fields[5] == "valid"
+                case "unavailable-in-instances":
+                    status.inAppBrowserUnavailable = true
+                default:
+                    break // "unassigned" is recognized but carries no profile.
+                }
                 recognized = true
             case "instance" where fields.count >= 6:
                 // Only the browser-host flag is taken from these rows; the menu

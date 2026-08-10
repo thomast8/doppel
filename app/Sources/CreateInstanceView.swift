@@ -41,7 +41,8 @@ struct CreateInstanceView: View {
     }
 
     private var canCreate: Bool {
-        !trimmedName.isEmpty && !form.creating && (store.primaryInstalled || isEditing)
+        !trimmedName.isEmpty && !form.creating && !store.engineOperationBusy &&
+            (store.primaryInstalled || isEditing)
     }
 
     var body: some View {

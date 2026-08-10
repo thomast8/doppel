@@ -171,11 +171,46 @@ is the honest summary: running instances trades some code-integrity strength for
 account separation. Setting up a local signing identity buys back the tamper
 detection; it cannot buy back library validation.
 
-**The in-app browser cannot work, permanently.** The vendor gates its browser
-socket on the connecting process, its parent *and* its grandparent each carrying
-OpenAI's Team ID. The grandparent is the instance's own locally signed executable,
-so nothing short of OpenAI's signing key satisfies it. Use the browser extension,
-whose check stops at the parent process.
+**The in-app browser cannot work inside a clone, permanently.** The vendor gates
+its browser socket on the connecting process, its parent *and* its grandparent
+each carrying OpenAI's Team ID. The grandparent is the instance's own locally
+signed executable, so nothing short of OpenAI's signing key satisfies it. A clone
+uses the browser extension, whose check stops at the parent process.
+
+Doppel can assign one profile to a different engine without claiming the clone
+has become trusted: it launches the untouched `/Applications/ChatGPT.app` with
+that profile's external `CODEX_HOME` and Electron data path. Before launch it
+re-runs the same Apple-anchored vendor requirement used for updates and refuses
+if either the clone or a vendor engine for another profile is already open. The
+assignment itself never terminates a process. This preserves vendor code identity
+but gives up the clone's distinct Dock, URL-handler and TCC identity while the
+official engine is active. It also does not isolate the vendor's shared Keychain,
+app-group or Computer Use services.
+
+The official engine is launched with its in-app Sparkle updater disabled so its
+profile cannot advance independently of the fallback clone. It starts from an
+allowlisted environment rather than inheriting the invoking Codex process:
+profile roots and the updater switch are explicit, normal macOS account values
+and an existing SSH-agent socket are retained, and unrelated `CODEX_*` and
+`DOPPEL_*` state is absent. A PID-owned global
+operation lock serialises engine assignment, release, launch, rebuild, removal
+and update installation through process adoption. The critical worker runs in
+an isolated process session, and the lease remains live while any process in
+that group survives, including after a coordinator or supervisor failure.
+Every Finder/Dock launch of a known clone enters that same lock. A fallback clone
+is reopened with a private one-shot authorization, which its signature-validated
+engine consumes while the coordinator holds the lock through positive process
+adoption. Releasing or moving the slot also requires the outgoing clone to match
+the official build. Assignment and official launch additionally require the
+current router version, router hash and pinned bundle verification. A private runtime
+receipt binds the assigned slug to the PID, process start and vendor build that
+Doppel itself launched, so a manually opened process with an unverifiable
+`CODEX_HOME` is treated as a conflict rather than adopted.
+
+These roots separate account routing inside one macOS login; they are not a
+multi-user security boundary. Existing profile directories retain their current
+POSIX modes, and the Keychain, app group, Computer Use service and other
+same-user facilities remain shared.
 
 ## The Doppel app you download
 
@@ -210,6 +245,9 @@ front of someone who is still deciding whether to trust you.
 | Replaying an older genuine vendor build | Addressed. An update must be strictly newer than the installed build. |
 | Environment variables redirecting an installed copy's vendor checks, signing identity, or the CLI it runs | Addressed. The bundled CLI and the in-bundle engine drop the vendor-identity, appcast and signing variables unless `DOPPEL_DEV=1`, and the menu app applies the same gate to `DOPPEL_CLI`, which it used to follow unconditionally. |
 | Vendor updater running inside a clone and destroying account routing | Addressed. Sparkle is disabled in clones via the vendor's own switch, plus feed and scheduled-check safeguards. |
+| A forged or modified app being selected as the built-in-browser engine | Addressed. Assignment and every launch require the Apple-anchored OpenAI designated requirement and a strict deep signature. |
+| Clone and vendor engines opening the same Electron profile | Addressed for managed entrypoints. CLI, menu, Finder and Dock launches share a global operation lock through positive process adoption; launch also refuses any detected ChatGPT process already using the profile. A same-user process invoking preserved binaries or editing state directly remains out of scope. |
+| Official engine self-updating ahead of its fallback clone | Addressed for Doppel launches. Sparkle is disabled in the vendor-slot session, and release/reassignment verifies the outgoing fallback build. |
 | A vendor release changing the assumptions Doppel patches | Addressed by failing closed. A rebuild refuses rather than producing a half-working clone. |
 | `--purge-data` deleting data an instance does not own | Addressed. Shared, system and primary-owned paths are refused before anything moves. |
 | Tampering with a built instance | Detected only with a local signing identity. Not prevented. |
