@@ -266,12 +266,12 @@ unique.
 
 ### Dependencies
 
-There are none beyond macOS. Icon tinting, the instance launcher and the error
-helper are all compiled binaries that ship inside `Doppel.app`; everything else
-Doppel calls — `codesign`, `security`, `sips`, `iconutil`, `lsregister` — is part
-of the system. Running the CLI from a checkout instead compiles those three
-helpers on demand, which is the only case that wants the Xcode Command Line
-Tools.
+The installed app is self-contained. Sparkle 2 ships inside `Doppel.app`, while
+icon tinting, the instance launcher and the error helper are compiled binaries
+in the same bundle. Everything else Doppel calls — `codesign`, `security`,
+`sips`, `iconutil`, `lsregister` — is part of macOS. Building from a checkout
+needs Swift Package Manager for the pinned Sparkle dependency and the Xcode
+Command Line Tools.
 
 ### Menu-bar app
 
@@ -282,10 +282,11 @@ open -a ~/Applications/Doppel.app
 app/test.zsh               # unit tests for the menu app's parsing
 ```
 
-Builds are signed ad hoc. Set `DOPPEL_SIGN_ID` to a **Developer ID Application**
-identity to produce a distributable one; the nested helpers are signed
-individually before the outer bundle, with hardened runtime and a secure
-timestamp, which is the shape notarisation expects.
+Local builds are signed ad hoc. Set `DOPPEL_SIGN_ID` to a **Developer ID
+Application** identity and `DOPPEL_SPARKLE_PUBLIC_KEY` to the release EdDSA
+public key to produce a distributable build. Sparkle and Doppel's helpers are
+signed inside-out before the outer bundle, with hardened runtime and a secure
+timestamp.
 
 `app/test.zsh` rather than a bare `swift test`: XCTest ships inside Xcode, not
 with the Command Line Tools, and a Mac can have Xcode installed while
@@ -295,7 +296,8 @@ The `qa/` suites need nothing beyond macOS.
 
 A menu-bar-only front end (`LSUIElement`, so no Dock icon): list instances,
 launch, rebuild, rename, recolour or remove them, coordinate ChatGPT updates,
-create a new one from a name plus a colour picker, and toggle **Start at Login**.
+create a new one from a name plus a colour picker, toggle **Start at Login**, or
+choose **Check for Doppel Updates…**.
 The foot of the menu shows Doppel's own version and the ChatGPT build it is
 managing, which is what you want to hand over when reporting a problem.
 
@@ -313,6 +315,39 @@ advisory lock stops launchd and Finder producing two menu-bar icons.
 Start at Login installs a user LaunchAgent (`ai.doppel.menubar`) rather than using
 SMAppService, which needs a Developer ID-signed bundle that local ad-hoc builds
 don't have. Turning the toggle off boots the job out and removes the plist.
+
+### Doppel updates and releases
+
+Sparkle checks the signed `appcast.xml` on GitHub and verifies every update with
+the EdDSA public key sealed into the installed app. Automatic checks are enabled;
+the menu item provides an immediate manual check. Doppel's own updater is
+separate from the coordinated ChatGPT update flow described above.
+Ad-hoc builds without a public key keep both automatic and manual update checks
+disabled rather than accepting an unsigned feed.
+
+The existing v1.0.0 asset was built ad hoc and was not notarised, so it cannot be
+the Sparkle bootstrap. The first Sparkle-enabled release must be installed once
+from its Developer ID-signed and notarised GitHub asset. Later versions can then
+install themselves.
+
+Release packaging is an explicit two-step publication flow:
+
+```sh
+export DOPPEL_SIGN_ID="Developer ID Application: Example (TEAMID)"
+export DOPPEL_SPARKLE_PUBLIC_KEY="public key from Sparkle generate_keys"
+export SPARKLE_ED_KEY_FILE="/secure/path/to/ed25519.key"
+export NOTARY_KEYCHAIN_PROFILE="doppel-notary"
+
+just package-release 1.1.0 12
+```
+
+The recipe builds a universal app, signs nested code inside-out, submits it to
+Apple, staples and validates the ticket, assesses it with Gatekeeper, creates the
+release ZIP, and generates `dist/releases/appcast.xml`. It does not upload or
+change git. Review the ZIP and feed, upload the ZIP to the matching GitHub release,
+then replace the repository `appcast.xml` with the generated feed. Keep the EdDSA
+private key and notary profile out of the repository; losing the private key means
+existing installs cannot trust a replacement update key.
 
 ## Secure signing
 
