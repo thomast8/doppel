@@ -20,14 +20,15 @@ readonly APP="$INSTALL_ROOT/Doppel.app"
 readonly UNIVERSAL="${DOPPEL_UNIVERSAL:-0}"
 # Ad hoc by default, which is what a local build wants. Set DOPPEL_SIGN_ID to a
 # "Developer ID Application" identity (its name or its SHA-1) to produce a
-# distributable build; from there notarisation is only notarytool plus stapling.
-# Everything else about the signing below is already what notarisation expects.
+# Developer ID build; from there notarisation is only notarytool plus stapling.
+# Ad-hoc builds can still use EdDSA-verified Sparkle updates for personal use.
 readonly SIGN_ID="${DOPPEL_SIGN_ID:--}"
 readonly DOPPEL_VERSION="${DOPPEL_VERSION:-1.0.0}"
 readonly DOPPEL_BUILD="${DOPPEL_BUILD:-10}"
 readonly DOPPEL_BUNDLE_ID="${DOPPEL_BUNDLE_ID:-ai.doppel.menubar}"
 readonly SPARKLE_FEED_URL="${DOPPEL_SPARKLE_FEED_URL:-https://raw.githubusercontent.com/thomast8/doppel/main/appcast.xml}"
 readonly SPARKLE_PUBLIC_KEY="${DOPPEL_SPARKLE_PUBLIC_KEY:-}"
+readonly SINGLE_INSTANCE_LOCK_NAME="${DOPPEL_SINGLE_INSTANCE_LOCK_NAME:-}"
 readonly SWIFT_SCRATCH="${DOPPEL_SWIFT_SCRATCH_PATH:-$APP_SRC/.build}"
 readonly SPARKLE_ROOT="${DOPPEL_SPARKLE_ROOT:-$SWIFT_SCRATCH/artifacts/sparkle/Sparkle}"
 
@@ -169,8 +170,14 @@ if [[ -n "$SPARKLE_PUBLIC_KEY" ]]; then
     /usr/bin/plutil -insert SUFeedURL -string "$SPARKLE_FEED_URL" "$APP/Contents/Info.plist"
     /usr/bin/plutil -insert SUEnableAutomaticChecks -bool true "$APP/Contents/Info.plist"
     /usr/bin/plutil -insert SUPublicEDKey -string "$SPARKLE_PUBLIC_KEY" "$APP/Contents/Info.plist"
+    if [[ "${DOPPEL_SPARKLE_AUTOMATIC_UPDATE:-0}" == "1" ]]; then
+        /usr/bin/plutil -insert SUAutomaticallyUpdate -bool true "$APP/Contents/Info.plist"
+    fi
 else
     /usr/bin/plutil -insert SUEnableAutomaticChecks -bool false "$APP/Contents/Info.plist"
+fi
+if [[ -n "$SINGLE_INSTANCE_LOCK_NAME" ]]; then
+    /usr/bin/plutil -insert DoppelSingleInstanceLockName -string "$SINGLE_INSTANCE_LOCK_NAME" "$APP/Contents/Info.plist"
 fi
 if [[ -n "$SPARKLE_PUBLIC_KEY" && "$SPARKLE_FEED_URL" == http://localhost:* ]]; then
     /usr/bin/plutil -insert NSAppTransportSecurity -xml '<dict><key>NSExceptionDomains</key><dict><key>localhost</key><dict><key>NSExceptionAllowsInsecureHTTPLoads</key><true/></dict></dict></dict>' "$APP/Contents/Info.plist"
@@ -229,7 +236,7 @@ typeset adhoc_entitlements=""
 if [[ "$SIGN_ID" == "-" ]]; then
     # A hardened ad-hoc app and ad-hoc dynamic framework have no matching Team
     # ID, so macOS library validation rejects Sparkle before launch. Keep this
-    # development-only exception off every Developer ID distribution build.
+    # exception off every Developer ID distribution build.
     adhoc_entitlements="$(/usr/bin/mktemp "${TMPDIR:-/tmp}/doppel-entitlements.XXXXXXXX")"
     /usr/bin/plutil -create xml1 "$adhoc_entitlements"
     /usr/bin/plutil -insert 'com\.apple\.security\.cs\.disable-library-validation' -bool true "$adhoc_entitlements"
@@ -250,7 +257,7 @@ if [[ "$SIGN_ID" != "-" ]]; then
     /usr/bin/codesign -dv --verbose=4 "$APP" 2>&1 | /usr/bin/grep -q "^Authority=Developer ID Application" || {
         print -u2 -r -- "the outer bundle is not signed by a Developer ID Application certificate"; exit 1
     }
-    print -r -- "Signed for distribution. Next: notarytool submit, then stapler staple."
+    print -r -- "Signed for Developer ID distribution. Next: notarytool submit, then stapler staple."
 fi
 
 print -r -- "Installed: $APP"

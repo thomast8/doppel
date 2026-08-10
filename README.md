@@ -325,29 +325,46 @@ separate from the coordinated ChatGPT update flow described above.
 Ad-hoc builds without a public key keep both automatic and manual update checks
 disabled rather than accepting an unsigned feed.
 
-The existing v1.0.0 asset was built ad hoc and was not notarised, so it cannot be
-the Sparkle bootstrap. The first Sparkle-enabled release must be installed once
-from its Developer ID-signed and notarised GitHub asset. Later versions can then
-install themselves.
+The existing v1.0.0 asset does not contain Sparkle, so the first Sparkle-enabled
+release must be installed manually once. For a personal ad-hoc release, macOS
+will block that first downloaded build until you approve it with **Open Anyway**
+in Privacy & Security. Later releases are verified with the Sparkle EdDSA key and
+can install themselves. This is suitable for personal use, but it is not the
+normal trusted installation experience for public users.
 
 Release packaging is an explicit two-step publication flow:
 
 ```sh
-export DOPPEL_SIGN_ID="Developer ID Application: Example (TEAMID)"
-export DOPPEL_SPARKLE_PUBLIC_KEY="public key from Sparkle generate_keys"
-export SPARKLE_ED_KEY_FILE="/secure/path/to/ed25519.key"
-export NOTARY_KEYCHAIN_PROFILE="doppel-notary"
-
+just sparkle-key             # once; keeps the private key in your Keychain
 just package-release 1.1.0 12
 ```
 
-The recipe builds a universal app, signs nested code inside-out, submits it to
-Apple, staples and validates the ticket, assesses it with Gatekeeper, creates the
-release ZIP, and generates `dist/releases/appcast.xml`. It does not upload or
-change git. Review the ZIP and feed, upload the ZIP to the matching GitHub release,
-then replace the repository `appcast.xml` with the generated feed. Keep the EdDSA
-private key and notary profile out of the repository; losing the private key means
-existing installs cannot trust a replacement update key.
+Back up that private key once to encrypted storage; do not commit the export:
+
+```sh
+app/.build/artifacts/sparkle/Sparkle/bin/generate_keys \
+  --account ai.doppel.menubar -x /secure/backup/doppel-ed25519.key
+```
+
+The default recipe builds a universal app, ad-hoc signs nested code inside-out,
+creates the release ZIP, and generates `dist/releases/appcast.xml` with the key
+stored under the `ai.doppel.menubar` Keychain account. It does not upload or
+change git. Review the ZIP and feed, upload the ZIP to the matching GitHub
+release, then replace the repository `appcast.xml` with the generated feed.
+Keep the EdDSA private key safe; losing it means existing ad-hoc installs cannot
+trust a replacement update key.
+
+Developer ID distribution can be added later without changing the normal
+release command:
+
+```sh
+export DOPPEL_SIGN_ID="Developer ID Application: Example (TEAMID)"
+export NOTARY_KEYCHAIN_PROFILE="doppel-notary"
+just package-release 1.2.0 13
+```
+
+With those variables set, the recipe also submits the app to Apple, staples and
+validates the notarisation ticket, and assesses the result with Gatekeeper.
 
 ## Secure signing
 

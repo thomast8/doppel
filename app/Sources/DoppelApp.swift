@@ -9,7 +9,9 @@ struct DoppelApp: App {
 
     init() {
         let arguments = ProcessInfo.processInfo.arguments
-        let updateQALaunch = arguments.contains("--check-for-doppel-updates")
+        let foregroundUpdateQALaunch = arguments.contains("--check-for-doppel-updates")
+        let backgroundUpdateQALaunch = arguments.contains("--download-doppel-update")
+        let updateQALaunch = foregroundUpdateQALaunch || backgroundUpdateQALaunch
         let headlessCommand = arguments.contains("--login-item")
             || arguments.contains("--render-ui")
         doppelUpdatesEnabled = !(Bundle.main.object(
@@ -46,7 +48,11 @@ struct DoppelApp: App {
             exit(0)
         }
 
-        if !SingleInstance.acquire(lockName: updateQALaunch ? "menubar-update-qa.lock" : "menubar.lock") {
+        let configuredLockName = Bundle.main.object(
+            forInfoDictionaryKey: "DoppelSingleInstanceLockName") as? String
+        let lockName = configuredLockName
+            ?? (updateQALaunch ? "menubar-update-qa.lock" : "menubar.lock")
+        if !SingleInstance.acquire(lockName: lockName) {
             // Another menu-bar instance is already running; a second icon would
             // just confuse. Leave quietly.
             exit(0)
@@ -63,7 +69,11 @@ struct DoppelApp: App {
             DispatchQueue.main.async { [updaterController] in
                 NSApp.activate(ignoringOtherApps: true)
                 updaterController.startUpdater()
-                updaterController.checkForUpdates(nil)
+                if backgroundUpdateQALaunch {
+                    updaterController.updater.checkForUpdatesInBackground()
+                } else {
+                    updaterController.checkForUpdates(nil)
+                }
             }
         }
     }
