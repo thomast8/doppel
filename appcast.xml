@@ -6,6 +6,15 @@
         <description>Signed Doppel releases</description>
         <language>en</language>
         <item>
+            <title>1.1.1</title>
+            <pubDate>Tue, 11 Aug 2026 09:49:17 +0100</pubDate>
+            <link>https://github.com/thomast8/doppel</link>
+            <sparkle:version>13</sparkle:version>
+            <sparkle:shortVersionString>1.1.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/thomast8/doppel/releases/download/v1.1.1/Doppel-1.1.1-macOS.zip" length="3000704" type="application/octet-stream" sparkle:edSignature="fd7tgqdRSFsBmmPdiFswMB/jYiFpaqRhm230maRhBCUOj7ZKvqSttQLsQ+WITxD0vS5RqH0mnrsi7JEDxqoEAw=="/>
+        </item>
+        <item>
             <title>1.1.0</title>
             <pubDate>Mon, 10 Aug 2026 16:14:55 +0100</pubDate>
             <link>https://github.com/thomast8/doppel</link>

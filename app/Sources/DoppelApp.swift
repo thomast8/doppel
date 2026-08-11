@@ -4,7 +4,7 @@ import Sparkle
 @main
 struct DoppelApp: App {
     @StateObject private var store = InstanceStore()
-    private let updaterController: SPUStandardUpdaterController
+    private let updaterController: DoppelUpdater
     private let doppelUpdatesEnabled: Bool
 
     init() {
@@ -16,10 +16,8 @@ struct DoppelApp: App {
             || arguments.contains("--render-ui")
         doppelUpdatesEnabled = !(Bundle.main.object(
             forInfoDictionaryKey: "SUPublicEDKey") as? String ?? "").isEmpty
-        updaterController = SPUStandardUpdaterController(
-            startingUpdater: doppelUpdatesEnabled && !headlessCommand && !updateQALaunch,
-            updaterDelegate: nil,
-            userDriverDelegate: nil)
+        updaterController = DoppelUpdater(
+            startingUpdater: doppelUpdatesEnabled && !headlessCommand && !updateQALaunch)
 
         // Scriptable hook, also how the login-item path is tested without
         // driving the menu: Doppel --login-item {on|off|status}
@@ -68,11 +66,11 @@ struct DoppelApp: App {
             }
             DispatchQueue.main.async { [updaterController] in
                 NSApp.activate(ignoringOtherApps: true)
-                updaterController.startUpdater()
+                updaterController.start()
                 if backgroundUpdateQALaunch {
-                    updaterController.updater.checkForUpdatesInBackground()
+                    updaterController.checkForUpdatesInBackground()
                 } else {
-                    updaterController.checkForUpdates(nil)
+                    updaterController.checkForUpdates()
                 }
             }
         }
@@ -82,7 +80,7 @@ struct DoppelApp: App {
         MenuBarExtra {
             MenuContent(
                 store: store,
-                checkForDoppelUpdates: { updaterController.checkForUpdates(nil) },
+                checkForDoppelUpdates: { updaterController.checkForUpdates() },
                 doppelUpdatesEnabled: doppelUpdatesEnabled)
         } label: {
             MenuBarLabel(store: store)

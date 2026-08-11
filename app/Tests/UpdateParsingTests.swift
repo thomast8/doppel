@@ -18,6 +18,22 @@ final class UpdateParsingTests: XCTestCase {
     }
 
     func testUpdateAndPermissionParsing() {
+        let installPrompt = DoppelUpdatePromptModel(
+            currentVersion: "1.0.9", availableVersion: "1.1.0",
+            informationOnly: false, critical: false)
+        expect(installPrompt.title == "Doppel 1.1.0 is ready",
+               "an installable release should be presented as ready")
+        expect(installPrompt.detail.contains("verified before installation"),
+               "the prompt must describe the real verification boundary")
+        expect(installPrompt.primaryActionTitle == "Install Update",
+               "an installable release should offer installation")
+
+        let informationPrompt = DoppelUpdatePromptModel(
+            currentVersion: "1.0.9", availableVersion: "2.0",
+            informationOnly: true, critical: false)
+        expect(informationPrompt.primaryActionTitle == "View Update",
+               "an information-only release must not offer an invalid install action")
+
         let output = "available\t6067\t26.727.40816\t6119\t26.727.51351\thttps://example.invalid/update.zip\n"
         expect(
             ChatGPTUpdate.parse(output) == ChatGPTUpdate(
