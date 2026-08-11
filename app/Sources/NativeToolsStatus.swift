@@ -39,8 +39,15 @@ struct NativeToolsStatus: Equatable {
     var inAppBrowserUnavailable = false
     var inAppBrowserInstanceID = ""
     var inAppBrowserInstanceName = ""
+    var inAppBrowserAssignmentState = ""
     var inAppBrowserRunning = false
     var inAppBrowserVendorValid = false
+    /// The managed profile the live official ChatGPT process actually uses.
+    /// This is deliberately separate from the stored assignment: a normal
+    /// Dock launch can use the Veridue/default profile without a Doppel receipt.
+    var inAppBrowserRuntimeKind = "none"
+    var inAppBrowserRuntimeInstanceID = ""
+    var inAppBrowserRuntimeInstanceName = ""
     var browserHosts: [BrowserHost] = []
     /// Display names of instances that have a browser extension host installed,
     /// and so can actually be handed the registration.
@@ -48,6 +55,19 @@ struct NativeToolsStatus: Equatable {
 
     var chronicleIsFresh: Bool {
         chronicle == .running && chronicleFrameAge.map { (0...120).contains($0) } == true
+    }
+
+    var inAppBrowserAssignmentConflicted: Bool {
+        guard !inAppBrowserInstanceName.isEmpty, inAppBrowserRuntimeKind != "none" else {
+            return false
+        }
+        return inAppBrowserRuntimeKind != "managed" ||
+            inAppBrowserRuntimeInstanceID != inAppBrowserInstanceID
+    }
+
+    var inAppBrowserRunningOutsideDoppel: Bool {
+        inAppBrowserRuntimeKind != "none" &&
+            (inAppBrowserInstanceName.isEmpty || inAppBrowserAssignmentState == "untracked")
     }
 
     // The owner as reported for every browser, when they agree. They disagree
@@ -90,10 +110,20 @@ struct NativeToolsStatus: Equatable {
                 case "assigned" where fields.count >= 6:
                     status.inAppBrowserInstanceID = fields[2]
                     status.inAppBrowserInstanceName = fields[3]
-                    status.inAppBrowserRunning = fields[4] == "running"
+                    status.inAppBrowserAssignmentState = fields[4]
+                    status.inAppBrowserRunning = fields[4] == "running" || fields[4] == "untracked"
                     status.inAppBrowserVendorValid = fields[5] == "valid"
+                    if fields.count >= 9 {
+                        status.inAppBrowserRuntimeKind = fields[6]
+                        status.inAppBrowserRuntimeInstanceID = fields[7]
+                        status.inAppBrowserRuntimeInstanceName = fields[8]
+                    }
                 case "unavailable-in-instances":
                     status.inAppBrowserUnavailable = true
+                case "unassigned" where fields.count >= 5:
+                    status.inAppBrowserRuntimeKind = fields[2]
+                    status.inAppBrowserRuntimeInstanceID = fields[3]
+                    status.inAppBrowserRuntimeInstanceName = fields[4]
                 default:
                     break // "unassigned" is recognized but carries no profile.
                 }

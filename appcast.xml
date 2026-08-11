@@ -6,6 +6,22 @@
         <description>Signed Doppel releases</description>
         <language>en</language>
         <item>
+            <title>1.1.2</title>
+            <pubDate>Tue, 11 Aug 2026 14:12:32 +0100</pubDate>
+            <link>https://github.com/thomast8/doppel</link>
+            <sparkle:version>14</sparkle:version>
+            <sparkle:shortVersionString>1.1.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Doppel 1.1.2
+
+- Keeps the built-in Browser assignment aligned with the ChatGPT profile that is actually running.
+- Can adopt an already-running official ChatGPT profile without restarting it.
+- Asks before quitting ChatGPT when a Browser reassignment requires it, with a reminder to save unfinished drafts.
+- Shows assignment mismatches and unmanaged Browser sessions directly in the Doppel menu.
+]]></description>
+            <enclosure url="https://github.com/thomast8/doppel/releases/download/v1.1.2/Doppel-1.1.2-macOS.zip" length="3014686" type="application/octet-stream" sparkle:edSignature="uBWBryDt0Vc23Gz4YHppe9uZeL7529N6i7uDD5kI8nLOaOIwxUetrOwbnN0GDDo9k/R2LLSQ56sBH0wCeLt4Ag=="/>
+        </item>
+        <item>
             <title>1.1.1</title>
             <pubDate>Tue, 11 Aug 2026 09:49:17 +0100</pubDate>
             <link>https://github.com/thomast8/doppel</link>

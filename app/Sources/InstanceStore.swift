@@ -157,7 +157,50 @@ final class InstanceStore: ObservableObject {
     }
 
     func assignBuiltInBrowser(to instance: Instance) {
-        runCLI(["browser", "assign", instance.name], busyKey: "iab-slot") { [weak self] failure in
+        runCLI(["browser", "assign", instance.name], busyKey: "iab-slot",
+               reportFailure: false) { [weak self] failure in
+            guard let self else { return }
+            guard let failure else {
+                self.reload()
+                return
+            }
+            if Self.browserAssignmentNeedsQuit(failure) {
+                self.confirmQuitAndAssignBrowser(to: instance, detail: failure)
+            } else {
+                self.report(failure, for: "iab-slot")
+            }
+        }
+    }
+
+    nonisolated static func browserAssignmentNeedsQuit(_ message: String) -> Bool {
+        message.localizedCaseInsensitiveContains(
+            "the Browser assignment needs running ChatGPT apps to quit")
+    }
+
+    private func confirmQuitAndAssignBrowser(to instance: Instance, detail: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Quit ChatGPT and assign Browser?"
+        let reason = detail
+            .replacingOccurrences(of: "doppel: ", with: "")
+            .replacingOccurrences(
+                of: "the Browser assignment needs running ChatGPT apps to quit: ",
+                with: "")
+        alert.informativeText = """
+            Doppel needs to close the official ChatGPT window or managed instance involved before assigning the built-in Browser to \(instance.name). Other Doppel clones will stay open.
+
+            \(reason)
+
+            Save any unfinished drafts before continuing.
+            """
+        alert.addButton(withTitle: "Quit and Assign")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons[0].hasDestructiveAction = true
+        alert.buttons[0].keyEquivalent = ""
+        alert.buttons[1].keyEquivalent = "\r"
+        guard present(alert) == .alertFirstButtonReturn else { return }
+        runCLI(["browser", "assign", "--quit-running", instance.name],
+               busyKey: "iab-slot") { [weak self] failure in
             if failure == nil { self?.reload() }
         }
     }

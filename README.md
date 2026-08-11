@@ -159,16 +159,18 @@ bin/doppel browser assign "ChatGPT Personal"
 bin/doppel launch "ChatGPT Personal"
 ```
 
-Assignment never closes an app. If the profile's clone or another official
-ChatGPT engine is already running, launch fails with an instruction to close the
-conflicting window first; Doppel never risks two Electron processes opening the
-same profile. Opening the assigned profile's branded app directly from Finder or
-the Dock routes through that same official-engine launch path; it cannot silently
-fall back to the locally signed engine. Assignment refuses an older or modified
-clone until it has been rebuilt with the current signed router. Direct fallback
-launches use the same lock and a private one-shot authorization, so assignment
-cannot cross the moment a clone adopts its Electron profile. `CODEX_HOME`, browser
-data and account state still come from the
+Assignment does not close an app by default. If a conflicting engine is open,
+the menu offers **Quit and Assign** with a warning about unfinished drafts; the
+equivalent explicit CLI form is `browser assign --quit-running <name>`. Other
+Doppel clones stay open. When the untouched official app is already using the
+target managed profile, Doppel adopts that exact PID and start identity without
+restarting it. Opening the assigned profile's branded app directly from Finder
+or the Dock routes through that same official-engine launch path; it cannot
+silently fall back to the locally signed engine. A stopped assignment refuses an
+older or modified clone until it has been rebuilt with the current signed router.
+Direct fallback launches use the same lock and a private one-shot authorization,
+so assignment cannot cross the moment a clone adopts its Electron profile.
+`CODEX_HOME`, browser data and account state still come from the
 selected Doppel profile. The Dock/window identity is ordinary ChatGPT while that
 engine is active because changing the vendor bundle would invalidate its
 signature. `browser release` returns the profile to its normal Doppel engine and
@@ -184,9 +186,10 @@ macOS account values, the SSH agent socket when present, and its intended profil
 inputs. Inherited Codex sandbox/thread variables are never forwarded. Its own
 Sparkle updater is disabled for this session; Doppel updates every engine together,
 and release first verifies that the fallback clone is on the matching build.
-Doppel records the official process PID, start identity and build after launch;
-it will not silently adopt a manually opened process whose `CODEX_HOME` it
-cannot prove.
+Doppel records the official process PID, start identity and build after launch
+or adoption. Status compares that stored assignment with the live official
+process: a normal Dock launch using a different managed profile is shown as an
+assignment mismatch rather than being reported as the stored owner.
 
 ### Permissions for managed apps
 

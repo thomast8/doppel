@@ -627,7 +627,14 @@ chatgpt_process_candidates() {
     if [[ "${DOPPEL_DEV:-0}" == "1" && "${DOPPEL_IAB_DRY_RUN:-0}" == "1" ]]; then
         return 0
     fi
-    /usr/bin/pgrep -f '/Contents/MacOS/ChatGPT' 2>/dev/null || true
+    # pgrep deliberately excludes its ancestor processes on macOS. That makes
+    # a Doppel command launched from a Codex task inside official ChatGPT blind
+    # to the very vendor engine it must reconcile, so it can report a stale
+    # stored owner instead. `comm` is the executable path without arguments;
+    # the anchored suffix keeps this to main ChatGPT/ChatGPT.real processes and
+    # excludes Electron helpers and this scanner itself.
+    /bin/ps -ww -axo pid=,comm= 2>/dev/null | \
+        /usr/bin/awk '/\/Contents\/MacOS\/ChatGPT(\.real)?$/ { print $1 }' || true
 }
 
 profile_root_is_primary_default() {
@@ -707,6 +714,47 @@ raw_vendor_profile_pids() {
         vendor_command_uses_profile "$command" "$profile_root" && print -r -- "$pid"
     done
     return 0
+}
+
+# Describes the official ChatGPT process that is actually using a managed
+# profile, independently of the stored Browser assignment. A normal Dock launch
+# has no --user-data-dir argument, but can still be a managed profile when that
+# profile deliberately owns ChatGPT's default Electron root (Veridue does).
+#
+# Output is one tab-separated row:
+#   none
+#   managed<TAB>slug<TAB>name<TAB>pid
+#   unmanaged<TAB><TAB>ChatGPT<TAB>pid(s)
+#   ambiguous<TAB><TAB>Multiple managed profiles<TAB>pid(s)
+vendor_runtime_snapshot() {
+    local dir pids pid name runtime_pids="" runtime_names="" runtime_slug="" matches=0
+    local vendor_pids
+    for dir in "$INSTANCES_ROOT"/*(N/); do
+        is_instance_dir "$dir" || continue
+        pids="$(raw_vendor_profile_pids "$dir")"
+        [[ -n "$pids" ]] || continue
+        matches=$(( matches + 1 ))
+        name="$(config_value "$dir" DOPPEL_DISPLAY_NAME)"
+        runtime_names="${runtime_names:+$runtime_names, }$name"
+        runtime_slug="${dir:t}"
+        for pid in ${(f)pids}; do
+            [[ "$pid" == <1-> ]] || continue
+            [[ " $runtime_pids " == *" $pid "* ]] || runtime_pids="${runtime_pids:+$runtime_pids }$pid"
+        done
+    done
+    vendor_pids="$(vendor_main_pids)"
+    if (( matches == 0 )); then
+        if [[ -n "$vendor_pids" ]]; then
+            printf 'unmanaged\t\tChatGPT\t%s\n' "${(j: :)${(f)vendor_pids}}"
+        else
+            print -r -- "none"
+        fi
+    elif (( matches == 1 )) && [[ "$runtime_pids" != *" "* ]]; then
+        printf 'managed\t%s\t%s\t%s\n' "$runtime_slug" "$runtime_names" "$runtime_pids"
+    else
+        printf 'ambiguous\t\t%s\t%s\n' \
+            "${runtime_names:-Multiple managed profiles}" "$runtime_pids"
+    fi
 }
 
 process_start_fingerprint() {
@@ -824,16 +872,13 @@ require_vendor_compatible_profile() {
         die "'$name' was built from ChatGPT ${source_build:-unknown}, but the official engine is $official_build. Rebuild the profile first so Electron never opens it with a mismatched version."
 }
 
-require_transparent_router_profile() {
-    local dir="$1" app name engine_version
-    local expected_router_hash recorded_router_hash actual_router_hash
+require_compatible_transparent_router_profile() {
+    local dir="$1" app name engine_version recorded_router_hash actual_router_hash
     require_vendor_compatible_profile "$dir"
     app="$(app_path_for "$dir")"
     name="$(config_value "$dir" DOPPEL_DISPLAY_NAME)"
     engine_version="$(/usr/bin/plutil -extract DoppelEngineVersion raw \
         "$app/Contents/Info.plist" 2>/dev/null || true)"
-    expected_router_hash="$(/usr/bin/shasum -a 256 "$DOPPEL_CLI_PATH" 2>/dev/null | \
-        /usr/bin/awk '{print $1}')"
     recorded_router_hash="$(/usr/bin/plutil -extract DoppelRouterSHA256 raw \
         "$app/Contents/Info.plist" 2>/dev/null || true)"
     actual_router_hash="$(/usr/bin/shasum -a 256 \
@@ -843,9 +888,21 @@ require_transparent_router_profile() {
            -x "$app/Contents/Resources/Doppel/bin/doppel" && \
            -x "$app/Contents/Resources/Doppel/engine/doppel-engine.zsh" && \
            -f "$app/Contents/Resources/Doppel/engine/patch-deep-link.py" && \
-           -n "$expected_router_hash" && "$recorded_router_hash" == "$expected_router_hash" && \
-           "$actual_router_hash" == "$expected_router_hash" ]] && \
+           -n "$recorded_router_hash" && "$actual_router_hash" == "$recorded_router_hash" ]] && \
         "$app/Contents/MacOS/ChatGPT" --doppel-verify >/dev/null 2>&1 || \
+        die "'$name' is not ready for transparent Built-in Browser routing. Rebuild the profile before assigning or launching the official engine."
+}
+
+require_transparent_router_profile() {
+    local dir="$1" app name expected_router_hash recorded_router_hash
+    require_compatible_transparent_router_profile "$dir"
+    app="$(app_path_for "$dir")"
+    name="$(config_value "$dir" DOPPEL_DISPLAY_NAME)"
+    expected_router_hash="$(/usr/bin/shasum -a 256 "$DOPPEL_CLI_PATH" 2>/dev/null | \
+        /usr/bin/awk '{print $1}')"
+    recorded_router_hash="$(/usr/bin/plutil -extract DoppelRouterSHA256 raw \
+        "$app/Contents/Info.plist" 2>/dev/null || true)"
+    [[ -n "$expected_router_hash" && "$recorded_router_hash" == "$expected_router_hash" ]] || \
         die "'$name' is not ready for transparent Built-in Browser routing. Rebuild the profile before assigning or launching the official engine."
 }
 
@@ -1099,31 +1156,109 @@ cmd_route_launch() {
 }
 
 cmd_browser_assign() {
-    [[ $# -eq 1 && -n "$1" ]] || die "usage: doppel browser assign <name>"
-    local dir name current_slug current_dir
+    local quit_running=0
+    if [[ "${1:-}" == "--quit-running" ]]; then
+        quit_running=1
+        shift
+    fi
+    [[ $# -eq 1 && -n "$1" ]] || \
+        die "usage: doppel browser assign [--quit-running] <name>"
+    local dir name current_slug current_dir current_name target_vendor_pids target_pid
+    local -i current_running=0 target_clone_running=0 other_vendor_running=0
     dir="$(instance_dir_for "$1")"
     name="$(config_value "$dir" DOPPEL_DISPLAY_NAME)"
     validate_vendor_app "$PRIMARY_APP" || \
         die "the official ChatGPT engine is missing or is not valid OpenAI-signed code"
-    require_transparent_router_profile "$dir"
+    target_vendor_pids="$(raw_vendor_profile_pids "$dir")"
+    if [[ -n "$target_vendor_pids" ]]; then
+        # Adoption does not execute the fallback router: the verified official
+        # process already owns the profile. Accept a supported, self-consistent
+        # released router here so updating Doppel does not force that working
+        # Browser window to close merely because the manager CLI changed.
+        require_compatible_transparent_router_profile "$dir"
+    else
+        require_transparent_router_profile "$dir"
+    fi
 
     current_slug="$(iab_slot_slug)"
     if [[ "$current_slug" == "${dir:t}" ]]; then
+        # A normal Finder/Dock launch of the official app can already be using
+        # this managed profile without a Doppel receipt. Adopt that exact live
+        # process instead of telling the user to quit a working Browser.
+        if [[ -n "$target_vendor_pids" ]] && ! clone_instance_is_running "$dir" && \
+           ! other_vendor_engine_is_running "$dir"; then
+            local -a matching_target_pids
+            matching_target_pids=("${(f)target_vendor_pids}")
+            (( ${#matching_target_pids} == 1 )) || \
+                die "the Browser assignment needs running ChatGPT apps to quit: more than one official ChatGPT process is using '$name'."
+            target_pid="${matching_target_pids[1]}"
+            write_iab_runtime_receipt "${dir:t}" "$target_pid" "$(primary_version)"
+            print -r -- "built-in browser already assigned to and adopted from: $name"
+            return 0
+        fi
         print -r -- "built-in browser already assigned to: $name"
         return 0
     fi
     if [[ -n "$current_slug" ]]; then
         current_dir="$INSTANCES_ROOT/$current_slug"
-        any_chatgpt_process_uses_profile "$current_dir" && \
-            die "$(config_value "$current_dir" DOPPEL_DISPLAY_NAME) is using a ChatGPT engine. Quit it before reassigning the built-in browser."
         # Once the slot moves, this profile's next launch uses its fallback
         # clone. Do not return it to an older Electron build.
         require_vendor_compatible_profile "$current_dir"
+        current_name="$(config_value "$current_dir" DOPPEL_DISPLAY_NAME)"
+        any_chatgpt_process_uses_profile "$current_dir" && current_running=1
     fi
-    any_chatgpt_process_uses_profile "$dir" && \
-        die "'$name' is using a ChatGPT engine. Quit it before assigning the built-in browser."
-    other_vendor_engine_is_running "$dir" && \
-        die "the official ChatGPT engine is already running for another profile. Quit that ChatGPT window before assigning it to '$name'."
+
+    clone_instance_is_running "$dir" && target_clone_running=1
+    other_vendor_engine_is_running "$dir" && other_vendor_running=1
+
+    # If the target is already the one official ChatGPT process, assignment is
+    # just adoption: write the slot and bind a receipt to that PID/start time.
+    # This is the common Veridue case because it owns the vendor default root.
+    if [[ -n "$target_vendor_pids" ]] && (( ! current_running && ! target_clone_running && ! other_vendor_running )); then
+        local -a matching_target_pids
+        matching_target_pids=("${(f)target_vendor_pids}")
+        if (( ${#matching_target_pids} == 1 )); then
+            target_pid="${matching_target_pids[1]}"
+            write_iab_slot "${dir:t}"
+            write_iab_runtime_receipt "${dir:t}" "$target_pid" "$(primary_version)"
+            print -r -- "built-in browser assigned to and adopted from: $name"
+            return 0
+        fi
+    fi
+
+    if (( current_running || target_clone_running || other_vendor_running )) || \
+       [[ -n "$target_vendor_pids" ]]; then
+        if (( ! quit_running )); then
+            if (( current_running )); then
+                die "the Browser assignment needs running ChatGPT apps to quit: '$current_name' is still using a ChatGPT engine."
+            elif (( target_clone_running )); then
+                die "the Browser assignment needs running ChatGPT apps to quit: '$name' is running through its Doppel engine."
+            else
+                die "the Browser assignment needs running ChatGPT apps to quit: an official ChatGPT process is using another or ambiguous profile."
+            fi
+        fi
+
+        # This path is opt-in from the CLI, and the menu presents a confirmation
+        # first. Quit only the official vendor app and the two managed profiles
+        # involved in this transition; unrelated Doppel clones stay open.
+        if [[ -n "$(vendor_main_pids)" ]]; then
+            quit_instance "$PRIMARY_APP" "$PRIMARY_BUNDLE_ID" "ChatGPT"
+        fi
+        if [[ -n "$current_dir" ]] && clone_instance_is_running "$current_dir"; then
+            quit_instance "$(app_path_for "$current_dir")" \
+                "$(config_value "$current_dir" DOPPEL_BUNDLE_ID)" "$current_name"
+        fi
+        if clone_instance_is_running "$dir"; then
+            quit_instance "$(app_path_for "$dir")" \
+                "$(config_value "$dir" DOPPEL_BUNDLE_ID)" "$name"
+        fi
+        [[ -z "$(vendor_main_pids)" ]] || \
+            die "ChatGPT is still running, so the built-in browser assignment was not changed."
+        any_chatgpt_process_uses_profile "$dir" && \
+            die "'$name' is still running, so the built-in browser assignment was not changed."
+        [[ -z "$current_dir" ]] || ! any_chatgpt_process_uses_profile "$current_dir" || \
+            die "'$current_name' is still running, so the built-in browser assignment was not changed."
+    fi
 
     write_iab_slot "${dir:t}"
     print -r -- "built-in browser assigned to: $name"
@@ -1152,24 +1287,51 @@ cmd_browser_release() {
 }
 
 cmd_browser_status() {
-    local porcelain=0 slug dir name state signature
+    local porcelain=0 slug dir name state signature runtime_kind runtime_slug runtime_name runtime_pid
     if [[ "${1:-}" == "--porcelain" ]]; then
         porcelain=1; shift
     fi
     [[ $# -eq 0 ]] || die "usage: doppel browser status [--porcelain]"
+    IFS=$'\t' read -r runtime_kind runtime_slug runtime_name runtime_pid \
+        <<< "$(vendor_runtime_snapshot)"
     slug="$(iab_slot_slug)"
     if [[ -z "$slug" ]]; then
-        (( porcelain )) && print -r -- "unassigned" || \
+        if (( porcelain )); then
+            if [[ "$runtime_kind" == "none" ]]; then
+                print -r -- "unassigned"
+            else
+                printf 'unassigned\t%s\t%s\t%s\n' "$runtime_kind" "$runtime_slug" "$runtime_name"
+            fi
+        elif [[ "$runtime_kind" == "managed" ]]; then
+            print -r -- "Built-in browser: not assigned; official ChatGPT is currently using $runtime_name"
+        elif [[ "$runtime_kind" != "none" ]]; then
+            print -r -- "Built-in browser: not assigned; another official ChatGPT process is running ($runtime_name)"
+        else
             print -r -- "Built-in browser: not assigned"
+        fi
         return 0
     fi
     dir="$INSTANCES_ROOT/$slug"
     name="$(config_value "$dir" DOPPEL_DISPLAY_NAME)"
-    vendor_instance_is_running "$dir" && state="running" || state="stopped"
+    if [[ "$runtime_kind" != "none" && \
+          ( "$runtime_kind" != "managed" || "$runtime_slug" != "$slug" ) ]]; then
+        state="conflict"
+    elif vendor_instance_is_running "$dir"; then
+        state="running"
+    elif [[ "$runtime_kind" == "managed" && "$runtime_slug" == "$slug" ]]; then
+        state="untracked"
+    else
+        state="stopped"
+    fi
     validate_vendor_app "$PRIMARY_APP" && signature="valid" || signature="invalid"
     if (( porcelain )); then
-        printf 'assigned\t%s\t%s\t%s\t%s\t%s\n' \
-            "$slug" "$name" "$state" "$signature" "$PRIMARY_APP"
+        printf 'assigned\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$slug" "$name" "$state" "$signature" "$PRIMARY_APP" \
+            "$runtime_kind" "$runtime_slug" "$runtime_name"
+    elif [[ "$state" == "conflict" ]]; then
+        print -r -- "Built-in browser: assigned to $name, but official ChatGPT is currently using $runtime_name"
+    elif [[ "$state" == "untracked" ]]; then
+        print -r -- "Built-in browser: $name (running outside Doppel; official engine signature $signature)"
     else
         print -r -- "Built-in browser: $name ($state; official engine signature $signature)"
     fi
@@ -1182,7 +1344,7 @@ cmd_browser() {
         assign) with_iab_operation_lock cmd_browser_assign "$@" ;;
         release) with_iab_operation_lock cmd_browser_release "$@" ;;
         status) cmd_browser_status "$@" ;;
-        *) die "usage: doppel browser {assign <name>|release|status [--porcelain]}" ;;
+        *) die "usage: doppel browser {assign [--quit-running] <name>|release|status [--porcelain]}" ;;
     esac
 }
 
@@ -2431,11 +2593,21 @@ native_tools_status() {
     rollback_count="$(discoverable_rollback_count)"
 
     local iab_slug iab_dir="" iab_name="" iab_state="stopped" iab_signature="invalid"
+    local runtime_kind runtime_slug runtime_name runtime_pid
+    IFS=$'\t' read -r runtime_kind runtime_slug runtime_name runtime_pid \
+        <<< "$(vendor_runtime_snapshot)"
     iab_slug="$(iab_slot_slug)"
     if [[ -n "$iab_slug" ]]; then
         iab_dir="$INSTANCES_ROOT/$iab_slug"
         iab_name="$(config_value "$iab_dir" DOPPEL_DISPLAY_NAME)"
-        vendor_instance_is_running "$iab_dir" && iab_state="running"
+        if [[ "$runtime_kind" != "none" && \
+              ( "$runtime_kind" != "managed" || "$runtime_slug" != "$iab_slug" ) ]]; then
+            iab_state="conflict"
+        elif vendor_instance_is_running "$iab_dir"; then
+            iab_state="running"
+        elif [[ "$runtime_kind" == "managed" && "$runtime_slug" == "$iab_slug" ]]; then
+            iab_state="untracked"
+        fi
         validate_vendor_app "$PRIMARY_APP" && iab_signature="valid"
     fi
 
@@ -2471,10 +2643,12 @@ native_tools_status() {
             "$chronicle_state" "$chronicle_host" "$chronicle_app" "$frame_age"
         printf 'rollbacks\t%s\n' "$rollback_count"
         if [[ -n "$iab_slug" ]]; then
-            printf 'in-app-browser\tassigned\t%s\t%s\t%s\t%s\n' \
-                "$iab_slug" "$iab_name" "$iab_state" "$iab_signature"
+            printf 'in-app-browser\tassigned\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+                "$iab_slug" "$iab_name" "$iab_state" "$iab_signature" \
+                "$runtime_kind" "$runtime_slug" "$runtime_name"
         else
-            printf 'in-app-browser\tunassigned\n'
+            printf 'in-app-browser\tunassigned\t%s\t%s\t%s\n' \
+                "$runtime_kind" "$runtime_slug" "$runtime_name"
         fi
         local row
         for row in "${browser_rows[@]}"; do
@@ -2504,8 +2678,16 @@ native_tools_status() {
         print -r -- "Chronicle: stopped"
     fi
     print -r -- "Discoverable rollback apps: $rollback_count"
-    if [[ -n "$iab_slug" ]]; then
+    if [[ -n "$iab_slug" && "$iab_state" == "conflict" ]]; then
+        print -r -- "In-app browser: assigned to $iab_name, but official ChatGPT is currently using $runtime_name"
+    elif [[ -n "$iab_slug" && "$iab_state" == "untracked" ]]; then
+        print -r -- "In-app browser: $iab_name (running outside Doppel; official engine signature $iab_signature)"
+    elif [[ -n "$iab_slug" ]]; then
         print -r -- "In-app browser: $iab_name ($iab_state; official engine signature $iab_signature)"
+    elif [[ "$runtime_kind" == "managed" ]]; then
+        print -r -- "In-app browser: not assigned; official ChatGPT is currently using $runtime_name"
+    elif [[ "$runtime_kind" != "none" ]]; then
+        print -r -- "In-app browser: not assigned; another official ChatGPT process is running ($runtime_name)"
     else
         print -r -- "In-app browser: not assigned (locally signed engines use the browser extension)"
     fi

@@ -455,7 +455,12 @@ print -r -- "data the instance does not own is never purged"
 ORIGINAL_PROFILE="$(config_field "$DIR" DOPPEL_PROFILE_ROOT)"
 for guarded in "$HOME" "$HOME/Documents" "$HOME/.codex" "$HOME/Library/Application Support/Codex"; do
     set_profile_root "$DIR" "$guarded"
-    run_real remove "$NAME" --purge-data
+    # This assertion targets the purge guard itself. The real Veridue profile
+    # deliberately is Application Support/Codex and may be open while QA runs;
+    # suppress process discovery in this existing dry-run mode so an earlier
+    # live-profile refusal cannot mask whether the protected path is rejected.
+    OUT="$(DOPPEL_DEV=1 DOPPEL_IAB_DRY_RUN=1 "$CLI" remove "$NAME" --purge-data 2>&1)"
+    STATUS=$?
     [[ "$OUT" == *"refusing to purge"* ]] && pass "refuses to purge $guarded" \
         || fail "refuses to purge $guarded" "got: $OUT"
     [[ -d "$(app_path)" ]] || fail "  and removes nothing when it refuses" "$guarded: the app went anyway"
