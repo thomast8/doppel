@@ -26,6 +26,7 @@ readonly SPARKLE_ACCOUNT="${DOPPEL_SPARKLE_ACCOUNT:-ai.doppel.menubar}"
 readonly WORK="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/doppel-release.XXXXXXXX")"
 readonly APP="$WORK/install/Doppel.app"
 readonly NOTARY_ARCHIVE="$WORK/Doppel-notary.zip"
+readonly APPCAST_WORK="$WORK/appcast"
 
 cleanup() {
     /bin/rm -rf "$WORK"
@@ -67,7 +68,7 @@ if [[ "$SIGN_ID" != "-" ]]; then
     : "${NOTARY_KEYCHAIN_PROFILE:?set NOTARY_KEYCHAIN_PROFILE for Developer ID releases}"
 fi
 
-/bin/mkdir -p "$DIST_ROOT" "$WORK/install"
+/bin/mkdir -p "$DIST_ROOT" "$WORK/install" "$APPCAST_WORK"
 DOPPEL_UNIVERSAL="${DOPPEL_UNIVERSAL:-1}" \
 DOPPEL_VERSION="$DOPPEL_VERSION" \
 DOPPEL_BUILD="$DOPPEL_BUILD" \
@@ -89,7 +90,15 @@ fi
 
 /bin/rm -f "$ARCHIVE"
 /usr/bin/ditto -c -k --keepParent "$APP" "$ARCHIVE"
-[[ -f "$REPO_ROOT/appcast.xml" ]] && /usr/bin/ditto "$REPO_ROOT/appcast.xml" "$FEED"
+# Only the current archive belongs in generate_appcast's scan directory.
+# Feeding it older ZIPs makes Sparkle rewrite their historical enclosure URLs
+# with the newest tag prefix, even though those assets live under older tags.
+/usr/bin/ditto "$ARCHIVE" "$APPCAST_WORK/$RELEASE_NAME.zip"
+if [[ -f "$REPO_ROOT/appcast.xml" ]]; then
+    /usr/bin/ditto "$REPO_ROOT/appcast.xml" "$FEED"
+else
+    /bin/rm -f "$FEED"
+fi
 "$GENERATE_APPCAST" \
     $appcast_signing_args \
     --download-url-prefix "$DOWNLOAD_PREFIX" \
@@ -97,7 +106,7 @@ fi
     --maximum-deltas 0 \
     --maximum-versions 3 \
     -o "$FEED" \
-    "$DIST_ROOT"
+    "$APPCAST_WORK"
 
 print -r -- "Release archive: $ARCHIVE"
 print -r -- "Signed appcast:  $FEED"
