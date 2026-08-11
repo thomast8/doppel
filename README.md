@@ -336,6 +336,7 @@ Release packaging is an explicit two-step publication flow:
 
 ```sh
 just sparkle-key             # once; keeps the private key in your Keychain
+${EDITOR:-open} release-notes/1.1.0.md
 just package-release 1.1.0 12
 ```
 
@@ -346,11 +347,14 @@ app/.build/artifacts/sparkle/Sparkle/bin/generate_keys \
   --account ai.doppel.menubar -x /secure/backup/doppel-ed25519.key
 ```
 
-The default recipe builds a universal app, ad-hoc signs nested code inside-out,
-creates the release ZIP, and generates `dist/releases/appcast.xml` with the key
-stored under the `ai.doppel.menubar` Keychain account. It does not upload or
-change git. Review the ZIP and feed, upload the ZIP to the matching GitHub
-release, then replace the repository `appcast.xml` with the generated feed.
+The default recipe requires non-empty Markdown notes at
+`release-notes/<version>.md`, builds a universal app, ad-hoc signs nested code
+inside-out, creates the release ZIP, and generates `dist/releases/appcast.xml`
+with the key stored under the `ai.doppel.menubar` Keychain account. Sparkle
+embeds the notes in the signed appcast so its update window always has a What's
+New section. The recipe does not upload or change git. Review the ZIP, notes and
+feed, use the Markdown as the GitHub release notes, upload the ZIP, then replace
+the repository `appcast.xml` with the generated feed.
 Keep the EdDSA private key safe; losing it means existing ad-hoc installs cannot
 trust a replacement update key.
 

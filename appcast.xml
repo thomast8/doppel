@@ -12,6 +12,12 @@
             <sparkle:version>13</sparkle:version>
             <sparkle:shortVersionString>1.1.1</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Doppel 1.1.1
+
+- Adds a compact, Doppel-styled update window.
+- Clearly identifies signed and critical updates before installation.
+- Adds Skip, Later, and Install controls, plus an option to install future updates automatically.
+]]></description>
             <enclosure url="https://github.com/thomast8/doppel/releases/download/v1.1.1/Doppel-1.1.1-macOS.zip" length="3000704" type="application/octet-stream" sparkle:edSignature="fd7tgqdRSFsBmmPdiFswMB/jYiFpaqRhm230maRhBCUOj7ZKvqSttQLsQ+WITxD0vS5RqH0mnrsi7JEDxqoEAw=="/>
         </item>
         <item>
