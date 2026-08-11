@@ -15,6 +15,8 @@ readonly SIGN_ID="${DOPPEL_SIGN_ID:--}"
 readonly DIST_ROOT="${DOPPEL_RELEASE_DIR:-$REPO_ROOT/dist/releases}"
 readonly RELEASE_NAME="Doppel-${DOPPEL_VERSION}-macOS"
 readonly ARCHIVE="$DIST_ROOT/$RELEASE_NAME.zip"
+readonly RELEASE_NOTES_SOURCE="${DOPPEL_RELEASE_NOTES:-$REPO_ROOT/release-notes/$DOPPEL_VERSION.md}"
+readonly RELEASE_NOTES="$DIST_ROOT/$RELEASE_NAME.md"
 readonly FEED="$DIST_ROOT/appcast.xml"
 typeset download_prefix="${DOPPEL_RELEASE_DOWNLOAD_PREFIX:-https://github.com/thomast8/doppel/releases/download/v${DOPPEL_VERSION}}"
 download_prefix="${download_prefix%/}/"
@@ -32,6 +34,9 @@ cleanup() {
     /bin/rm -rf "$WORK"
 }
 trap cleanup EXIT INT TERM
+
+"$REPO_ROOT/script/prepare-release-notes.zsh" \
+    "$RELEASE_NOTES_SOURCE" /dev/null "$DOPPEL_VERSION"
 
 [[ -x "$GENERATE_APPCAST" && -x "$GENERATE_KEYS" ]] || {
     print -u2 -r -- "Sparkle's release tools were not found under $SPARKLE_TOOLS"
@@ -90,10 +95,13 @@ fi
 
 /bin/rm -f "$ARCHIVE"
 /usr/bin/ditto -c -k --keepParent "$APP" "$ARCHIVE"
+"$REPO_ROOT/script/prepare-release-notes.zsh" \
+    "$RELEASE_NOTES_SOURCE" "$RELEASE_NOTES" "$DOPPEL_VERSION"
 # Only the current archive belongs in generate_appcast's scan directory.
 # Feeding it older ZIPs makes Sparkle rewrite their historical enclosure URLs
 # with the newest tag prefix, even though those assets live under older tags.
 /usr/bin/ditto "$ARCHIVE" "$APPCAST_WORK/$RELEASE_NAME.zip"
+/usr/bin/ditto "$RELEASE_NOTES" "$APPCAST_WORK/$RELEASE_NAME.md"
 if [[ -f "$REPO_ROOT/appcast.xml" ]]; then
     /usr/bin/ditto "$REPO_ROOT/appcast.xml" "$FEED"
 else
@@ -102,13 +110,24 @@ fi
 "$GENERATE_APPCAST" \
     $appcast_signing_args \
     --download-url-prefix "$DOWNLOAD_PREFIX" \
+    --embed-release-notes \
     --link "https://github.com/thomast8/doppel" \
     --maximum-deltas 0 \
     --maximum-versions 3 \
     -o "$FEED" \
     "$APPCAST_WORK"
 
+typeset embedded_release_notes
+embedded_release_notes="$(/usr/bin/xmllint --xpath \
+    "boolean(/rss/channel/item[*[local-name()='shortVersionString' and text()='$DOPPEL_VERSION']]/description[normalize-space(.) != ''])" \
+    "$FEED")"
+[[ "$embedded_release_notes" == true ]] || {
+    print -u2 -r -- "Generated appcast does not contain release notes for $DOPPEL_VERSION"
+    exit 1
+}
+
 print -r -- "Release archive: $ARCHIVE"
+print -r -- "Release notes:   $RELEASE_NOTES"
 print -r -- "Signed appcast:  $FEED"
 [[ "$SIGN_ID" == "-" ]] && print -r -- "Gatekeeper: the first downloaded install requires Open Anyway approval."
-print -r -- "Next: inspect both files, upload the archive to GitHub release v$DOPPEL_VERSION, then replace the repository appcast.xml with the generated feed."
+print -r -- "Next: inspect all three files, use the notes in GitHub release v$DOPPEL_VERSION, upload the archive, then replace the repository appcast.xml with the generated feed."
