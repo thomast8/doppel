@@ -285,6 +285,14 @@ run_cli browser release >/dev/null
 expect "$(run_cli browser status --porcelain)" "unassigned" \
     "release should empty the engine slot"
 
+# The menu uses this opt-in form only after the user confirms its Quit and
+# Assign alert. With no live process in the isolated fixture, it should remain
+# a normal assignment and preserve the same routing contract.
+run_cli browser assign --quit-running "ChatGPT Work QA" >/dev/null
+expect "$(run_cli browser status --porcelain | /usr/bin/cut -f1-2)" \
+    $'assigned\twork' "the confirmed assignment form should select the target profile"
+run_cli browser release >/dev/null
+
 # A malformed or stale slot is ignored for routing, but release should still
 # remove it so the user's explicit reset is durable.
 /bin/mkdir -p "$FIXTURE_STATE/state"

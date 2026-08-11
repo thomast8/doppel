@@ -179,9 +179,31 @@ final class UpdateParsingTests: XCTestCase {
         expect(assignedIAB?.inAppBrowserUnavailable == false,
                "an assigned vendor engine must not inherit the clone-only unavailable label")
 
+        let mismatchedIAB = NativeToolsStatus.parse(
+            "in-app-browser\tassigned\ttest\tChatGPT Test\tconflict\tvalid\tmanaged\tveridue\tChatGPT Veridue\n")
+        expect(mismatchedIAB?.inAppBrowserAssignmentConflicted == true,
+               "a stored owner and different live official profile must be shown as a mismatch")
+        expect(mismatchedIAB?.inAppBrowserRuntimeInstanceName == "ChatGPT Veridue",
+               "the live official profile name should survive parsing")
+        expect(mismatchedIAB?.inAppBrowserRunning == false,
+               "a different live profile must not make the stored owner look running")
+
         let unassignedIAB = NativeToolsStatus.parse("in-app-browser\tunassigned\n")
         expect(unassignedIAB != nil && unassignedIAB?.inAppBrowserInstanceName.isEmpty == true,
                "an unassigned engine slot should still be recognized status")
+        let outsideIAB = NativeToolsStatus.parse(
+            "in-app-browser\tunassigned\tmanaged\tveridue\tChatGPT Veridue\n")
+        expect(outsideIAB?.inAppBrowserRunningOutsideDoppel == true,
+               "a managed official profile launched outside Doppel should remain visible")
+        expect(outsideIAB?.inAppBrowserRuntimeInstanceID == "veridue",
+               "the outside runtime should retain its stable profile id")
+
+        expect(InstanceStore.browserAssignmentNeedsQuit(
+            "doppel: the Browser assignment needs running ChatGPT apps to quit: 'ChatGPT Test' is running."),
+               "the menu should recognise the CLI's recoverable assignment conflict")
+        expect(!InstanceStore.browserAssignmentNeedsQuit(
+            "doppel: the official ChatGPT engine failed signature verification"),
+               "non-conflict failures must retain the ordinary error alert")
 
         let instances = InstanceStore.parsePorcelain("""
             personal\tChatGPT Personal\t/Users/me/ChatGPT Personal.app\tinstalled\tA855F7\tvendor

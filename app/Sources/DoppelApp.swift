@@ -323,9 +323,17 @@ struct MenuContent: View {
                 // any instance can use a running extension host. It decides
                 // whose host Chrome launches, which matters when that one is
                 // missing or older than the rest.
-                if !status.inAppBrowserInstanceName.isEmpty {
+                if status.inAppBrowserAssignmentConflicted {
+                    Label("Built-in browser — Assignment mismatch",
+                          systemImage: "exclamationmark.triangle.fill")
+                    Text("Assigned: \(status.inAppBrowserInstanceName)")
+                    Text("Actually running: \(status.inAppBrowserRuntimeInstanceName)")
+                    Text("Assign the running profile to reconcile Doppel.")
+                } else if !status.inAppBrowserInstanceName.isEmpty {
                     Label(status.inAppBrowserRunning
-                          ? "Built-in browser — Running"
+                          ? (status.inAppBrowserRunningOutsideDoppel
+                             ? "Built-in browser — Running outside Doppel"
+                             : "Built-in browser — Running")
                           : "Built-in browser — Assigned",
                           systemImage: status.inAppBrowserVendorValid
                               ? "checkmark.circle.fill" : "exclamationmark.circle")
@@ -333,6 +341,11 @@ struct MenuContent: View {
                     if !status.inAppBrowserVendorValid {
                         Text("Official ChatGPT failed signature verification.")
                     }
+                } else if status.inAppBrowserRunningOutsideDoppel {
+                    Label("Built-in browser — Running outside Doppel",
+                          systemImage: "exclamationmark.circle")
+                    Text(status.inAppBrowserRuntimeInstanceName)
+                    Text("Assign this profile to make future launches deterministic.")
                 } else if status.inAppBrowserUnavailable {
                     Label("In-app browser — Not available in instances",
                           systemImage: "xmark.circle")
