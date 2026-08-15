@@ -6,6 +6,22 @@
         <description>Signed Doppel releases</description>
         <language>en</language>
         <item>
+            <title>1.1.3</title>
+            <pubDate>Sat, 15 Aug 2026 14:54:07 +0100</pubDate>
+            <link>https://github.com/thomast8/doppel</link>
+            <sparkle:version>15</sparkle:version>
+            <sparkle:shortVersionString>1.1.3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Doppel 1.1.3
+
+- Fixes instance creation and rebuilding, which failed outright on ChatGPT 26.810 and later.
+- Notices when ChatGPT has updated itself and left managed instances on an older version, instead of reporting everything as up to date.
+- Offers to rebuild just the instances that are behind, from the ChatGPT app already installed: nothing is downloaded, ChatGPT itself keeps running, and instances that already match are left open.
+- No longer offers to install a version that is already installed, which used to fail with "is not newer than the installed build".
+]]></description>
+            <enclosure url="https://github.com/thomast8/doppel/releases/download/v1.1.3/Doppel-1.1.3-macOS.zip" length="3019813" type="application/octet-stream" sparkle:edSignature="zM2ACbZDCeu50i84ajIL7rrsIzOgWQQlk12t8fA5iELFl7CTDYIv2CGn5GXjJOc8g78MvkWVVTcMZhoDHfssAA=="/>
+        </item>
+        <item>
             <title>1.1.2</title>
             <pubDate>Tue, 11 Aug 2026 14:12:32 +0100</pubDate>
             <link>https://github.com/thomast8/doppel</link>
@@ -35,15 +51,6 @@
 - Adds Skip, Later, and Install controls, plus an option to install future updates automatically.
 ]]></description>
             <enclosure url="https://github.com/thomast8/doppel/releases/download/v1.1.1/Doppel-1.1.1-macOS.zip" length="3000704" type="application/octet-stream" sparkle:edSignature="fd7tgqdRSFsBmmPdiFswMB/jYiFpaqRhm230maRhBCUOj7ZKvqSttQLsQ+WITxD0vS5RqH0mnrsi7JEDxqoEAw=="/>
-        </item>
-        <item>
-            <title>1.1.0</title>
-            <pubDate>Mon, 10 Aug 2026 16:14:55 +0100</pubDate>
-            <link>https://github.com/thomast8/doppel</link>
-            <sparkle:version>12</sparkle:version>
-            <sparkle:shortVersionString>1.1.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/thomast8/doppel/releases/download/v1.1.0/Doppel-1.1.0-macOS.zip" length="2936272" type="application/octet-stream" sparkle:edSignature="r1nMvSRnyIuWP2F4chxJiMsgG3fnt0PQ5hEU+jGTMtm0HTh8aJpZdN3IVa9IavOwuPRdl0yZf2NwRK6GMw/RBw=="/>
         </item>
     </channel>
 </rss>
