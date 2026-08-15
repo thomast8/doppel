@@ -41,9 +41,30 @@ download or remind later, then restart and install or wait. The download is
 resumable, its URL has to match OpenAI's own release path, and nothing closes until
 the staged app has the expected bundle ID, build number and a signature satisfying
 the vendor app's own designated requirement: Apple-anchored, Developer ID, and
-OpenAI's Team ID. An update also has to be strictly newer than the installed build,
-so an older genuine release cannot be replayed. See
+OpenAI's Team ID. An older build is refused outright, so a genuine release cannot
+be replayed to walk the primary backwards. See
 [the threat model](docs/THREAT-MODEL.md) for what these checks do and do not cover.
+
+The one build that is not newer and still worth applying is the one already
+installed. ChatGPT's own updater can replace the primary on its own, including
+between Doppel staging a build and the user accepting the restart, and it never
+touches the managed instances. Doppel reports that as its own state rather than
+as being up to date: `update check` counts the instances built from a different
+build, and `update apply` reconciles them by rebuilding from the app already in
+place. Nothing is downloaded, the primary is left alone and keeps running, and
+only the instances that are actually behind are closed and rebuilt. A reconcile
+with nothing to rebuild closes nothing at all.
+
+A reconcile only ever moves an instance forward. An instance built from a build
+*newer* than the installed primary is counted and reported separately and is
+never rebuilt by an update: doing that would hand a profile a later version has
+already migrated back to an earlier one. `doppel rebuild <name>` still does it
+for someone who means to.
+
+No older build is ever installed either way. Naming one explicitly is refused;
+a feed that has fallen behind the installed primary, which happens while OpenAI
+rolls a release back, reconciles against what is installed instead of trying to
+apply what the feed says.
 
 On restart Doppel records which instances were open, closes all managed apps,
 atomically replaces the untouched primary while keeping a rollback, rebuilds
@@ -86,7 +107,8 @@ bin/doppel native-tools claim-browser "ChatGPT Personal"
 bin/doppel native-tools claim-browser --browser Edge "ChatGPT Work"
 bin/doppel update check
 bin/doppel update prepare
-bin/doppel update apply
+bin/doppel update apply                              # also rebuilds instances the
+                                                     # vendor updater left behind
 bin/doppel update verify
 bin/doppel edit "ChatGPT Personal" --rename "ChatGPT Home" --tint 3B82F6
 bin/doppel remove "ChatGPT Personal"                # keeps the account data

@@ -1696,6 +1696,46 @@ primary_short_version() {
     /usr/bin/plutil -extract CFBundleShortVersionString raw "$PRIMARY_APP/Contents/Info.plist" 2>/dev/null || true
 }
 
+# The vendor build a managed instance's app was cloned from. Empty when the app
+# is missing or predates the marker.
+instance_source_build() {
+    /usr/bin/plutil -extract DoppelSourceBundleVersion raw "$1/Contents/Info.plist" 2>/dev/null || true
+}
+
+# How many installed instances were built from a vendor build other than the one
+# given, split by direction: behind first, then ahead.
+#
+# Deliberately cheaper than verify_managed_instance: this answers the update
+# check, which the menu app runs on a timer, so it reads the build each app
+# records rather than launching every instance. ChatGPT's own Sparkle updater
+# can replace the primary on its own and never touches the instances, which then
+# sit on the build they were cloned from with nothing left for Doppel to
+# download.
+#
+# The two directions are counted apart because only one of them is an offer
+# Doppel can make. Rebuilding an instance that is behind moves it to the app
+# that is installed; rebuilding one that is ahead would hand a profile a later
+# version already migrated back to an earlier one. A build this cannot read
+# counts as behind: it is not one to trust as newer.
+instance_build_drift() {
+    local expected="$1" dir app recorded behind=0 ahead=0
+    for dir in "$INSTANCES_ROOT"/*(N/); do
+        is_instance_dir "$dir" || continue
+        app="$(app_path_for "$dir")"
+        [[ -d "$app" ]] || continue
+        recorded="$(instance_source_build "$app")"
+        if [[ "$recorded" == "$expected" ]]; then
+            continue
+        fi
+        if valid_build_number "$recorded" && (( recorded > expected )); then
+            ahead=$(( ahead + 1 ))
+        else
+            behind=$(( behind + 1 ))
+        fi
+    done
+    printf '%s\t%s\n' "$behind" "$ahead"
+}
+
 valid_build_number() {
     [[ "$1" == <1-> ]]
 }
@@ -1773,33 +1813,75 @@ update_metadata_value() {
     /usr/bin/plutil -extract "$key" raw "$metadata" 2>/dev/null || true
 }
 
+# --porcelain prints one tab-separated line, append-only across versions:
+#
+#   1 state           current | available | ready | stale-instances
+#   2 installed build
+#   3 installed version
+#   4 feed build
+#   5 feed version
+#   6 feed download URL
+#   7 instances built from an older build than the installed one
+#   8 instances built from a newer build than the installed one
+#
+# Columns 2-6 mean the same thing in every state; the state word is what says
+# whether anything is worth doing. A reconcile targets the installed build in
+# column 2, never the feed's, and only column 7 can produce one: an instance
+# ahead of the primary is reported, never rebuilt backwards.
 cmd_update_check() {
     local porcelain=0
     [[ "${1:-}" == "--porcelain" ]] && porcelain=1
     [[ -z "${1:-}" || "$porcelain" == "1" ]] || die "usage: doppel update check [--porcelain]"
     validate_vendor_app "$PRIMARY_APP" || die "the primary ChatGPT app is missing or is not valid vendor-signed code"
     local current current_short latest latest_version latest_short latest_url prepared update_state
+    local drift stale ahead
     current="$(primary_version)"
     current_short="$(primary_short_version)"
     latest="$(fetch_latest_update)"
     IFS=$'\t' read -r latest_version latest_short latest_url <<< "$latest"
     update_state="current"
+    stale=0
+    ahead=0
     if (( latest_version > current )); then
         update_state="available"
         prepared="$(prepared_update_app "$latest_version")"
         if validate_vendor_app "$prepared" "$latest_version"; then
             update_state="ready"
         fi
+    else
+        # Nothing to download does not mean nothing to do: the vendor updater
+        # moves the primary alone, so the instances can be behind a primary that
+        # is itself current. Reported as its own state rather than folded into
+        # "available", because the fix is a rebuild from the installed app.
+        drift="$(instance_build_drift "$current")"
+        IFS=$'\t' read -r stale ahead <<< "$drift"
+        if (( stale > 0 )); then
+            update_state="stale-instances"
+        fi
     fi
     if (( porcelain )); then
-        printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-            "$update_state" "$current" "$current_short" "$latest_version" "$latest_short" "$latest_url"
+        # The drift counts are appended so the six columns every earlier reader
+        # expects keep their meaning: current is what is installed, latest is
+        # what the feed offers. A reconcile targets the installed build.
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$update_state" "$current" "$current_short" "$latest_version" "$latest_short" "$latest_url" \
+            "$stale" "$ahead"
+        return 0
+    fi
+    if [[ "$update_state" == "stale-instances" ]]; then
+        print -r -- "ChatGPT $current_short ($current) is up to date, but $stale managed instance(s) were built from an older version; run 'doppel update apply' to rebuild them."
     elif [[ "$update_state" == "current" ]]; then
         print -r -- "ChatGPT $current_short ($current) is up to date."
     elif [[ "$update_state" == "ready" ]]; then
         print -r -- "ChatGPT $latest_short ($latest_version) is downloaded and ready to install."
     else
         print -r -- "ChatGPT $latest_short ($latest_version) is available; current is $current_short ($current)."
+    fi
+    # Said plainly rather than folded into the count above: this one is not an
+    # offer. Rebuilding an instance onto an older primary is a downgrade, so it
+    # stays a decision someone makes per instance.
+    if (( ahead > 0 )); then
+        print -r -- "$ahead managed instance(s) were built from a newer build than the installed app; 'doppel update apply' leaves those alone. Use 'doppel rebuild <name>' to move one back to $current."
     fi
 }
 
@@ -1920,10 +2002,50 @@ verify_managed_instance() {
     app="$(app_path_for "$dir")"
     info="$app/Contents/Info.plist"
     [[ -x "$app/Contents/MacOS/ChatGPT" && -f "$info" ]] || return 1
-    [[ "$(/usr/bin/plutil -extract DoppelSourceBundleVersion raw "$info" 2>/dev/null)" == "$expected_version" ]] || return 1
+    [[ "$(instance_source_build "$app")" == "$expected_version" ]] || return 1
     [[ "$(/usr/bin/plutil -extract LSEnvironment.CODEX_SPARKLE_ENABLED raw "$info" 2>/dev/null)" == "false" ]] || return 1
     "$app/Contents/MacOS/ChatGPT" --doppel-verify >/dev/null 2>&1 || return 1
     return 0
+}
+
+# Which installed instances a reconcile has to rebuild, and how many there are
+# in total.
+#
+# Stricter than instance_build_drift on purpose: that one decides whether to
+# raise a prompt, this one decides what to close. The result is kept rather than
+# recomputed because verification runs each instance's own binary, and because
+# quitting an instance already built from this primary would close a window for
+# nothing.
+typeset -ga RECONCILE_STALE_DIRS=()
+typeset -g RECONCILE_INSTANCE_COUNT=0
+collect_reconcile_targets() {
+    local expected="$1" dir app recorded
+    RECONCILE_STALE_DIRS=()
+    RECONCILE_INSTANCE_COUNT=0
+    for dir in "$INSTANCES_ROOT"/*(N/); do
+        is_instance_dir "$dir" || continue
+        app="$(app_path_for "$dir")"
+        [[ -d "$app" ]] || continue
+        RECONCILE_INSTANCE_COUNT=$(( RECONCILE_INSTANCE_COUNT + 1 ))
+        # Forward only. An instance built from a newer build than the installed
+        # primary fails verification too, but rebuilding it would be a
+        # downgrade: an Electron profile a later version has already migrated,
+        # handed back to an earlier one. `doppel rebuild <name>` still does it
+        # for someone who means to.
+        recorded="$(instance_source_build "$app")"
+        if valid_build_number "$recorded" && (( recorded > expected )); then
+            continue
+        fi
+        verify_managed_instance "$dir" "$expected" || RECONCILE_STALE_DIRS+=("$dir")
+    done
+}
+
+is_reconcile_target() {
+    local candidate
+    for candidate in $RECONCILE_STALE_DIRS; do
+        if [[ "$candidate" == "$1" ]]; then return 0; fi
+    done
+    return 1
 }
 
 wait_for_instance() {
@@ -2052,21 +2174,53 @@ cmd_update_apply() {
         assigned_name="$(config_value "$assigned_dir" DOPPEL_DISPLAY_NAME)"
         die "the built-in browser is assigned to '$assigned_name' and an official ChatGPT window is open. Quit that window before installing the update; no apps were changed."
     fi
+    local from_feed=0
     if [[ -z "$version" ]]; then
         local latest latest_short latest_url
         latest="$(fetch_latest_update)"
         IFS=$'\t' read -r version latest_short latest_url <<< "$latest"
+        from_feed=1
     fi
     valid_build_number "$version" || die "the requested update build is invalid"
     local prepared prepared_root target_short current stamp backup restart_manifest
-    prepared="$(prepared_update_app "$version")"
-    prepared_root="${prepared:h}"
-    target_short="$(update_metadata_value "$version" Version)"
-    [[ -n "$target_short" ]] || target_short="$version"
-    validate_vendor_app "$prepared" "$version" || die "ChatGPT $version has not been downloaded and verified; run 'doppel update prepare' first"
+    local reconcile_only=0 total_instances=0 stale_instances=0
     validate_vendor_app "$PRIMARY_APP" || die "the installed primary ChatGPT app is not valid vendor-signed code"
     current="$(primary_version)"
-    (( version > current )) || die "ChatGPT $version is not newer than the installed build $current"
+    # Without a build to apply, the request is "make everything match", and a
+    # feed that has fallen behind the installed primary is no reason to refuse
+    # it. Naming an older build explicitly still is.
+    if (( from_feed && version < current )); then
+        version="$current"
+    fi
+    prepared="$(prepared_update_app "$version")"
+    prepared_root="${prepared:h}"
+    if (( version == current )); then
+        # ChatGPT's own updater can install a build between Doppel staging it
+        # and the user accepting the restart, and it only ever moves the
+        # primary. Reconciling rebuilds the managed instances from the app that
+        # is already installed: nothing is downloaded, nothing is swapped, and
+        # the primary keeps running. The instances still only move forward,
+        # because the build they are rebuilt to is the primary's own.
+        reconcile_only=1
+    else
+        (( version > current )) || die "ChatGPT $version is older than the installed build $current"
+        validate_vendor_app "$prepared" "$version" || die "ChatGPT $version has not been downloaded and verified; run 'doppel update prepare' first"
+    fi
+    target_short="$(update_metadata_value "$version" Version)"
+    if [[ -z "$target_short" ]] && (( reconcile_only )); then
+        target_short="$(primary_short_version)"
+    fi
+    [[ -n "$target_short" ]] || target_short="$version"
+    if (( reconcile_only )); then
+        collect_reconcile_targets "$current"
+        total_instances=$RECONCILE_INSTANCE_COUNT
+        (( total_instances > 0 )) || die "there are no installed managed instances to update"
+        stale_instances=${#RECONCILE_STALE_DIRS}
+        if (( stale_instances == 0 )); then
+            printf 'current\t%s\t%s\t%s\t0\n' "$current" "$version" "$total_instances"
+            return 0
+        fi
+    fi
 
     acquire_update_lock
     trap 'release_update_lock' EXIT INT TERM
@@ -2077,6 +2231,13 @@ cmd_update_apply() {
         is_instance_dir "$dir" || continue
         app="$(app_path_for "$dir")"
         [[ -d "$app" ]] || continue
+        # An update moves every instance because the app they were all built
+        # from changed. A reconcile has business only with the ones left behind:
+        # an instance already built from this primary would be closed, rebuilt
+        # and reopened to arrive exactly where it started.
+        if (( reconcile_only )) && ! is_reconcile_target "$dir"; then
+            continue
+        fi
         dirs+=("$dir")
         names+=("$(config_value "$dir" DOPPEL_DISPLAY_NAME)")
         apps+=("$app")
@@ -2086,7 +2247,9 @@ cmd_update_apply() {
         fi
     done
     (( ${#dirs} > 0 )) || die "there are no installed managed instances to update"
-    if [[ -n "$(vendor_main_pids)" ]]; then
+    # A reconcile leaves /Applications/ChatGPT.app alone, so there is no reason
+    # to close the official window the user may be working in.
+    if (( reconcile_only == 0 )) && [[ -n "$(vendor_main_pids)" ]]; then
         primary_was_running=1
     fi
 
@@ -2110,27 +2273,30 @@ cmd_update_apply() {
         quit_instance "$app" "$bundle_id" "$name"
     done
 
-    stamp="$(/bin/date '+%Y%m%d-%H%M%S')"
-    # Keep the untouched vendor-signed rollback whole. macOS can deny edits
-    # inside it through App Management, while placing the complete bundle in a
-    # dot-directory keeps it out of app discovery without changing its seal.
-    /bin/mkdir -p "$UPDATE_ROOT/.Backups"
-    backup="$UPDATE_ROOT/.Backups/ChatGPT.$current.$stamp.app"
-    [[ ! -e "$backup" ]] || die "the primary rollback path already exists: $backup"
-    "$LSREGISTER" -u "$PRIMARY_APP" >/dev/null 2>&1 || true
-    /bin/mv "$PRIMARY_APP" "$backup" || die "moving the current primary ChatGPT app into rollback storage failed"
-    if ! /bin/mv "$prepared" "$PRIMARY_APP"; then
-        /bin/mv "$backup" "$PRIMARY_APP" || true
-        die "installing ChatGPT $target_short failed; the previous primary was restored"
+    if (( reconcile_only == 0 )); then
+        stamp="$(/bin/date '+%Y%m%d-%H%M%S')"
+        # Keep the untouched vendor-signed rollback whole. macOS can deny edits
+        # inside it through App Management, while placing the complete bundle in
+        # a dot-directory keeps it out of app discovery without changing its
+        # seal.
+        /bin/mkdir -p "$UPDATE_ROOT/.Backups"
+        backup="$UPDATE_ROOT/.Backups/ChatGPT.$current.$stamp.app"
+        [[ ! -e "$backup" ]] || die "the primary rollback path already exists: $backup"
+        "$LSREGISTER" -u "$PRIMARY_APP" >/dev/null 2>&1 || true
+        /bin/mv "$PRIMARY_APP" "$backup" || die "moving the current primary ChatGPT app into rollback storage failed"
+        if ! /bin/mv "$prepared" "$PRIMARY_APP"; then
+            /bin/mv "$backup" "$PRIMARY_APP" || true
+            die "installing ChatGPT $target_short failed; the previous primary was restored"
+        fi
+        if ! validate_vendor_app "$PRIMARY_APP" "$version"; then
+            local rejected="$UPDATE_ROOT/Rejected/ChatGPT.$version.$stamp.app"
+            /bin/mkdir -p "${rejected:h}"
+            /bin/mv "$PRIMARY_APP" "$rejected" || true
+            /bin/mv "$backup" "$PRIMARY_APP" || true
+            die "the installed primary failed post-install verification; the previous primary was restored"
+        fi
+        "$LSREGISTER" -f "$PRIMARY_APP" >/dev/null 2>&1 || true
     fi
-    if ! validate_vendor_app "$PRIMARY_APP" "$version"; then
-        local rejected="$UPDATE_ROOT/Rejected/ChatGPT.$version.$stamp.app"
-        /bin/mkdir -p "${rejected:h}"
-        /bin/mv "$PRIMARY_APP" "$rejected" || true
-        /bin/mv "$backup" "$PRIMARY_APP" || true
-        die "the installed primary failed post-install verification; the previous primary was restored"
-    fi
-    "$LSREGISTER" -f "$PRIMARY_APP" >/dev/null 2>&1 || true
 
     # Instance bundles have separate staging, backup, pin, and lock roots, so
     # their expensive clone/sign/verify work is independent. Rebuild all of
@@ -2170,20 +2336,36 @@ cmd_update_apply() {
         fi
     fi
 
+    local outcome="updated" summary="ChatGPT updated to $target_short"
+    if (( reconcile_only )); then
+        outcome="reconciled"
+        summary="ChatGPT $target_short was already installed"
+    fi
     if (( ${#failures} > 0 )); then
         release_update_lock
         trap - EXIT INT TERM
-        die "ChatGPT updated to $target_short, but Doppel could not finish every instance: ${(j:; :)failures}. Restart information remains at $restart_manifest"
+        die "$summary, but Doppel could not finish every instance: ${(j:; :)failures}. Restart information remains at $restart_manifest"
     fi
     /bin/rm -f "$restart_manifest"
     UPDATE_ABORT_MANIFEST=""
-    # The installed app was moved out of $prepared_root; update.plist stays
-    # behind and would make a bare rmdir fail silently every time.
-    /bin/rm -f "$prepared_root/update.plist"
-    /bin/rmdir "$prepared_root" 2>/dev/null || true
+    if (( reconcile_only )); then
+        # A build the primary already carries can never be installed from
+        # staging, so whatever a superseded prepare left there is dead weight.
+        # Named piece by piece rather than removed wholesale: the same narrow
+        # reach as the install path below, which only ever names what it put
+        # there.
+        /bin/rm -rf "$prepared_root/ChatGPT.app"
+        /bin/rm -f "$prepared_root/update.plist"
+        /bin/rmdir "$prepared_root" 2>/dev/null || true
+    else
+        # The installed app was moved out of $prepared_root; update.plist stays
+        # behind and would make a bare rmdir fail silently every time.
+        /bin/rm -f "$prepared_root/update.plist"
+        /bin/rmdir "$prepared_root" 2>/dev/null || true
+    fi
     release_update_lock
     trap - EXIT INT TERM
-    printf 'updated\t%s\t%s\t%s\t%s\n' "$current" "$version" "${#verified_apps}" "$reopened"
+    printf '%s\t%s\t%s\t%s\t%s\n' "$outcome" "$current" "$version" "${#verified_apps}" "$reopened"
 }
 
 cmd_update_verify() {

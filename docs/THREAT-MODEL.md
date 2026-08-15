@@ -106,8 +106,14 @@ installed.
 Around that check sit four more constraints. Update metadata is fetched over HTTPS
 from OpenAI's own appcast host. The download URL is not merely trusted from the
 feed; it has to match the expected `persistent.oaistatic.com` release path or the
-update is refused. An update must be strictly newer than what is installed, so a
-genuine-but-old build cannot be replayed at you. And the whole flow fails closed: a
+update is refused. A build older than what is installed is never installed, so a
+genuine-but-old build cannot be replayed at you: naming one is refused outright,
+and a feed that has fallen behind the primary is reconciled against the
+installed build instead. That reconcile is the only case where a build that is
+not newer is accepted at all; it downloads nothing, leaves the primary
+untouched, and moves instances in one direction only, so an instance built from
+a newer build than the primary is reported rather than rebuilt onto the older
+one. And the whole flow fails closed: a
 failed download changes nothing, a failed install puts the previous primary back,
 and a rebuild refuses to proceed at all rather than cloning something it could not
 verify.
@@ -242,7 +248,7 @@ front of someone who is still deciding whether to trust you.
 |---|---|
 | MITM on the update feed or download | Addressed. HTTPS, allowlisted release URL, Apple-anchored signature check on the downloaded app. |
 | Malicious app planted at `/Applications/ChatGPT.app` and then cloned | Addressed. The Apple-anchored requirement rejects any bundle not signed by OpenAI. Previously bypassable; see the changelog note below. |
-| Replaying an older genuine vendor build | Addressed. An update must be strictly newer than the installed build. |
+| Replaying an older genuine vendor build | Addressed. A build older than the installed one is never installed, whether it was named explicitly or came from a feed that fell behind; the installed build itself is accepted only to rebuild instances from the primary already in place. |
 | Environment variables redirecting an installed copy's vendor checks, signing identity, or the CLI it runs | Addressed. The bundled CLI and the in-bundle engine drop the vendor-identity, appcast and signing variables unless `DOPPEL_DEV=1`, and the menu app applies the same gate to `DOPPEL_CLI`, which it used to follow unconditionally. |
 | Vendor updater running inside a clone and destroying account routing | Addressed. Sparkle is disabled in clones via the vendor's own switch, plus feed and scheduled-check safeguards. |
 | A forged or modified app being selected as the built-in-browser engine | Addressed. Assignment and every launch require the Apple-anchored OpenAI designated requirement and a strict deep signature. |
@@ -369,7 +375,11 @@ a CLI running from an installed-bundle path drops both an injected
 runs. Every one of those assertions was confirmed to fail against a deliberately
 regressed copy, which is the only way to know a test is load-bearing rather than
 decorative. `qa/e2e.zsh` covers the surrounding clone, sign, rebuild and rename
-behaviour against the real vendor app.
+behaviour against the real vendor app, and `qa/update-reconcile.zsh` covers the
+one build that is not newer and is still applied: it builds a real clone, makes
+it record an older build the way the vendor updater leaves one behind, and
+asserts that the reconcile rebuilds and reseals it while the primary is left
+byte-for-byte alone.
 
 ---
 

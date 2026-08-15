@@ -7,6 +7,7 @@ test:
 qa:
     ./qa/e2e.zsh
     ./qa/edge.zsh
+    ./qa/update-reconcile.zsh
 
 build:
     ./app/build-app.zsh

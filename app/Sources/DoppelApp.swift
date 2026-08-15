@@ -428,9 +428,7 @@ struct MenuContent: View {
         if store.busy.contains("update") {
             Text("Updating ChatGPT and managed instances…")
         } else if let update = store.chatGPTUpdate {
-            Button(update.state == .ready
-                   ? "Restart to Install ChatGPT \(update.targetVersion)…"
-                   : "Install ChatGPT \(update.targetVersion)…") {
+            Button(Self.updateButtonTitle(update)) {
                 store.beginKnownUpdate()
             }
         } else {
@@ -463,6 +461,22 @@ struct MenuContent: View {
         }
         Divider()
         Button("Quit Doppel") { NSApplication.shared.terminate(nil) }
+    }
+
+    /// What the one update button offers. A stale-instance row is not an
+    /// available version: nothing is downloaded and the primary is left alone,
+    /// so offering to install a version the Mac already has would misdescribe
+    /// the work.
+    static func updateButtonTitle(_ update: ChatGPTUpdate) -> String {
+        switch update.state {
+        case .ready:
+            return "Restart to Install ChatGPT \(update.targetVersion)…"
+        case .available:
+            return "Install ChatGPT \(update.targetVersion)…"
+        case .staleInstances:
+            let noun = update.staleInstanceCount == 1 ? "Instance" : "Instances"
+            return "Rebuild \(update.staleInstanceCount) Outdated \(noun)…"
+        }
     }
 
     /// Doppel's own marketing version and build, from the bundle it is running
