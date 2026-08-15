@@ -2199,8 +2199,13 @@ cmd_update_apply() {
         # and the user accepting the restart, and it only ever moves the
         # primary. Reconciling rebuilds the managed instances from the app that
         # is already installed: nothing is downloaded, nothing is swapped, and
-        # the primary keeps running. The instances still only move forward,
-        # because the build they are rebuilt to is the primary's own.
+        # the primary keeps running.
+        #
+        # That the target is the primary's own build is not on its own a reason
+        # instances can only move forward — a primary restored to an older build
+        # would make this a downgrade. What keeps it forward-only is
+        # collect_reconcile_targets skipping any instance already built from a
+        # newer build than the primary.
         reconcile_only=1
     else
         (( version > current )) || die "ChatGPT $version is older than the installed build $current"
