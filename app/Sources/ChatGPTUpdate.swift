@@ -3,6 +3,11 @@ import Foundation
 enum ChatGPTUpdateState: String {
     case available
     case ready
+    /// The primary is current but managed instances were built from an older
+    /// vendor build, which is what ChatGPT's own updater leaves behind when it
+    /// installs a build on its own. There is nothing to download; the
+    /// instances are rebuilt from the app already installed.
+    case staleInstances = "stale-instances"
 }
 
 struct ChatGPTUpdate: Equatable {
@@ -11,6 +16,8 @@ struct ChatGPTUpdate: Equatable {
     let currentVersion: String
     let targetBuild: Int
     let targetVersion: String
+    /// Instances known to be behind, reported only for `.staleInstances`.
+    let staleInstanceCount: Int
 
     /// Stable tab-separated output from `doppel update check --porcelain`.
     /// A current, malformed, or backwards result deliberately produces no
@@ -21,15 +28,32 @@ struct ChatGPTUpdate: Equatable {
         guard fields.count >= 6,
               let state = ChatGPTUpdateState(rawValue: String(fields[0])),
               let currentBuild = Int(fields[1]),
-              let targetBuild = Int(fields[3]),
-              targetBuild > currentBuild
+              let feedBuild = Int(fields[3])
         else { return nil }
-        return ChatGPTUpdate(
-            state: state,
-            currentBuild: currentBuild,
-            currentVersion: String(fields[2]),
-            targetBuild: targetBuild,
-            targetVersion: String(fields[4]))
+        switch state {
+        case .available, .ready:
+            guard feedBuild > currentBuild else { return nil }
+            return ChatGPTUpdate(
+                state: state,
+                currentBuild: currentBuild,
+                currentVersion: String(fields[2]),
+                targetBuild: feedBuild,
+                targetVersion: String(fields[4]),
+                staleInstanceCount: 0)
+        case .staleInstances:
+            // A reconcile rebuilds the instances from the installed primary, so
+            // the build to apply is the one already on this Mac rather than the
+            // feed's. Without a count there is nothing to rebuild and no reason
+            // to interrupt anyone.
+            guard fields.count >= 7, let stale = Int(fields[6]), stale > 0 else { return nil }
+            return ChatGPTUpdate(
+                state: state,
+                currentBuild: currentBuild,
+                currentVersion: String(fields[2]),
+                targetBuild: currentBuild,
+                targetVersion: String(fields[2]),
+                staleInstanceCount: stale)
+        }
     }
 }
 
@@ -52,7 +76,7 @@ struct InstalledChatGPT: Equatable {
         // The leading state word is what identifies this as an update-check
         // line; without it a stray row could be read as a version.
         guard fields.count >= 3,
-              ["current", "available", "ready"].contains(String(fields[0])),
+              ["current", "available", "ready", "stale-instances"].contains(String(fields[0])),
               let build = Int(fields[1]),
               !fields[2].isEmpty
         else { return nil }

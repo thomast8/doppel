@@ -275,6 +275,98 @@ FALLBACK_OUT="$(DOPPEL_HOME="$FALLBACK_HOME" DOPPEL_PRIMARY_APP="$SPOOF" \
     || fail "and neither refusal built anything" "an app was produced"
 
 print -r -- ""
+print -r -- "a primary the vendor updated on its own leaves the instances behind"
+# ChatGPT's own Sparkle updater installs into /Applications without telling
+# Doppel, and it never touches the managed instances. The feed then agrees with
+# the primary while every instance is still on the build it was cloned from —
+# a state that used to report "up to date" and refuse `update apply` with "not
+# newer than the installed build", leaving no way forward at all.
+#
+# The appcast is a local file so this asserts the real parsing without the
+# network, and the instance is a stub bundle: only the build it records matters
+# here, and building a real clone costs a minute for nothing extra.
+DRIFT_HOME="$SCRATCH/drift-home"
+DRIFT_APPS="$SCRATCH/drift-apps"
+DRIFT_DIR="$DRIFT_HOME/instances/drift-probe"
+DRIFT_INFO="$DRIFT_APPS/Drift Probe.app/Contents/Info.plist"
+DRIFT_BUILD="$(/usr/bin/plutil -extract CFBundleVersion raw "$PRIMARY/Contents/Info.plist")"
+DRIFT_SHORT="$(/usr/bin/plutil -extract CFBundleShortVersionString raw "$PRIMARY/Contents/Info.plist")"
+/bin/mkdir -p "$DRIFT_DIR" "${DRIFT_INFO:h}"
+write_config_file "$DRIFT_DIR" "Drift Probe" "com.example.drift-probe" \
+    "codex-drift-probe" "$SCRATCH/drift-profile" "$SCRATCH/drift-codex" "3B82F6"
+print -r -- "$DRIFT_APPS" > "$DRIFT_DIR/install-root"
+cat > "$SCRATCH/appcast.xml" <<XML
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <item>
+      <sparkle:version>$DRIFT_BUILD</sparkle:version>
+      <sparkle:shortVersionString>$DRIFT_SHORT</sparkle:shortVersionString>
+      <enclosure url="https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-$DRIFT_SHORT.zip" />
+    </item>
+  </channel>
+</rss>
+XML
+record_source_build() {
+    /usr/bin/plutil -create xml1 "$DRIFT_INFO"
+    /usr/bin/plutil -insert CFBundleIdentifier -string "com.example.drift-probe" "$DRIFT_INFO"
+    /usr/bin/plutil -insert DoppelSourceBundleVersion -string "$1" "$DRIFT_INFO"
+}
+drift_check() {
+    DOPPEL_HOME="$DRIFT_HOME" DOPPEL_APPCAST_URL="file://${SCRATCH// /%20}/appcast.xml" \
+        "$CLI" update check --porcelain 2>&1
+}
+record_source_build "1"
+DRIFT_OUT="$(drift_check)"
+check "an instance behind the primary is reported as drift" \
+    "$(print -r -- "$DRIFT_OUT" | /usr/bin/awk -F'\t' '{print $1}')" "stale-instances"
+check "and the count says how many are behind" \
+    "$(print -r -- "$DRIFT_OUT" | /usr/bin/awk -F'\t' '{print $7}')" "1"
+check "while the columns still describe what is installed" \
+    "$(print -r -- "$DRIFT_OUT" | /usr/bin/awk -F'\t' '{print $2}')" "$DRIFT_BUILD"
+record_source_build "$DRIFT_BUILD"
+DRIFT_OUT="$(drift_check)"
+check "an instance built from the installed primary is current" \
+    "$(print -r -- "$DRIFT_OUT" | /usr/bin/awk -F'\t' '{print $1}')" "current"
+check "and nothing is counted as behind" \
+    "$(print -r -- "$DRIFT_OUT" | /usr/bin/awk -F'\t' '{print $7}')" "0"
+# The other direction is not drift Doppel can offer to fix: rebuilding an
+# instance onto an older primary is a downgrade, and calling it "behind" would
+# ask for consent on a false statement.
+record_source_build "$(( DRIFT_BUILD + 1 ))"
+DRIFT_OUT="$(drift_check)"
+check "an instance ahead of the primary is not reported as behind" \
+    "$(print -r -- "$DRIFT_OUT" | /usr/bin/awk -F'\t' '{print $1}')" "current"
+check "and is not counted as behind" \
+    "$(print -r -- "$DRIFT_OUT" | /usr/bin/awk -F'\t' '{print $7}')" "0"
+check "but is still counted, in its own column" \
+    "$(print -r -- "$DRIFT_OUT" | /usr/bin/awk -F'\t' '{print $8}')" "1"
+DRIFT_HUMAN="$(DOPPEL_HOME="$DRIFT_HOME" DOPPEL_APPCAST_URL="file://${SCRATCH// /%20}/appcast.xml" \
+    "$CLI" update check 2>&1)"
+[[ "$DRIFT_HUMAN" == *"newer build than the installed app"* && "$DRIFT_HUMAN" != *"older version"* ]] \
+    && pass "and is described in the direction it is actually in" \
+    || fail "and is described in the direction it is actually in" "got: $DRIFT_HUMAN"
+record_source_build "$DRIFT_BUILD"
+# Applying the build the primary already carries has to get past the version
+# comparison and the prepared-download requirement and reach the instances. That
+# it then rebuilds the right ones is what qa/update-reconcile.zsh proves against
+# real clones; reaching an empty inventory is all this cheap home can show.
+DRIFT_OUT="$(DOPPEL_HOME="$SCRATCH/reconcile-empty" \
+    DOPPEL_APPCAST_URL="file://${SCRATCH// /%20}/appcast.xml" \
+    "$CLI" update apply "$DRIFT_BUILD" 2>&1)"
+[[ "$DRIFT_OUT" == *"no installed managed instances"* ]] \
+    && pass "the installed build reaches the instances instead of being refused" \
+    || fail "the installed build reaches the instances instead of being refused" "got: $DRIFT_OUT"
+# Only equality is reconcilable: an older genuine build must still be refused,
+# or a replay could walk the primary backwards.
+DRIFT_OUT="$(DOPPEL_HOME="$SCRATCH/reconcile-empty" \
+    DOPPEL_APPCAST_URL="file://${SCRATCH// /%20}/appcast.xml" \
+    "$CLI" update apply 1 2>&1)"
+[[ "$DRIFT_OUT" == *"is older than the installed build"* ]] \
+    && pass "an older build is still refused" \
+    || fail "an older build is still refused" "got: $DRIFT_OUT"
+
+print -r -- ""
 print -r -- "an installed copy ignores the environment overrides it must not honour"
 # This guard sat below the assignments it was meant to protect once already,
 # which made it a no-op that every existing check still passed. --scheme is

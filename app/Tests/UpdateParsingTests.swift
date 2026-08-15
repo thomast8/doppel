@@ -34,32 +34,81 @@ final class UpdateParsingTests: XCTestCase {
         expect(informationPrompt.primaryActionTitle == "View Update",
                "an information-only release must not offer an invalid install action")
 
-        let output = "available\t6067\t26.727.40816\t6119\t26.727.51351\thttps://example.invalid/update.zip\n"
+        let output = "available\t6067\t26.727.40816\t6119\t26.727.51351\thttps://example.invalid/update.zip\t0\n"
         expect(
             ChatGPTUpdate.parse(output) == ChatGPTUpdate(
                 state: .available,
                 currentBuild: 6067,
                 currentVersion: "26.727.40816",
                 targetBuild: 6119,
-                targetVersion: "26.727.51351"),
+                targetVersion: "26.727.51351",
+                staleInstanceCount: 0),
             "available update should parse")
 
-        let ready = "ready\t6067\t26.727.40816\t6119\t26.727.51351\thttps://example.invalid/update.zip\n"
+        let ready = "ready\t6067\t26.727.40816\t6119\t26.727.51351\thttps://example.invalid/update.zip\t0\n"
         expect(ChatGPTUpdate.parse(ready)?.state == .ready, "prepared update should parse as ready")
         expect(ChatGPTUpdate.parse(
-            "current\t6119\t26.727.51351\t6119\t26.727.51351\thttps://example.invalid/update.zip\n") == nil,
+            "current\t6119\t26.727.51351\t6119\t26.727.51351\thttps://example.invalid/update.zip\t0\n") == nil,
             "current build should not prompt")
         expect(ChatGPTUpdate.parse("available\tbroken") == nil, "malformed output should not prompt")
         expect(ChatGPTUpdate.parse(
-            "available\t6119\tnewer\t6067\tolder\thttps://example.invalid/update.zip\n") == nil,
+            "available\t6119\tnewer\t6067\tolder\thttps://example.invalid/update.zip\t0\n") == nil,
             "backwards update should not prompt")
+        // A six-column line from an older CLI still has to parse, so an app
+        // updated ahead of its CLI keeps offering vendor updates.
+        expect(ChatGPTUpdate.parse(
+            "available\t6067\t26.727.40816\t6119\t26.727.51351\thttps://example.invalid/update.zip\n")?
+            .targetBuild == 6119,
+            "output without the stale column should still offer the update")
+
+        // ChatGPT's own updater moves the primary alone. The feed then agrees
+        // with the installed build while the instances are behind, and the
+        // build to apply is the installed one — there is nothing to download.
+        let drift = "stale-instances\t6662\t26.810.52044\t6662\t26.810.52044\thttps://example.invalid/update.zip\t2\n"
+        expect(
+            ChatGPTUpdate.parse(drift) == ChatGPTUpdate(
+                state: .staleInstances,
+                currentBuild: 6662,
+                currentVersion: "26.810.52044",
+                targetBuild: 6662,
+                targetVersion: "26.810.52044",
+                staleInstanceCount: 2),
+            "instances left behind by the vendor updater should be offered a rebuild")
+        expect(ChatGPTUpdate.parse(
+            "stale-instances\t6662\t26.810.52044\t6662\t26.810.52044\thttps://example.invalid/update.zip\t0\n") == nil,
+            "a drift row counting no stale instance must not interrupt anyone")
+        expect(ChatGPTUpdate.parse(
+            "stale-instances\t6662\t26.810.52044\t6662\t26.810.52044\thttps://example.invalid/update.zip\n") == nil,
+            "a drift row without a count must not interrupt anyone")
+        // The CLI counts instances ahead of the primary in a further column and
+        // never folds them into the rebuild offer; the app has to keep reading
+        // the column it knows regardless of what follows it.
+        let driftWithAhead = "stale-instances\t6662\t26.810.52044\t6662\t26.810.52044\thttps://example.invalid/update.zip\t2\t1\n"
+        expect(ChatGPTUpdate.parse(driftWithAhead) == ChatGPTUpdate.parse(drift),
+               "a further column must not change how the drift row reads")
+        expect(MenuContent.updateButtonTitle(ChatGPTUpdate.parse(drift)!)
+            == "Rebuild 2 Outdated Instances…",
+            "the menu must offer the rebuild rather than installing a version already present")
+        expect(MenuContent.updateButtonTitle(ChatGPTUpdate.parse(ready)!)
+            == "Restart to Install ChatGPT 26.727.51351…",
+            "a prepared vendor update should still offer the restart")
+
+        // The apply result decides which completion alert is honest, so its
+        // outcome word has to survive a progress line printed ahead of it.
+        expect(InstanceStore.resultFields("Downloading…\nreconciled\t6662\t6662\t2\t1\n").first == "reconciled",
+               "the outcome word should be read from the last line")
+        expect(InstanceStore.resultFields("updated\t6644\t6662\t2\t1\n")[4] == "1",
+               "the reopened count should survive the split")
+        expect(InstanceStore.resultFields("   ").isEmpty, "blank output should yield no fields")
 
         // The installed build is shown in the menu even when nothing is being
         // offered, so it has to survive the case that produces no prompt.
         expect(InstalledChatGPT.parse(
-            "current\t6119\t26.727.51351\t6119\t26.727.51351\thttps://example.invalid/update.zip\n")
+            "current\t6119\t26.727.51351\t6119\t26.727.51351\thttps://example.invalid/update.zip\t0\n")
             == InstalledChatGPT(build: 6119, version: "26.727.51351"),
             "an up-to-date check should still yield the installed build")
+        expect(InstalledChatGPT.parse(drift) == InstalledChatGPT(build: 6662, version: "26.810.52044"),
+               "a drift row should still report the installed build for the menu")
         expect(InstalledChatGPT.parse(output) == InstalledChatGPT(build: 6067, version: "26.727.40816"),
                "an available update should report the build still installed, not the target")
         expect(InstalledChatGPT.parse(ready)?.build == 6067,
