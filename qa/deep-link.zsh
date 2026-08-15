@@ -77,5 +77,45 @@ else
         "found $RESTORE_MARKERS restoration markers and $RESTORE_SPAWNS direct spawn calls"
 fi
 
+# Everything above runs against whichever vendor build happens to be installed,
+# which is the real signal but only ever covers one build at a time. These two
+# shapes are the ones that actually shipped: 6321 and 6662 differ only in names
+# the minifier chooses and in an argument the vendor added, and pinning either
+# of those is what broke clone builds twice. A machine on one build still has
+# to notice a patcher that has been re-pinned to the other.
+SHAPES_OUT="$(/usr/bin/python3 - "$PATCHER" <<'PY'
+import importlib.util, sys
+
+spec = importlib.util.spec_from_file_location("patcher", sys.argv[1])
+patcher = importlib.util.module_from_spec(spec)
+# Registered before execution: the module defines dataclasses, and resolving
+# their annotations looks the module up by name in sys.modules.
+sys.modules["patcher"] = patcher
+spec.loader.exec_module(patcher)
+
+oauth = {
+    "6321": b'"app-connect-oauth-callback-url":async()=>({callbackUrl:`${r.u(l.app.isPackaged)}://connector/oauth_callback`})',
+    "6662": b'"app-connect-oauth-callback-url":async()=>({callbackUrl:`${r.K(l.app.isPackaged)}://connector/oauth_callback`})',
+}
+queued = {
+    "6321": b'if(i){let n=(e,t)=>{let n=XW(e);if(n){m(n),l?.(eG(n)?e:void 0),t?.preventDefault();return}let r=fG(e);r&&(h(r),t?.preventDefault())};e.on(`open-url`,(e,t)=>{n(t,e)});',
+    "6662": b'if(i){let n=(e,t)=>{let n=TW(e);if(n){m(n),l?.(kW(n,e)?e:void 0),t?.preventDefault();return}let r=HW(e);r&&(h(r),t?.preventDefault())};e.on(`open-url`,(e,t)=>{n(t,e)});',
+}
+missed = []
+for build, sample in oauth.items():
+    if len(patcher.OAUTH_CALLBACK_HANDLER.findall(sample)) != 1:
+        missed.append(f"oauth {build}")
+for build, sample in queued.items():
+    if len(patcher.QUEUED_OPEN_URL_HANDLER.findall(sample)) != 1:
+        missed.append(f"open-url {build}")
+print(",".join(missed))
+PY
+)"
+if [[ -z "$SHAPES_OUT" ]]; then
+    pass "both shipped minified shapes still match"
+else
+    fail "both shipped minified shapes still match" "no match for: $SHAPES_OUT"
+fi
+
 print -r -- "$PASSED passed, $FAILED failed"
 (( FAILED == 0 ))
