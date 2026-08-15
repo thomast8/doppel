@@ -58,9 +58,16 @@ PROTOCOL_HELPER = re.compile(
     rb"(?P<development>[A-Za-z_$][A-Za-z0-9_$]*)\}"
 )
 
+# The member holding the protocol helper is minified too, and it is renamed on
+# the vendor's own schedule: builds up to 6415 called it ``u``, 6644 onwards call
+# it ``K``. Pinning the name meant every clone build failed the moment that
+# letter changed, which is the same mistake the note above warns about. The
+# anchors that make this unambiguous are the literal message key and the
+# ``isPackaged`` argument either side of it, not the name in the middle.
 OAUTH_CALLBACK_HANDLER = re.compile(
     rb'"app-connect-oauth-callback-url":async\(\)=>\(\{callbackUrl:`\$\{'
-    rb"(?P<protocol>[A-Za-z_$][A-Za-z0-9_$]*)\.u\("
+    rb"(?P<protocol>[A-Za-z_$][A-Za-z0-9_$]*)"
+    rb"\.(?P<helper>[A-Za-z_$][A-Za-z0-9_$]*)\("
     rb"(?P<electron>[A-Za-z_$][A-Za-z0-9_$]*)\.app\.isPackaged\)"
     rb"\}://connector/oauth_callback`\}\)"
 )
@@ -82,6 +89,11 @@ OPEN_URL_HANDLER = re.compile(
 # initial argv URLs and later ``open-url`` events take one path. Match that
 # complete shape: patching only the short ``open-url`` wrapper would not cover
 # an OAuth callback delivered while the app is starting.
+#
+# Build 6644 started passing the original URL to the predicate alongside the
+# parsed route, so its argument list is optional here. What the predicate
+# decides is unchanged, the patch does not rebuild the call, and requiring the
+# single-argument form meant every clone build failed against 6644 and later.
 QUEUED_OPEN_URL_HANDLER = re.compile(
     rb"(?P<prefix>if\((?P<enabled>[A-Za-z_$][A-Za-z0-9_$]*)\)\{let "
     rb"(?P<handler>[A-Za-z_$][A-Za-z0-9_$]*)=\("
@@ -90,7 +102,7 @@ QUEUED_OPEN_URL_HANDLER = re.compile(
     rb"(?P<parse>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=url)\);if\((?P=route)\)\{"
     rb"(?P<queue>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=route)\),"
     rb"(?P<callback>[A-Za-z_$][A-Za-z0-9_$]*)\?\.\("
-    rb"(?P<predicate>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=route)\)\?"
+    rb"(?P<predicate>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=route)(?:,(?P=url))?\)\?"
     rb"(?P=url):void 0\)),"
     rb"(?P<suffix>(?P=event)\?\.preventDefault\(\);return\}let "
     rb"(?P<path>[A-Za-z_$][A-Za-z0-9_$]*)="
