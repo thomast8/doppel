@@ -122,8 +122,10 @@ struct CreateInstanceView: View {
                     .padding(.vertical, 10)
                     .background(RoundedRectangle(cornerRadius: Radius.field, style: .continuous)
                         .fill(.black.opacity(0.06)))
-                    .overlay(RoundedRectangle(cornerRadius: Radius.field, style: .continuous)
-                        .strokeBorder(.white.opacity(0.14), lineWidth: 0.5))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: Radius.field, style: .continuous)
+                            .strokeBorder(.white.opacity(0.14), lineWidth: 0.5)
+                    }
                     .onSubmit { if canCreate { submit() } }
                     .accessibilityLabel("Name")
             }
