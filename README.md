@@ -213,6 +213,28 @@ or adoption. Status compares that stored assignment with the live official
 process: a normal Dock launch using a different managed profile is shown as an
 assignment mismatch rather than being reported as the stored owner.
 
+### Experimental live model/reasoning switching
+
+Each running managed instance has an opt-in **Live model/reasoning switching
+(Experimental)** menu item. When enabled, Doppel watches the native Codex picker
+for that instance. If its model or reasoning effort changes during an active
+turn, Doppel presses Stop, waits for the composer to become idle, and submits one
+visible continuation message using the newly selected route. This emulates a
+live switch; it is not an in-place change to the original turn.
+
+The feature is off by default and requires Accessibility access for Doppel. It
+only operates on the exact managed process reported by Doppel, including an
+official ChatGPT engine assigned to a Doppel profile, and only while that app is
+frontmost. It fails closed when the target changes, the UI is ambiguous, or the
+composer contains a draft, attachment, or approval request. Natural completion
+cancels a pending switch rather than adding another turn.
+
+For read-only target diagnostics, use:
+
+```sh
+bin/doppel live-switch target "ChatGPT Work"
+```
+
 ### Permissions for managed apps
 
 macOS grants privacy permissions to each app identity separately. A new Doppel

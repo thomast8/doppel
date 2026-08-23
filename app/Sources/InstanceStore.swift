@@ -35,6 +35,7 @@ final class InstanceStore: ObservableObject {
     @Published var checkingPermissions = false
     @Published var nativeToolsStatus: NativeToolsStatus?
     @Published var checkingNativeTools = false
+    let liveSwitch = LiveSwitchController()
 
     var permissionIssues: [PermissionIssue] { permissionStatuses.filter(\.needsAttention) }
 
@@ -146,6 +147,7 @@ final class InstanceStore: ObservableObject {
                 case .success(let stdout):
                     self.clearReport(for: "list")
                     self.instances = Self.parsePorcelain(stdout).sorted { $0.name < $1.name }
+                    self.liveSwitch.configure(cli: cli, instances: self.instances)
                     self.checkPermissions()
                     self.checkNativeTools()
                 }
@@ -764,7 +766,7 @@ final class InstanceStore: ObservableObject {
         }
     }
 
-    nonisolated private static func runProcess(cli: URL, arguments: [String]) -> ProcessResult {
+    nonisolated static func runProcess(cli: URL, arguments: [String]) -> ProcessResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = [cli.path] + arguments

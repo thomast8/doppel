@@ -14,6 +14,7 @@ struct DoppelApp: App {
         let updateQALaunch = foregroundUpdateQALaunch || backgroundUpdateQALaunch
         let headlessCommand = arguments.contains("--login-item")
             || arguments.contains("--render-ui")
+            || arguments.contains("--live-switch-probe")
         doppelUpdatesEnabled = !(Bundle.main.object(
             forInfoDictionaryKey: "SUPublicEDKey") as? String ?? "").isEmpty
         updaterController = DoppelUpdater(
@@ -44,6 +45,22 @@ struct DoppelApp: App {
             let editing = arguments.contains("edit")
             UIRenderer.render(to: URL(fileURLWithPath: path), editing: editing)
             exit(0)
+        }
+
+        // Safe, read-only contract probe for release QA. It reports only the
+        // selected route and control state, never composer or transcript text:
+        //   Doppel --live-switch-probe <instance-slug>
+        if let index = arguments.firstIndex(of: "--live-switch-probe") {
+            guard index + 1 < arguments.count else {
+                FileHandle.standardError.write(Data(
+                    "usage: Doppel --live-switch-probe <instance-slug>\n".utf8))
+                exit(2)
+            }
+            let result = LiveSwitchProbe.run(instanceID: arguments[index + 1])
+            let handle = result.status == 0
+                ? FileHandle.standardOutput : FileHandle.standardError
+            handle.write(Data("\(result.output)\n".utf8))
+            exit(result.status)
         }
 
         let configuredLockName = Bundle.main.object(
@@ -265,6 +282,8 @@ struct MenuContent: View {
                         Text("Select Not requested to ask macOS for this instance.")
                     }
                 }
+                Divider()
+                LiveSwitchMenuSection(instance: instance, controller: store.liveSwitch)
                 Divider()
                 Button(instance.usesBuiltInBrowser
                        ? "Launch with Built-in Browser"

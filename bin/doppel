@@ -662,16 +662,106 @@ vendor_command_uses_profile() {
     profile_root_is_primary_default "$profile_root"
 }
 
-clone_instance_is_running() {
+clone_instance_pids() {
     local app candidates pid command
     app="$(app_path_for "$1")"
     candidates="$(chatgpt_process_candidates)"
     for pid in ${(f)candidates}; do
         [[ "$pid" == <1-> ]] || continue
         command="$(/bin/ps -p "$pid" -o command= 2>/dev/null || true)"
-        [[ "$command" == "$app/Contents/MacOS/"* ]] && return 0
+        [[ "$command" == "$app/Contents/MacOS/"* ]] && print -r -- "$pid"
     done
-    return 1
+    return 0
+}
+
+clone_instance_is_running() {
+    [[ -n "$(clone_instance_pids "$1")" ]]
+}
+
+live_switch_bundle_build() {
+    /usr/bin/plutil -extract CFBundleVersion raw "$1/Contents/Info.plist" 2>/dev/null || true
+}
+
+# Resolves the one process Doppel's Accessibility controller may inspect. This
+# stays in the CLI so the menu app cannot grow a second, subtly different model
+# of profile ownership or the movable official-engine slot.
+#
+# Output is one versioned tab-separated row:
+#   live-switch-target-v1<TAB>slug<TAB>clone|vendor<TAB>bundle-id<TAB>app-path
+#       <TAB>codex-home<TAB>missing|stopped|running<TAB>pid<TAB>fingerprint<TAB>build
+cmd_live_switch_target() {
+    [[ $# -eq 1 && -n "$1" ]] || die "usage: doppel live-switch target <name>"
+
+    local dir slug engine bundle_id app codex_home state="stopped" pid="" fingerprint="" build=""
+    local actual_bundle pids
+    local -a matching_pids
+    dir="$(instance_dir_for "$1")"
+    slug="${dir:t}"
+    bundle_id="$(config_value "$dir" DOPPEL_BUNDLE_ID)"
+    codex_home="$(config_value "$dir" DOPPEL_CODEX_HOME)"
+    [[ -n "$bundle_id" && "$bundle_id" != *$'\t'* && "$bundle_id" != *$'\n'* ]] || \
+        die "'$1' has no valid bundle identifier for live switching"
+    [[ "$codex_home" == /* && "$codex_home" != *$'\t'* && "$codex_home" != *$'\n'* ]] || \
+        die "'$1' has no valid CODEX_HOME for live switching"
+
+    if instance_uses_vendor_engine "$dir"; then
+        engine="vendor"
+        bundle_id="$PRIMARY_BUNDLE_ID"
+        app="$PRIMARY_APP"
+        if [[ -d "$app" ]]; then
+            actual_bundle="$(/usr/bin/plutil -extract CFBundleIdentifier raw \
+                "$app/Contents/Info.plist" 2>/dev/null || true)"
+            [[ "$actual_bundle" == "$bundle_id" ]] || \
+                die "the official ChatGPT app metadata no longer matches its assigned live-switch target"
+            build="$(primary_version)"
+            valid_build_number "$build" || \
+                die "the official ChatGPT build could not be verified for live switching"
+        else
+            state="missing"
+        fi
+        if [[ "$state" != "missing" ]]; then
+            pid="$(iab_runtime_pid_for "$dir" 2>/dev/null || true)"
+        fi
+    else
+        engine="clone"
+        app="$(app_path_for "$dir")"
+        if [[ -d "$app" ]]; then
+            actual_bundle="$(/usr/bin/plutil -extract CFBundleIdentifier raw \
+                "$app/Contents/Info.plist" 2>/dev/null || true)"
+            [[ "$actual_bundle" == "$bundle_id" ]] || \
+                die "'$1' is installed at an app whose bundle identifier does not match its managed identity"
+            build="$(live_switch_bundle_build "$app")"
+            valid_build_number "$build" || \
+                die "'$1' has no verifiable app build for live switching"
+        else
+            state="missing"
+        fi
+        if [[ "$state" != "missing" ]]; then
+            pids="$(clone_instance_pids "$dir")"
+            matching_pids=(${(f)pids})
+            (( ${#matching_pids} <= 1 )) || \
+                die "more than one managed app process matches '$1'; live switching is disabled"
+            (( ${#matching_pids} == 0 )) || pid="${matching_pids[1]}"
+        fi
+    fi
+
+    if [[ -n "$pid" ]]; then
+        fingerprint="$(process_start_fingerprint "$pid")" || \
+            die "the managed app process changed before live switching could verify it"
+        state="running"
+    fi
+    printf 'live-switch-target-v1\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$slug" "$engine" "$bundle_id" "$app" "$codex_home" "$state" \
+        "$pid" "$fingerprint" "$build"
+}
+
+cmd_live_switch() {
+    local action="${1:-}"
+    (( $# > 0 )) && shift
+    case "$action" in
+        target) cmd_live_switch_target "$@" ;;
+        *) die "usage: doppel live-switch target <name>" ;;
+    esac
 }
 
 any_chatgpt_process_uses_profile() {
@@ -3013,6 +3103,7 @@ case "${1:-}" in
     permissions) shift; cmd_permissions "$@" ;;
     browser) shift; cmd_browser "$@" ;;
     native-tools) shift; cmd_native_tools "$@" ;;
+    live-switch) shift; cmd_live_switch "$@" ;;
     prune) shift; [[ $# -le 1 ]] || die "usage: doppel prune [<name>]"; cmd_prune "${1:-}" ;;
-    *) die "usage: doppel {create|list|launch|rebuild|edit|remove|update|permissions|browser|native-tools|prune} ..." ;;
+    *) die "usage: doppel {create|list|launch|rebuild|edit|remove|update|permissions|browser|native-tools|live-switch|prune} ..." ;;
 esac
