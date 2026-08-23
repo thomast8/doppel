@@ -543,6 +543,36 @@ check "the original identifier is byte-for-byte restorable" \
     "com.example.native"
 
 print -r -- ""
+print -r -- "Chronicle names the app holding the recorder even before it captures"
+CHRONICLE_TMP="$SCRATCH/chronicle/T"
+CHRONICLE_APP="$SCRATCH/chronicle/Chronicle Owner.app"
+/bin/mkdir -p "$CHRONICLE_TMP/codex_chronicle" "$CHRONICLE_APP/Contents/Resources"
+/usr/bin/plutil -create xml1 "$CHRONICLE_APP/Contents/Info.plist"
+/usr/bin/plutil -insert CFBundleDisplayName -string "Chronicle Owner" \
+    "$CHRONICLE_APP/Contents/Info.plist"
+# A symlink to sleep, invoked through its bundle path, is a live process whose
+# command line reads to `ps` exactly like the vendor recorder's.
+/bin/ln -sf /bin/sleep "$CHRONICLE_APP/Contents/Resources/codex_chronicle"
+"$CHRONICLE_APP/Contents/Resources/codex_chronicle" 120 &
+CHRONICLE_PID=$!
+chronicle_row() {
+    TMPDIR="$CHRONICLE_TMP" DOPPEL_HOME="$SCRATCH/native-tools" "$CLI" \
+        native-tools status --porcelain 2>&1 |
+        /usr/bin/awk -F '\t' '$1 == "chronicle" { print $2 FS $3 }'
+}
+print -r -- "$CHRONICLE_PID" > "$CHRONICLE_TMP/codex_chronicle/codex_chronicle.lock"
+check "an owned but idle recorder reports the app holding it" \
+    "$(chronicle_row)" $'held\tChronicle Owner'
+print -r -- "$CHRONICLE_PID" > "$CHRONICLE_TMP/codex_chronicle/chronicle-started.pid"
+check "the recorder's own start marker still reports it running" \
+    "$(chronicle_row)" $'running\tChronicle Owner'
+/bin/rm -f "$CHRONICLE_TMP/codex_chronicle/chronicle-started.pid"
+/bin/kill "$CHRONICLE_PID" 2>/dev/null
+wait "$CHRONICLE_PID" 2>/dev/null
+check "a lock left behind by a dead recorder is not mistaken for one running" \
+    "$(chronicle_row)" $'stopped\t'
+
+print -r -- ""
 print -r -- "data the instance does not own is never purged"
 ORIGINAL_PROFILE="$(config_field "$DIR" DOPPEL_PROFILE_ROOT)"
 for guarded in "$HOME" "$HOME/Documents" "$HOME/.codex" "$HOME/Library/Application Support/Codex"; do

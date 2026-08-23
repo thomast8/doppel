@@ -315,6 +315,15 @@ struct MenuContent: View {
                     if !status.chronicleHost.isEmpty {
                         Text("Shared recorder: \(status.chronicleHost)")
                     }
+                } else if status.chronicle == .held {
+                    // One recorder serves every app, so the one holding it
+                    // without capturing leaves the whole Mac without screen
+                    // history. Name it, because its permission is the fix.
+                    Label("Chronicle — Not recording", systemImage: "exclamationmark.triangle.fill")
+                    if !status.chronicleHost.isEmpty {
+                        Text("Held by: \(status.chronicleHost)")
+                    }
+                    Text("Check its Screen & System Audio Recording permission.")
                 } else {
                     Label("Chronicle — Not running", systemImage: "pause.circle")
                 }
