@@ -138,18 +138,7 @@ final class InstanceStore: ObservableObject {
         clearReport(for: "cli")
         Task.detached { [weak self] in
             let result = Self.runProcess(cli: cli, arguments: ["list", "--porcelain"])
-            await MainActor.run { [weak self] in
-                guard let self else { return }
-                switch result {
-                case .failure(let message):
-                    self.report(message, for: "list")
-                case .success(let stdout):
-                    self.clearReport(for: "list")
-                    self.instances = Self.parsePorcelain(stdout).sorted { $0.name < $1.name }
-                    self.checkPermissions()
-                    self.checkNativeTools()
-                }
-            }
+            await self?.applyInstanceList(result)
         }
     }
 
@@ -238,17 +227,7 @@ final class InstanceStore: ObservableObject {
         Task.detached { [weak self] in
             let result = Self.runProcess(
                 cli: cli, arguments: ["native-tools", "status", "--porcelain"])
-            await MainActor.run { [weak self] in
-                guard let self else { return }
-                self.checkingNativeTools = false
-                switch result {
-                case .failure(let message):
-                    self.report(message, for: "native-tools-status")
-                case .success(let output):
-                    self.clearReport(for: "native-tools-status")
-                    self.nativeToolsStatus = NativeToolsStatus.parse(output)
-                }
-            }
+            await self?.applyNativeToolsStatus(result)
         }
     }
 
@@ -281,17 +260,7 @@ final class InstanceStore: ObservableObject {
         checkingPermissions = true
         Task.detached { [weak self] in
             let result = Self.runProcess(cli: cli, arguments: ["permissions", "check", "--porcelain"])
-            await MainActor.run { [weak self] in
-                guard let self else { return }
-                self.checkingPermissions = false
-                switch result {
-                case .failure(let message):
-                    self.report(message, for: "permissions-check")
-                case .success(let output):
-                    self.clearReport(for: "permissions-check")
-                    self.permissionStatuses = PermissionIssue.parseStatuses(output)
-                }
-            }
+            await self?.applyPermissionCheck(result)
         }
     }
 
@@ -362,41 +331,7 @@ final class InstanceStore: ObservableObject {
         checkingForUpdates = true
         Task.detached { [weak self] in
             let result = Self.runProcess(cli: cli, arguments: ["update", "check", "--porcelain"])
-            await MainActor.run { [weak self] in
-                guard let self else { return }
-                self.checkingForUpdates = false
-                switch result {
-                case .failure(let message):
-                    // A background check must stay quiet when the Mac is
-                    // offline. A check the user explicitly requested reports
-                    // the same actionable CLI failure.
-                    if userInitiated { self.report(message, for: "update-check") }
-                case .success(let output):
-                    self.clearReport(for: "update-check")
-                    // Recorded whether or not there is an update to offer, so
-                    // the menu can show the installed build either way.
-                    self.installedChatGPT = InstalledChatGPT.parse(output)
-                    guard let update = ChatGPTUpdate.parse(output) else {
-                        self.chatGPTUpdate = nil
-                        // Only the CLI saying "current" means current. A line
-                        // this version cannot read — a state word added by a
-                        // newer CLI than the app, which the dev-mode CLI
-                        // lookup makes possible — used to be announced as
-                        // being up to date, which is the one thing it does not
-                        // prove.
-                        if userInitiated {
-                            if Self.resultFields(output).first == "current" {
-                                self.showCurrentAlert()
-                            } else {
-                                self.report(Self.unreadableUpdateCheckMessage, for: "update-check")
-                            }
-                        }
-                        return
-                    }
-                    self.chatGPTUpdate = update
-                    self.promptForUpdate(update, force: userInitiated)
-                }
-            }
+            await self?.applyUpdateCheck(result, userInitiated: userInitiated)
         }
     }
 
@@ -453,35 +388,7 @@ final class InstanceStore: ObservableObject {
         busy.insert("update")
         Task.detached { [weak self] in
             let result = Self.runProcess(cli: cli, arguments: ["update", "prepare"])
-            await MainActor.run { [weak self] in
-                guard let self else { return }
-                self.busy.remove("update")
-                switch result {
-                case .failure(let message):
-                    self.report(message, for: "update")
-                case .success(let output):
-                    self.clearReport(for: "update")
-                    // `update prepare` also succeeds with "already current"
-                    // when the vendor's own updater installed the build while
-                    // Doppel was downloading it. Offering "Restart and Install"
-                    // on that would apply a build the primary already has, so
-                    // the state is re-read instead of assumed.
-                    guard Self.resultFields(output).first == "ready" else {
-                        self.chatGPTUpdate = nil
-                        self.checkForUpdates(userInitiated: true)
-                        return
-                    }
-                    let ready = ChatGPTUpdate(
-                        state: .ready,
-                        currentBuild: update.currentBuild,
-                        currentVersion: update.currentVersion,
-                        targetBuild: update.targetBuild,
-                        targetVersion: update.targetVersion,
-                        staleInstanceCount: 0)
-                    self.chatGPTUpdate = ready
-                    self.promptToRestart(ready, force: true)
-                }
-            }
+            await self?.applyUpdatePrepare(result, update: update)
         }
     }
 
@@ -544,25 +451,7 @@ final class InstanceStore: ObservableObject {
         Task.detached { [weak self] in
             let result = Self.runProcess(
                 cli: cli, arguments: ["update", "apply", String(update.targetBuild)])
-            await MainActor.run { [weak self] in
-                guard let self else { return }
-                self.busy.remove("update")
-                switch result {
-                case .failure(let message):
-                    self.report(message, for: "update")
-                    // The cached offer is what was just refused. Keeping it
-                    // would let the same doomed apply be retried from the menu;
-                    // re-reading is also how a primary that moved underneath
-                    // Doppel turns into the reconcile offer that fixes it.
-                    self.chatGPTUpdate = nil
-                    self.checkForUpdates()
-                case .success(let output):
-                    self.clearReport(for: "update")
-                    self.chatGPTUpdate = nil
-                    self.reload()
-                    self.showUpdateComplete(update, output: output)
-                }
-            }
+            await self?.applyUpdateApply(result, update: update)
         }
     }
 
@@ -703,11 +592,7 @@ final class InstanceStore: ObservableObject {
                     _ = Self.runProcess(cli: cli, arguments: ["rebuild", name])
                 }
             }
-            await MainActor.run { [weak self] in
-                self?.busy.remove("signing")
-                if let failure { self?.report(failure, for: "signing") }
-                self?.reload()
-            }
+            await self?.finishSigningSetup(failure: failure)
         }
     }
 
@@ -809,17 +694,147 @@ final class InstanceStore: ObservableObject {
             let result = Self.runProcess(cli: cli, arguments: arguments)
             let failure: String?
             if case .failure(let message) = result { failure = message } else { failure = nil }
-            await MainActor.run { [weak self] in
-                guard let self else { return }
-                self.busy.remove(busyKey)
-                if let failure {
-                    if reportFailure { self.report(failure, for: busyKey) }
-                } else {
-                    self.clearReport(for: busyKey)
-                }
-                completion?(failure)
-            }
+            await self?.finishCLI(busyKey: busyKey, failure: failure,
+                                  reportFailure: reportFailure, completion: completion)
         }
+    }
+
+    // MARK: - Applying results back on the main actor
+
+    /// Publishes a `doppel list` result. Split out of the detached read so the
+    /// hop back is the isolation of the method itself, not a MainActor.run block.
+    private func applyInstanceList(_ result: ProcessResult) {
+        switch result {
+        case .failure(let message):
+            report(message, for: "list")
+        case .success(let stdout):
+            clearReport(for: "list")
+            instances = Self.parsePorcelain(stdout).sorted { $0.name < $1.name }
+            checkPermissions()
+            checkNativeTools()
+        }
+    }
+
+    private func applyNativeToolsStatus(_ result: ProcessResult) {
+        checkingNativeTools = false
+        switch result {
+        case .failure(let message):
+            report(message, for: "native-tools-status")
+        case .success(let output):
+            clearReport(for: "native-tools-status")
+            nativeToolsStatus = NativeToolsStatus.parse(output)
+        }
+    }
+
+    private func applyPermissionCheck(_ result: ProcessResult) {
+        checkingPermissions = false
+        switch result {
+        case .failure(let message):
+            report(message, for: "permissions-check")
+        case .success(let output):
+            clearReport(for: "permissions-check")
+            permissionStatuses = PermissionIssue.parseStatuses(output)
+        }
+    }
+
+    private func applyUpdateCheck(_ result: ProcessResult, userInitiated: Bool) {
+        checkingForUpdates = false
+        switch result {
+        case .failure(let message):
+            // A background check must stay quiet when the Mac is
+            // offline. A check the user explicitly requested reports
+            // the same actionable CLI failure.
+            if userInitiated { report(message, for: "update-check") }
+        case .success(let output):
+            clearReport(for: "update-check")
+            // Recorded whether or not there is an update to offer, so
+            // the menu can show the installed build either way.
+            installedChatGPT = InstalledChatGPT.parse(output)
+            guard let update = ChatGPTUpdate.parse(output) else {
+                chatGPTUpdate = nil
+                // Only the CLI saying "current" means current. A line
+                // this version cannot read — a state word added by a
+                // newer CLI than the app, which the dev-mode CLI
+                // lookup makes possible — used to be announced as
+                // being up to date, which is the one thing it does not
+                // prove.
+                if userInitiated {
+                    if Self.resultFields(output).first == "current" {
+                        showCurrentAlert()
+                    } else {
+                        report(Self.unreadableUpdateCheckMessage, for: "update-check")
+                    }
+                }
+                return
+            }
+            chatGPTUpdate = update
+            promptForUpdate(update, force: userInitiated)
+        }
+    }
+
+    private func applyUpdatePrepare(_ result: ProcessResult, update: ChatGPTUpdate) {
+        busy.remove("update")
+        switch result {
+        case .failure(let message):
+            report(message, for: "update")
+        case .success(let output):
+            clearReport(for: "update")
+            // `update prepare` also succeeds with "already current"
+            // when the vendor's own updater installed the build while
+            // Doppel was downloading it. Offering "Restart and Install"
+            // on that would apply a build the primary already has, so
+            // the state is re-read instead of assumed.
+            guard Self.resultFields(output).first == "ready" else {
+                chatGPTUpdate = nil
+                checkForUpdates(userInitiated: true)
+                return
+            }
+            let ready = ChatGPTUpdate(
+                state: .ready,
+                currentBuild: update.currentBuild,
+                currentVersion: update.currentVersion,
+                targetBuild: update.targetBuild,
+                targetVersion: update.targetVersion,
+                staleInstanceCount: 0)
+            chatGPTUpdate = ready
+            promptToRestart(ready, force: true)
+        }
+    }
+
+    private func applyUpdateApply(_ result: ProcessResult, update: ChatGPTUpdate) {
+        busy.remove("update")
+        switch result {
+        case .failure(let message):
+            report(message, for: "update")
+            // The cached offer is what was just refused. Keeping it
+            // would let the same doomed apply be retried from the menu;
+            // re-reading is also how a primary that moved underneath
+            // Doppel turns into the reconcile offer that fixes it.
+            chatGPTUpdate = nil
+            checkForUpdates()
+        case .success(let output):
+            clearReport(for: "update")
+            chatGPTUpdate = nil
+            reload()
+            showUpdateComplete(update, output: output)
+        }
+    }
+
+    private func finishSigningSetup(failure: String?) {
+        busy.remove("signing")
+        if let failure { report(failure, for: "signing") }
+        reload()
+    }
+
+    private func finishCLI(busyKey: String, failure: String?, reportFailure: Bool,
+                       completion: (@MainActor (String?) -> Void)?) {
+        busy.remove(busyKey)
+        if let failure {
+            if reportFailure { report(failure, for: busyKey) }
+        } else {
+            clearReport(for: busyKey)
+        }
+        completion?(failure)
     }
 }
 
