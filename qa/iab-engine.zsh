@@ -291,6 +291,121 @@ expect "$(run_cli browser status --porcelain)" "unassigned" \
 run_cli browser assign --quit-running "ChatGPT Work QA" >/dev/null
 expect "$(run_cli browser status --porcelain | /usr/bin/cut -f1-2)" \
     $'assigned\twork' "the confirmed assignment form should select the target profile"
+
+# Browser extension support is an explicit, profile-local override. Start from
+# a realistic remote cache and prove that Doppel changes only OwlExtensions.
+WORK_PROFILE="$FIXTURE_HOME/Library/Application Support/ChatGPT Work QA"
+FEATURE_CACHE="$WORK_PROFILE/owl-feature-bootstrap-cache.json"
+RECEIPT="$FIXTURE_STATE/instances/work/browser-extensions-override.plist"
+/bin/mkdir -p "$WORK_PROFILE"
+print -r -- '{"enabledOwlFeatureNames":["OwlHistory","UnknownEnabled"],"disabledOwlFeatureNames":["OwlExtensions","UnknownDisabled"]}' > "$FEATURE_CACHE"
+/bin/chmod 640 "$FEATURE_CACHE"
+expect "$(run_cli browser extensions status --porcelain "ChatGPT Work QA")" "off" \
+    "the remote-disabled feature should begin off"
+run_cli browser extensions enable "ChatGPT Work QA" >/dev/null
+expect "$(run_cli browser extensions status --porcelain "ChatGPT Work QA")" "override" \
+    "enable should publish the per-profile override"
+[[ -r "$RECEIPT" ]] || fail "enable should create a private reconciliation receipt"
+expect "$(/usr/bin/stat -f '%Lp' "$RECEIPT")" "600" \
+    "the reconciliation receipt should be private"
+expect "$(/usr/bin/stat -f '%Lp' "$FEATURE_CACHE")" "640" \
+    "feature-cache permissions should survive the atomic rewrite"
+feature_json="$(/usr/bin/plutil -convert json -o - "$FEATURE_CACHE")"
+[[ "$feature_json" == *'"OwlExtensions"'* && "$feature_json" == *'"UnknownEnabled"'* && \
+   "$feature_json" == *'"UnknownDisabled"'* ]] || \
+    fail "enable should preserve unknown feature names"
+[[ "$(/usr/bin/plutil -extract disabledOwlFeatureNames json -o - "$FEATURE_CACHE")" != *'"OwlExtensions"'* ]] || \
+    fail "enable should remove OwlExtensions from the disabled list"
+
+first_digest="$(/usr/bin/shasum -a 256 "$FEATURE_CACHE" | /usr/bin/awk '{print $1}')"
+run_cli browser extensions enable "ChatGPT Work QA" >/dev/null
+expect "$(/usr/bin/shasum -a 256 "$FEATURE_CACHE" | /usr/bin/awk '{print $1}')" "$first_digest" \
+    "repeat enable should be idempotent"
+
+# Simulate an OpenAI cache refresh. Launch reconciliation must restore only the
+# requested feature and update the receipt to the new exact digest.
+print -r -- '{"enabledOwlFeatureNames":["OwlPrinting","RemoteNew"],"disabledOwlFeatureNames":["OwlExtensions","RemoteDisabled"]}' > "$FEATURE_CACHE"
+if ! refresh_launch_output="$(run_cli launch "ChatGPT Work QA" 2>&1)"; then
+    fail "launch reconciliation failed: $refresh_launch_output"
+fi
+[[ "$refresh_launch_output" == vendor-launch$'\t'* ]] || \
+    fail "launch reconciliation should continue to the official engine"
+[[ "$(/usr/bin/plutil -extract enabledOwlFeatureNames json -o - "$FEATURE_CACHE")" == *'"RemoteNew"'* ]] || \
+    fail "launch reconciliation should preserve refreshed remote features"
+[[ "$(/usr/bin/plutil -extract enabledOwlFeatureNames json -o - "$FEATURE_CACHE")" == *'"OwlExtensions"'* ]] || \
+    fail "launch reconciliation should re-enable OwlExtensions"
+
+# If OpenAI's next refresh enables the feature itself, Doppel must retire its
+# override instead of later restoring an obsolete disabled value.
+print -r -- '{"enabledOwlFeatureNames":["OwlExtensions","OpenAIEnabled"],"disabledOwlFeatureNames":[]}' > "$FEATURE_CACHE"
+run_cli launch "ChatGPT Work QA" >/dev/null
+expect "$(run_cli browser extensions status --porcelain "ChatGPT Work QA")" "upstream" \
+    "an upstream enablement should supersede Doppel's override"
+[[ ! -e "$RECEIPT" ]] || fail "an upstream enablement should retire the override receipt"
+
+# If ChatGPT changes the cache after Doppel writes it, disabling drops the
+# receipt but must not overwrite the newer state.
+print -r -- '{"enabledOwlFeatureNames":["OwlPrinting"],"disabledOwlFeatureNames":["OwlExtensions"]}' > "$FEATURE_CACHE"
+run_cli browser extensions enable "ChatGPT Work QA" >/dev/null
+print -r -- '{"enabledOwlFeatureNames":["OpenAINewer"],"disabledOwlFeatureNames":[]}' > "$FEATURE_CACHE"
+newer_digest="$(/usr/bin/shasum -a 256 "$FEATURE_CACHE" | /usr/bin/awk '{print $1}')"
+run_cli browser extensions disable "ChatGPT Work QA" >/dev/null
+expect "$(/usr/bin/shasum -a 256 "$FEATURE_CACHE" | /usr/bin/awk '{print $1}')" "$newer_digest" \
+    "digest-aware disable should leave newer OpenAI state untouched"
+[[ ! -e "$RECEIPT" ]] || fail "digest-aware disable should remove the stale receipt"
+
+# A clean disable restores the exact prior membership without deleting other
+# Browser data or extension files.
+print -r -- '{"enabledOwlFeatureNames":["OwlHistory"],"disabledOwlFeatureNames":["OwlExtensions","KeepMe"]}' > "$FEATURE_CACHE"
+/bin/mkdir -p "$WORK_PROFILE/Default/Extensions/example"
+print -r -- keep > "$WORK_PROFILE/Default/Extensions/example/data"
+run_cli browser extensions enable "ChatGPT Work QA" >/dev/null
+run_cli browser extensions disable "ChatGPT Work QA" >/dev/null
+[[ "$(/usr/bin/plutil -extract disabledOwlFeatureNames json -o - "$FEATURE_CACHE")" == *'"OwlExtensions"'* ]] || \
+    fail "clean disable should restore the prior disabled membership"
+[[ -f "$WORK_PROFILE/Default/Extensions/example/data" ]] || \
+    fail "disable should keep installed extension data"
+
+# Apple setup uses the exact official store URL. A routing failure after a new
+# opt-in must restore the pre-command feature state and remove its receipt.
+apple_output="$(run_cli browser extensions apple-passwords "ChatGPT Work QA")"
+[[ "$apple_output" == *$'\t'https://chromewebstore.google.com/detail/icloud-passwords/pejdijmoenmkgeppbflobdenhhabjlaj?hl=en ]] || \
+    fail "Apple Passwords setup should route the exact official extension URL (got '$apple_output')"
+run_cli browser extensions disable "ChatGPT Work QA" >/dev/null
+if routing_output="$(DOPPEL_IAB_DRY_RUN_URL_ROUTING_FAILURE=1 run_cli browser extensions apple-passwords "ChatGPT Work QA" 2>&1)"; then
+    fail "a Browser URL routing failure should fail Apple Passwords setup"
+fi
+[[ "$routing_output" == *"override was rolled back"* ]] || \
+    fail "a routing failure should explain the automatic rollback"
+expect "$(run_cli browser extensions status --porcelain "ChatGPT Work QA")" "off" \
+    "a routing failure should leave the extension override off"
+[[ ! -e "$RECEIPT" ]] || fail "a routing failure should not leave an override receipt"
+
+# Malformed state, unsupported builds, and a running profile all fail before
+# changing either the cache or receipt.
+print -r -- '{not-json' > "$FEATURE_CACHE"
+malformed_digest="$(/usr/bin/shasum -a 256 "$FEATURE_CACHE" | /usr/bin/awk '{print $1}')"
+if malformed_output="$(run_cli browser extensions enable "ChatGPT Work QA" 2>&1)"; then
+    fail "malformed feature cache should be refused"
+fi
+[[ "$malformed_output" == *"feature cache is malformed"* ]] || \
+    fail "malformed refusal should identify the feature cache"
+expect "$(/usr/bin/shasum -a 256 "$FEATURE_CACHE" | /usr/bin/awk '{print $1}')" "$malformed_digest" \
+    "malformed cache should remain byte-for-byte unchanged"
+[[ ! -e "$RECEIPT" ]] || fail "malformed cache should not create a receipt"
+
+print -r -- '{"enabledOwlFeatureNames":[],"disabledOwlFeatureNames":["OwlExtensions"]}' > "$FEATURE_CACHE"
+if unsupported_output="$(DOPPEL_IAB_DRY_RUN_UNSUPPORTED_EXTENSIONS=1 run_cli browser extensions enable "ChatGPT Work QA" 2>&1)"; then
+    fail "unsupported ChatGPT build should be refused"
+fi
+[[ "$unsupported_output" == *"does not support"* ]] || \
+    fail "unsupported refusal should identify the build capability"
+if running_output="$(DOPPEL_IAB_DRY_RUN_PROFILE_RUNNING=1 run_cli browser extensions enable "ChatGPT Work QA" 2>&1)"; then
+    fail "running profile should require explicit quit consent"
+fi
+[[ "$running_output" == *"extensions change needs running ChatGPT apps to quit"* ]] || \
+    fail "running refusal should match the menu's recoverable message"
+
 run_cli browser release >/dev/null
 
 # A malformed or stale slot is ignored for routing, but release should still

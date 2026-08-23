@@ -6,6 +6,20 @@ enum InstanceEngine: String {
     case vendor
 }
 
+enum BrowserExtensionsState: String {
+    case off
+    case override
+    case upstream
+
+    var menuTitle: String {
+        switch self {
+        case .off: "Browser Extensions — Off"
+        case .override: "Browser Extensions — Experimental"
+        case .upstream: "Browser Extensions — OpenAI"
+        }
+    }
+}
+
 struct Instance: Identifiable {
     let id: String        // stable slug assigned at creation
     let name: String
@@ -15,6 +29,8 @@ struct Instance: Identifiable {
     let tint: String
     /// The profile is stable; only the process used to open it changes.
     let engine: InstanceEngine
+    /// Whether extension support is absent, enabled by Doppel, or enabled by OpenAI.
+    let browserExtensions: BrowserExtensionsState
 
     var usesBuiltInBrowser: Bool { engine == .vendor }
 }
@@ -180,6 +196,94 @@ final class InstanceStore: ObservableObject {
             "the Browser assignment needs running ChatGPT apps to quit")
     }
 
+    nonisolated static func browserExtensionsNeedQuit(_ message: String) -> Bool {
+        message.localizedCaseInsensitiveContains(
+            "the Browser extensions change needs running ChatGPT apps to quit")
+    }
+
+    func setUpApplePasswords(for instance: Instance) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Enable Browser extensions for \(instance.name)?"
+        alert.informativeText = """
+            This experimental control enables ChatGPT's full Browser extension manager and Chrome Web Store, then opens Apple's official iCloud Passwords extension.
+
+            Apple Passwords is a Mac-wide vault. Credentials available here are not isolated between your Personal and Veridue profiles. Doppel never reads or copies them.
+            """
+        alert.addButton(withTitle: "Continue")
+        alert.addButton(withTitle: "Cancel")
+        guard present(alert) == .alertFirstButtonReturn else { return }
+        runCLI(["browser", "extensions", "apple-passwords", instance.name],
+               busyKey: "browser-extensions", reportFailure: false) { [weak self] failure in
+            guard let self else { return }
+            guard let failure else {
+                self.reload()
+                return
+            }
+            if Self.browserExtensionsNeedQuit(failure) {
+                self.confirmQuitAndSetUpApplePasswords(for: instance, detail: failure)
+            } else {
+                self.report(failure, for: "browser-extensions")
+            }
+        }
+    }
+
+    private func confirmQuitAndSetUpApplePasswords(for instance: Instance, detail: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Quit ChatGPT and continue?"
+        alert.informativeText = """
+            ChatGPT must restart for the Browser extensions setting to take effect. Save any unfinished drafts before continuing.
+
+            \(detail.replacingOccurrences(of: "doppel: ", with: ""))
+            """
+        alert.addButton(withTitle: "Quit and Continue")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons[0].hasDestructiveAction = true
+        alert.buttons[1].keyEquivalent = "\r"
+        guard present(alert) == .alertFirstButtonReturn else { return }
+        runCLI(["browser", "extensions", "apple-passwords", "--quit-running", instance.name],
+               busyKey: "browser-extensions") { [weak self] failure in
+            if failure == nil { self?.reload() }
+        }
+    }
+
+    func disableBrowserExtensionsOverride(for instance: Instance) {
+        runCLI(["browser", "extensions", "disable", instance.name],
+               busyKey: "browser-extensions", reportFailure: false) { [weak self] failure in
+            guard let self else { return }
+            guard let failure else {
+                self.reload()
+                return
+            }
+            if Self.browserExtensionsNeedQuit(failure) {
+                self.confirmQuitAndDisableBrowserExtensions(for: instance, detail: failure)
+            } else {
+                self.report(failure, for: "browser-extensions")
+            }
+        }
+    }
+
+    private func confirmQuitAndDisableBrowserExtensions(for instance: Instance, detail: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Quit ChatGPT and disable the override?"
+        alert.informativeText = """
+            ChatGPT must restart for this change to take effect. Installed extensions and Browser data will be kept.
+
+            \(detail.replacingOccurrences(of: "doppel: ", with: ""))
+            """
+        alert.addButton(withTitle: "Quit and Disable")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons[0].hasDestructiveAction = true
+        alert.buttons[1].keyEquivalent = "\r"
+        guard present(alert) == .alertFirstButtonReturn else { return }
+        runCLI(["browser", "extensions", "disable", "--quit-running", instance.name],
+               busyKey: "browser-extensions") { [weak self] failure in
+            if failure == nil { self?.reload() }
+        }
+    }
+
     private func confirmQuitAndAssignBrowser(to instance: Instance, detail: String) {
         let alert = NSAlert()
         alert.alertStyle = .warning
@@ -227,7 +331,8 @@ final class InstanceStore: ObservableObject {
     /// offering operations that would only be refused as concurrent work.
     var engineOperationBusy: Bool {
         busy.contains("iab-slot") || busy.contains("update") || busy.contains("signing") ||
-            busy.contains("create") || instances.contains { busy.contains($0.id) }
+            busy.contains("browser-extensions") || busy.contains("create") ||
+            instances.contains { busy.contains($0.id) }
     }
 
     // MARK: - Native tools
@@ -759,7 +864,10 @@ final class InstanceStore: ObservableObject {
                 tint: fields.count > 4 ? String(fields[4]) : "",
                 engine: fields.count > 5
                     ? InstanceEngine(rawValue: String(fields[5])) ?? .clone
-                    : .clone
+                    : .clone,
+                browserExtensions: fields.count > 6
+                    ? BrowserExtensionsState(rawValue: String(fields[6])) ?? .off
+                    : .off
             )
         }
     }

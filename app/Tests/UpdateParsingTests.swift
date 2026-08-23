@@ -253,10 +253,16 @@ final class UpdateParsingTests: XCTestCase {
         expect(!InstanceStore.browserAssignmentNeedsQuit(
             "doppel: the official ChatGPT engine failed signature verification"),
                "non-conflict failures must retain the ordinary error alert")
+        expect(InstanceStore.browserExtensionsNeedQuit(
+            "doppel: the Browser extensions change needs running ChatGPT apps to quit: 'ChatGPT Test' is using a ChatGPT engine."),
+               "the menu should recognise a recoverable Browser extensions restart")
+        expect(!InstanceStore.browserExtensionsNeedQuit(
+            "doppel: ChatGPT's Browser feature cache is malformed"),
+               "cache failures must retain the ordinary error alert")
 
         let instances = InstanceStore.parsePorcelain("""
-            personal\tChatGPT Personal\t/Users/me/ChatGPT Personal.app\tinstalled\tA855F7\tvendor
-            work\tChatGPT Work\t/Users/me/ChatGPT Work.app\tmissing\t1FA97E\tclone
+            personal\tChatGPT Personal\t/Users/me/ChatGPT Personal.app\tinstalled\tA855F7\tvendor\toverride
+            work\tChatGPT Work\t/Users/me/ChatGPT Work.app\tmissing\t1FA97E\tclone\tupstream
             legacy\tChatGPT Legacy\t/Users/me/ChatGPT Legacy.app\tinstalled\t
             """)
         expect(instances.count == 3, "new and old list rows should parse together")
@@ -264,6 +270,18 @@ final class UpdateParsingTests: XCTestCase {
                "a vendor list row should become the built-in-browser engine")
         expect(!instances[1].usesBuiltInBrowser && !instances[2].usesBuiltInBrowser,
                "clone and legacy rows should keep the locally signed engine")
+        expect(instances[0].browserExtensions == .override,
+               "a Doppel extension override should survive list parsing")
+        expect(instances[1].browserExtensions == .upstream,
+               "OpenAI-managed extension support should survive list parsing")
+        expect(instances[2].browserExtensions == .off,
+               "legacy rows should default Browser extensions to off")
+        expect(BrowserExtensionsState.override.menuTitle == "Browser Extensions — Experimental",
+               "a Doppel override should be labelled experimental in the menu")
+        expect(BrowserExtensionsState.upstream.menuTitle == "Browser Extensions — OpenAI",
+               "an upstream enablement should be attributed to OpenAI in the menu")
+        expect(BrowserExtensionsState.off.menuTitle == "Browser Extensions — Off",
+               "a disabled profile should expose its off state in the menu")
 
         // Two instances sharing one CODEX_HOME are both named in the column, and
         // neither should then be offered the registration it already holds.

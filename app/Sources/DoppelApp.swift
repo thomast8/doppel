@@ -219,6 +219,22 @@ struct MenuContent: View {
                 if instance.usesBuiltInBrowser {
                     Label("Engine — Official ChatGPT", systemImage: "checkmark.shield.fill")
                     Text("Built-in browser assigned")
+                    Button("Set Up Apple Passwords…") {
+                        store.setUpApplePasswords(for: instance)
+                    }
+                    .disabled(engineBusy)
+                    switch instance.browserExtensions {
+                    case .override:
+                        Label(instance.browserExtensions.menuTitle, systemImage: "puzzlepiece.extension")
+                        Button("Disable Doppel Extension Override") {
+                            store.disableBrowserExtensionsOverride(for: instance)
+                        }
+                        .disabled(engineBusy)
+                    case .upstream:
+                        Label(instance.browserExtensions.menuTitle, systemImage: "puzzlepiece.extension.fill")
+                    case .off:
+                        Label(instance.browserExtensions.menuTitle, systemImage: "puzzlepiece.extension")
+                    }
                     Button("Release Built-in Browser") {
                         store.releaseBuiltInBrowser()
                     }
