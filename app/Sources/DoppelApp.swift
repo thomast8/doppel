@@ -266,6 +266,13 @@ struct MenuContent: View {
                     }
                 }
                 Divider()
+                if store.remodexStatus?.isActive(for: instance) == true {
+                    Label("Remodex — Active", systemImage: "iphone.and.arrow.forward")
+                } else {
+                    Button("Use with Remodex…") { confirmRemodexSwitch(instance) }
+                        .disabled(!instance.installed || engineBusy)
+                }
+                Divider()
                 Button(instance.usesBuiltInBrowser
                        ? "Launch with Built-in Browser"
                        : "Launch") { store.launch(instance) }
@@ -419,6 +426,41 @@ struct MenuContent: View {
                 Text(store.checkingNativeTools ? "Checking…" : "Status unavailable")
             }
         }
+        Menu("Remodex") {
+            if let status = store.remodexStatus {
+                switch status.state {
+                case .active where !status.instanceName.isEmpty:
+                    Label("Active — \(status.instanceName)",
+                          systemImage: "iphone.and.arrow.forward")
+                    Text(status.codexHome)
+                    Divider()
+                    Button("Release to Primary ChatGPT…") { confirmRemodexRelease() }
+                        .disabled(store.engineOperationBusy)
+                case .active, .configured:
+                    Label(status.state == .active
+                          ? "Active — Primary or external target"
+                          : "Configured — Restart incomplete",
+                          systemImage: status.state == .active
+                              ? "iphone.and.arrow.forward"
+                              : "exclamationmark.triangle.fill")
+                    if !status.codexHome.isEmpty { Text(status.codexHome) }
+                    if status.state == .configured {
+                        Text("The running bridge has not confirmed this target.")
+                    }
+                    Divider()
+                    Button("Release to Primary ChatGPT…") { confirmRemodexRelease() }
+                        .disabled(store.engineOperationBusy)
+                case .unsupported:
+                    Label("Update Remodex", systemImage: "exclamationmark.triangle.fill")
+                    Text("This version cannot target Doppel instances.")
+                case .unavailable:
+                    Label("Remodex unavailable", systemImage: "iphone.slash")
+                    Text("Install the compatible Remodex bridge to connect an instance.")
+                }
+            } else {
+                Text(store.checkingRemodex ? "Checking…" : "Status unavailable")
+            }
+        }
         Button("New Instance…") {
             openWindow(id: "create-instance")
             NSApp.activate(ignoringOtherApps: true)
@@ -527,6 +569,34 @@ struct MenuContent: View {
         alert.buttons[1].keyEquivalent = "\r"
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         store.remove(instance, purgeData: purge.state == .on)
+    }
+
+    private func confirmRemodexSwitch(_ instance: Instance) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Use Remodex with “\(instance.name)”?"
+        alert.informativeText = """
+            Remodex supports one desktop target at a time. Switching restarts its bridge and may briefly interrupt the paired phone. Pairing is preserved.
+            """
+        alert.addButton(withTitle: "Switch and Restart")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons[1].keyEquivalent = "\r"
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        store.useWithRemodex(instance)
+    }
+
+    private func confirmRemodexRelease() {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Release Remodex to primary ChatGPT?"
+        alert.informativeText = "This restarts the Remodex bridge. Pairing is preserved."
+        alert.addButton(withTitle: "Release and Restart")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons[1].keyEquivalent = "\r"
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        store.releaseRemodex()
     }
 
 }

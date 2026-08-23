@@ -105,6 +105,9 @@ bin/doppel native-tools status
 bin/doppel native-tools repair
 bin/doppel native-tools claim-browser "ChatGPT Personal"
 bin/doppel native-tools claim-browser --browser Edge "ChatGPT Work"
+bin/doppel remodex use "ChatGPT Personal"
+bin/doppel remodex status
+bin/doppel remodex release
 bin/doppel update check
 bin/doppel update prepare
 bin/doppel update apply                              # also rebuilds instances the
@@ -116,6 +119,20 @@ bin/doppel remove "ChatGPT Personal" --purge-data    # data to the Trash too
 bin/doppel prune                                     # drop old rollback copies
 bin/doppel prune "ChatGPT Personal"                  # just this instance's
 ```
+
+### Remodex
+
+Remodex can bridge one Doppel instance at a time. `doppel remodex use` passes
+the instance's verified Codex home, bundle ID, installed app path, and URL
+scheme as exact arguments. Remodex always targets the Doppel instance bundle;
+the instance router then selects its clone or verified vendor engine.
+
+Switching a running bridge restarts Remodex and verifies that the daemon and
+app-server report the new target before returning. Pairing is preserved, and
+the configured Codex home owns its rollout history, worktrees, and IPC socket.
+
+This requires a Remodex version with configurable desktop targets. An absent or
+older Remodex is shown as unavailable and does not change the active instance.
 
 `rebuild` opens the rebuilt instance when it succeeds, even if the instance was
 closed before the command began. Set `DOPPEL_RELAUNCH=0` for maintenance or QA
