@@ -2745,22 +2745,40 @@ cmd_native_tools_claim_browser() {
 
 # MARK: - Native-tool health
 
+# The app owning the Chronicle recorder named in a marker file, or nothing when
+# the marker is absent, stale or holds something other than a live recorder.
+# Both markers hold a bare pid, and the recorder is shared machine-wide, so the
+# process behind either one names the app the whole machine records through.
+chronicle_owner_app() {
+    local marker="$1" pid="" command=""
+    [[ -f "$marker" && -r "$marker" ]] || return 0
+    pid="$(<"$marker")"
+    [[ "$pid" == <1-> ]] || return 0
+    command="$(/bin/ps -p "$pid" -o command= 2>/dev/null || true)"
+    [[ "$command" == */Contents/Resources/codex_chronicle* ]] || return 0
+    print -r -- "${command%%/Contents/Resources/codex_chronicle*}"
+}
+
 native_tools_status() {
     local porcelain="${1:-0}" computer_state="idle" socket
     socket="$HOME/Library/Group Containers/$PRIMARY_TEAM_ID.com.openai.sky.CUAService/IPC/computeruse.sock"
     [[ -S "$socket" ]] && computer_state="ready"
 
     local chronicle_state="stopped" chronicle_host="" chronicle_app="" frame_age="-1"
-    local status_file="${TMPDIR%/}/codex_chronicle/chronicle-started.pid" pid="" command=""
-    if [[ -r "$status_file" ]]; then
-        pid="$(<"$status_file")"
-        if [[ "$pid" == <1-> ]]; then
-            command="$(/bin/ps -p "$pid" -o command= 2>/dev/null || true)"
-        fi
-    fi
-    if [[ "$command" == */Contents/Resources/codex_chronicle* ]]; then
+    local chronicle_root="${TMPDIR%/}/codex_chronicle"
+    # The recorder writes its start marker once it is up, but takes the
+    # single-instance lock before that. A lock with no marker is a recorder that
+    # owns Chronicle for every app on the machine and never started capturing,
+    # usually because its own app was never granted Screen & System Audio
+    # Recording. Calling that "stopped" hides the app that has to be fixed.
+    chronicle_app="$(chronicle_owner_app "$chronicle_root/chronicle-started.pid")"
+    if [[ -n "$chronicle_app" ]]; then
         chronicle_state="running"
-        chronicle_app="${command%%/Contents/Resources/codex_chronicle*}"
+    else
+        chronicle_app="$(chronicle_owner_app "$chronicle_root/codex_chronicle.lock")"
+        [[ -z "$chronicle_app" ]] || chronicle_state="held"
+    fi
+    if [[ -n "$chronicle_app" ]]; then
         chronicle_host="$(/usr/bin/plutil -extract CFBundleDisplayName raw \
             "$chronicle_app/Contents/Info.plist" 2>/dev/null || true)"
         [[ -n "$chronicle_host" ]] || chronicle_host="${chronicle_app:t:r}"
@@ -2859,11 +2877,11 @@ native_tools_status() {
     fi
 
     print -r -- "Computer Use: $computer_state"
-    if [[ "$chronicle_state" == "running" ]]; then
-        print -r -- "Chronicle: shared by $chronicle_host (latest frame ${frame_age}s ago)"
-    else
-        print -r -- "Chronicle: stopped"
-    fi
+    case "$chronicle_state" in
+        running) print -r -- "Chronicle: shared by $chronicle_host (latest frame ${frame_age}s ago)" ;;
+        held) print -r -- "Chronicle: held by $chronicle_host, which is not recording (check its Screen & System Audio Recording permission)" ;;
+        *) print -r -- "Chronicle: stopped" ;;
+    esac
     print -r -- "Discoverable rollback apps: $rollback_count"
     if [[ -n "$iab_slug" && "$iab_state" == "conflict" ]]; then
         print -r -- "In-app browser: assigned to $iab_name, but official ChatGPT is currently using $runtime_name"

@@ -255,6 +255,14 @@ service is ready, which running app currently owns Chronicle's shared recorder,
 the age of its latest screen frame, and whether an old rollback is still being
 discovered as a duplicate app.
 
+One recorder serves every ChatGPT app on the Mac, and the first app to launch
+takes it. An app that takes the recorder and is then not allowed to record —
+most often because it was never granted Screen & System Audio Recording — leaves
+the whole machine without screen history, and Codex reports only that Chronicle
+is not running. Doppel separates the two: a recorder nobody owns is *stopped*,
+while one owned by an app that never started capturing is reported as held by
+that app, which is the app whose permission has to be granted.
+
 `doppel native-tools status` additionally reports the profile assigned the
 official built-in-browser engine and which app owns each ChatGPT
 browser-extension registration. A locally signed engine still uses the extension
