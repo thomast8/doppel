@@ -47,7 +47,7 @@ if [[ ("${0:A}" == */Doppel.app/Contents/Resources/doppel/* || \
           DOPPEL_PRIMARY_SCHEME DOPPEL_PRIMARY_TEAM_ID \
           DOPPEL_SIGN_IDENTITY DOPPEL_SIGN_IDENTITY_NAME DOPPEL_SIGN_LEAF_SHA1 \
           DOPPEL_ASSET_ROOT DOPPEL_STATE_ROOT DOPPEL_PIN_ROOT \
-          DOPPEL_IAB_DRY_RUN DOPPEL_IAB_DRY_RUN_DELAY
+          DOPPEL_IAB_DRY_RUN DOPPEL_IAB_DRY_RUN_DELAY DOPPEL_REMODEX_BIN
 fi
 
 readonly DOPPEL_HOME="${DOPPEL_HOME:-$HOME/Library/Application Support/Doppel}"
@@ -1128,6 +1128,146 @@ cmd_list() {
             print -r -- "$name  ->  (not installed)"
         fi
     done
+}
+
+# MARK: - Remodex bridge target
+
+remodex_binary() {
+    local candidate=""
+    if [[ "${DOPPEL_DEV:-0}" == "1" && -n "${DOPPEL_REMODEX_BIN:-}" ]]; then
+        candidate="${DOPPEL_REMODEX_BIN:a}"
+    else
+        candidate="$(command -v remodex 2>/dev/null || true)"
+        [[ -n "$candidate" ]] && candidate="${candidate:a}"
+        if [[ -z "$candidate" ]]; then
+            local known
+            for known in \
+                "$HOME/.local/bin/remodex" \
+                "$HOME/.npm/bin/remodex" \
+                /opt/homebrew/bin/remodex \
+                /usr/local/bin/remodex; do
+                if [[ -x "$known" ]]; then
+                    # Keep the executable path rather than resolving its npm
+                    # symlink: Node normally lives beside the global shim.
+                    candidate="${known:a}"
+                    break
+                fi
+            done
+        fi
+    fi
+    [[ -n "$candidate" && -x "$candidate" ]] || return 1
+    print -r -- "$candidate"
+}
+
+run_remodex() {
+    local bridge="$1"
+    shift
+    # npm's executable normally uses `#!/usr/bin/env node`. Menu-bar apps get
+    # a restricted PATH, so include the bridge directory for its sibling Node
+    # binary without changing or interpolating any target arguments.
+    PATH="${bridge:h}:$PATH" "$bridge" "$@"
+}
+
+validate_remodex_instance_target() {
+    local dir="$1" app="$2" expected_bundle="$3" expected_scheme="$4"
+    [[ -d "$app" ]] || die "the managed app is missing: $app"
+    [[ -d "$(config_value "$dir" DOPPEL_CODEX_HOME)" ]] || \
+        die "the instance Codex home is missing; launch the instance once before assigning Remodex"
+    local info="$app/Contents/Info.plist" actual_bundle schemes
+    actual_bundle="$(/usr/bin/plutil -extract CFBundleIdentifier raw "$info" 2>/dev/null || true)"
+    [[ "$actual_bundle" == "$expected_bundle" ]] || \
+        die "the installed app bundle is '$actual_bundle', expected '$expected_bundle'; rebuild the instance first"
+    schemes="$(/usr/bin/plutil -extract CFBundleURLTypes json -o - "$info" 2>/dev/null || true)"
+    [[ -n "$schemes" ]] || die "the installed app has no readable URL schemes: $app"
+    print -rn -- "$schemes" | /usr/bin/grep -Fq -- "\"$expected_scheme\"" || \
+        die "the installed app does not register the '$expected_scheme' URL scheme; rebuild it first"
+}
+
+cmd_remodex_use() {
+    [[ $# -eq 1 && -n "$1" ]] || die "usage: doppel remodex use <instance>"
+    local dir app bundle scheme codex_home bridge
+    dir="$(instance_dir_for "$1")"
+    app="$(app_path_for "$dir")"
+    bundle="$(config_value "$dir" DOPPEL_BUNDLE_ID)"
+    scheme="$(config_value "$dir" DOPPEL_URL_SCHEME)"
+    codex_home="$(config_value "$dir" DOPPEL_CODEX_HOME)"
+    validate_remodex_instance_target "$dir" "$app" "$bundle" "$scheme"
+    bridge="$(remodex_binary)" || die "Remodex is not installed; install the patched bridge before assigning an instance"
+    run_remodex "$bridge" target set \
+        --codex-home "$codex_home" \
+        --bundle-id "$bundle" \
+        --app-path "$app" \
+        --url-scheme "$scheme" \
+        --restart || die "Remodex could not switch targets; its previous target was restored"
+    print -r -- "Remodex now targets $(config_value "$dir" DOPPEL_DISPLAY_NAME)."
+}
+
+remodex_json_field() {
+    local json="$1" key="$2"
+    print -rn -- "$json" | /usr/bin/plutil -extract "$key" raw -o - - 2>/dev/null || true
+}
+
+cmd_remodex_status() {
+    local porcelain=0
+    [[ "${1:-}" == "--porcelain" ]] && { porcelain=1; shift; }
+    [[ $# -eq 0 ]] || die "usage: doppel remodex status [--porcelain]"
+    local bridge json home bundle app scheme configured_fingerprint active_fingerprint launch_state
+    bridge="$(remodex_binary)" || {
+        (( porcelain )) && { print -r -- $'unavailable\t\t\t\t\t\t'; return 0; }
+        die "Remodex is not installed"
+    }
+    json="$(run_remodex "$bridge" status --json 2>/dev/null)" || {
+        (( porcelain )) && { print -r -- $'unavailable\t\t\t\t\t\t'; return 0; }
+        die "Remodex status is unavailable"
+    }
+    home="$(remodex_json_field "$json" daemonConfig.codexHome)"
+    bundle="$(remodex_json_field "$json" daemonConfig.codexBundleId)"
+    app="$(remodex_json_field "$json" daemonConfig.codexAppPath)"
+    scheme="$(remodex_json_field "$json" daemonConfig.codexUrlScheme)"
+    configured_fingerprint="$(remodex_json_field "$json" daemonConfig.codexTargetFingerprint)"
+    active_fingerprint="$(remodex_json_field "$json" bridgeStatus.codexTargetFingerprint)"
+    launch_state="$(remodex_json_field "$json" bridgeStatus.codexLaunchState)"
+    if [[ -z "$configured_fingerprint" ]]; then
+        (( porcelain )) && { print -r -- $'unsupported\t\t\t\t\t\t'; return 0; }
+        die "the installed Remodex does not support configurable desktop targets"
+    fi
+    local state="configured" slug="" name="" dir
+    [[ "$configured_fingerprint" == "$active_fingerprint" && "$launch_state" == "connected" ]] && state="active"
+    for dir in "$INSTANCES_ROOT"/*(N/); do
+        [[ "$(config_value "$dir" DOPPEL_CODEX_HOME)" == "$home" ]] || continue
+        [[ "$(config_value "$dir" DOPPEL_BUNDLE_ID)" == "$bundle" ]] || continue
+        [[ "$(app_path_for "$dir")" == "$app" ]] || continue
+        [[ "$(config_value "$dir" DOPPEL_URL_SCHEME)" == "$scheme" ]] || continue
+        slug="${dir:t}"
+        name="$(config_value "$dir" DOPPEL_DISPLAY_NAME)"
+        break
+    done
+    if (( porcelain )); then
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$state" "$slug" "$name" "$home" "$bundle" "$app" "$scheme"
+    elif [[ -n "$name" ]]; then
+        print -r -- "Remodex: $state — $name"
+    else
+        print -r -- "Remodex: $state — primary or external target ($bundle, $home)"
+    fi
+}
+
+cmd_remodex_release() {
+    [[ $# -eq 0 ]] || die "usage: doppel remodex release"
+    local bridge
+    bridge="$(remodex_binary)" || die "Remodex is not installed"
+    run_remodex "$bridge" target reset --restart || die "Remodex could not restore its primary target"
+    print -r -- "Remodex now targets primary ChatGPT."
+}
+
+cmd_remodex() {
+    local action="${1:-}"
+    (( $# > 0 )) && shift
+    case "$action" in
+        use) cmd_remodex_use "$@" ;;
+        status) cmd_remodex_status "$@" ;;
+        release) cmd_remodex_release "$@" ;;
+        *) die "usage: doppel remodex {use <instance>|status [--porcelain]|release}" ;;
+    esac
 }
 
 cmd_launch() {
@@ -3013,6 +3153,7 @@ case "${1:-}" in
     permissions) shift; cmd_permissions "$@" ;;
     browser) shift; cmd_browser "$@" ;;
     native-tools) shift; cmd_native_tools "$@" ;;
+    remodex) shift; cmd_remodex "$@" ;;
     prune) shift; [[ $# -le 1 ]] || die "usage: doppel prune [<name>]"; cmd_prune "${1:-}" ;;
-    *) die "usage: doppel {create|list|launch|rebuild|edit|remove|update|permissions|browser|native-tools|prune} ..." ;;
+    *) die "usage: doppel {create|list|launch|rebuild|edit|remove|update|permissions|browser|native-tools|remodex|prune} ..." ;;
 esac
