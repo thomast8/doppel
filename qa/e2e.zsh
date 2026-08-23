@@ -106,7 +106,7 @@ check "registered OAuth callback scheme remains eligible" \
     "$(plist "$APP" CFBundleURLTypes.0.CFBundleURLSchemes.1)" "codex"
 check "deep-link patch recorded" "$(plist "$APP" DoppelDeepLinkScheme)" "codex-$SLUG"
 ROUTER_HASH="$(/usr/bin/shasum -a 256 "$CLI" | /usr/bin/awk '{print $1}')"
-check "transparent engine router version" "$(plist "$APP" DoppelEngineVersion)" "26"
+check "transparent engine router version" "$(plist "$APP" DoppelEngineVersion)" "27"
 check "transparent engine router hash recorded" "$(plist "$APP" DoppelRouterSHA256)" "$ROUTER_HASH"
 if [[ -x "$APP/Contents/Resources/Doppel/bin/doppel" && \
       -x "$APP/Contents/Resources/Doppel/engine/doppel-engine.zsh" && \
@@ -200,6 +200,19 @@ fi
 [[ ! -e "$HOME/Library/Application Support/Doppel/state/clone-launch/$SLUG" ]] && \
     pass "one-shot clone authorization is consumed" || \
     fail "one-shot clone authorization is consumed" "a reusable authorization was left behind"
+
+# ChatGPT.real becomes visible just before the routed CLI's supervisor exits
+# and releases the global engine-operation lock. Removing in that hand-off gap
+# correctly fails as a concurrent mutation, so wait for the launch transaction
+# itself rather than treating process visibility as its completion signal.
+IAB_LOCK="$HOME/Library/Application Support/Doppel/state/IABCoordinator.lock"
+for _ in {1..50}; do
+    [[ ! -e "$IAB_LOCK" ]] && break
+    /bin/sleep 0.1
+done
+[[ ! -e "$IAB_LOCK" ]] && \
+    pass "direct launch releases the engine-operation lock" || \
+    fail "direct launch releases the engine-operation lock" "$IAB_LOCK remained held"
 
 print -r -- ""
 print -r -- "remove"

@@ -195,7 +195,10 @@ so assignment cannot cross the moment a clone adopts its Electron profile.
 `CODEX_HOME`, browser data and account state still come from the
 selected Doppel profile. The Dock/window identity is ordinary ChatGPT while that
 engine is active because changing the vendor bundle would invalidate its
-signature. `browser release` returns the profile to its normal Doppel engine and
+signature. The coloured assigned-profile icon therefore remains a shortcut, not
+the running-process indicator: clicking it brings the exact verified official
+process forward, while macOS continues to show that process under ChatGPT's white
+icon. `browser release` returns the profile to its normal Doppel engine and
 also refuses while the official engine is running. Engine changes, launches,
 rebuilds, removals and update installation share one lock, so two concurrent
 Doppel commands cannot cross those checks. If the coordinator is interrupted,

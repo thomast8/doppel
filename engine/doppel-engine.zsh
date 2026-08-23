@@ -11,7 +11,7 @@
 set -u
 setopt PIPE_FAIL
 
-readonly ENGINE_VERSION="26"
+readonly ENGINE_VERSION="27"
 
 # When this engine copy runs from inside an installed bundle, environment
 # overrides are ignored: otherwise a same-uid process could point a
@@ -670,7 +670,9 @@ consume_clone_launch_authorization() {
 }
 
 route_managed_engine() {
-    local slug output status
+    local app="$1"
+    shift
+    local slug output status focus_line="" focus_pid="" focus_bundle_id="" focus_app="" focus_extra=""
     slug="$(managed_slug_for_this_profile)"
     [[ -n "$slug" ]] || return 1
     [[ -x "$ROUTER_CLI" ]] || \
@@ -683,7 +685,24 @@ route_managed_engine() {
         [[ -n "$output" ]] || output="The assigned official engine could not be started."
         fail_closed "$output"
     fi
+    # A running vendor process needs the original Finder/Dock activation
+    # context. The routed CLI returns one private row naming the exact verified
+    # PID and identity; execing the signed launcher keeps that context instead
+    # of spawning a child that macOS will not allow to force focus.
+    focus_line="$(print -r -- "$output" | /usr/bin/awk -F '\t' '$1 == "doppel-activate" { print; exit }')"
+    if [[ -n "$focus_line" ]]; then
+        IFS=$'\t' read -r _ focus_pid focus_bundle_id focus_app focus_extra <<< "$focus_line"
+        [[ "$focus_pid" == <1-> && "$focus_bundle_id" == "$PRIMARY_BUNDLE_ID" && \
+           "$focus_app" == "$PRIMARY_APP" && -z "$focus_extra" ]] || \
+            fail_closed "The signed engine router returned an invalid focus hand-off."
+        output="$(print -r -- "$output" | /usr/bin/awk -F '\t' '$1 != "doppel-activate"')"
+    fi
     [[ -n "$output" ]] && log_message "$output"
+    if [[ -n "$focus_pid" ]]; then
+        exec "$app/Contents/MacOS/ChatGPT" \
+            --doppel-activate "$focus_pid" "$focus_bundle_id" "$focus_app" --alert
+        fail_closed "The signed focus hand-off could not be executed."
+    fi
     # The official process now owns this profile. Returning to launch_instance
     # would open ChatGPT.real as well, so a successful handoff always ends the
     # locally signed launcher process here.
@@ -740,7 +759,7 @@ launch_instance() {
         # clone with a private one-shot marker that is consumed above. This
         # closes Finder-launch versus Browser-assignment races without holding
         # the global lock for the lifetime of the GUI app.
-        (( authorized_clone )) || route_managed_engine "$@" || true
+        (( authorized_clone )) || route_managed_engine "$app" "$@" || true
         exec_clone_binary "$app" "$@"
     fi
 
