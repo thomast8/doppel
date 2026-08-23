@@ -52,6 +52,10 @@ final class InstanceStore: ObservableObject {
     private var requestedPermissionIDs: Set<String> = []
     private var updateTimer: Timer?
     private var permissionTimer: Timer?
+    /// The delayed first update check. Held so it can be cancelled; a sleeping
+    /// task is not stopped by its owner going away. Readable for the test that
+    /// asserts deinit actually cancels it.
+    private(set) var firstUpdateCheck: Task<Void, Never>?
 
     static let primaryAppPath = "/Applications/ChatGPT.app"
     static let primaryDownloadURL = URL(string: "https://chatgpt.com/features/desktop/")!
@@ -108,10 +112,11 @@ final class InstanceStore: ObservableObject {
         // Check shortly after launch, then every six hours while Doppel is
         // running. The CLI performs the official-feed and signature checks;
         // the app owns only scheduling and user interaction.
-        Task { [weak self] in
+        firstUpdateCheck = Task { [weak self] in
             // Permission health is populated first. Otherwise a prepared
             // update's modal can arrive before the menu-bar warning publishes.
             try? await Task.sleep(nanoseconds: 12_000_000_000)
+            guard !Task.isCancelled else { return }
             self?.checkForUpdates()
         }
         updateTimer = Timer.scheduledTimer(withTimeInterval: 6 * 60 * 60, repeats: true) { [weak self] _ in
@@ -123,6 +128,15 @@ final class InstanceStore: ObservableObject {
                 self?.checkNativeTools()
             }
         }
+    }
+
+    /// init schedules three things that outlive the object on their own: a
+    /// sleeping task and two run-loop timers. Nothing here touches isolated
+    /// state, so a nonisolated deinit can close them out.
+    deinit {
+        firstUpdateCheck?.cancel()
+        updateTimer?.invalidate()
+        permissionTimer?.invalidate()
     }
 
     func reload() {
