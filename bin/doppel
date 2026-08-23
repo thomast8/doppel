@@ -47,7 +47,10 @@ if [[ ("${0:A}" == */Doppel.app/Contents/Resources/doppel/* || \
           DOPPEL_PRIMARY_SCHEME DOPPEL_PRIMARY_TEAM_ID \
           DOPPEL_SIGN_IDENTITY DOPPEL_SIGN_IDENTITY_NAME DOPPEL_SIGN_LEAF_SHA1 \
           DOPPEL_ASSET_ROOT DOPPEL_STATE_ROOT DOPPEL_PIN_ROOT \
-          DOPPEL_IAB_DRY_RUN DOPPEL_IAB_DRY_RUN_DELAY
+          DOPPEL_IAB_DRY_RUN DOPPEL_IAB_DRY_RUN_DELAY \
+          DOPPEL_IAB_DRY_RUN_UNSUPPORTED_EXTENSIONS \
+          DOPPEL_IAB_DRY_RUN_PROFILE_RUNNING \
+          DOPPEL_IAB_DRY_RUN_URL_ROUTING_FAILURE
 fi
 
 readonly DOPPEL_HOME="${DOPPEL_HOME:-$HOME/Library/Application Support/Doppel}"
@@ -65,6 +68,10 @@ readonly IAB_RUNTIME_FILE="$DOPPEL_HOME/state/iab-engine-runtime"
 readonly IAB_OPERATION_LOCK="$DOPPEL_HOME/state/IABCoordinator.lock"
 readonly CLONE_LAUNCH_ROOT="$DOPPEL_HOME/state/clone-launch"
 readonly IAB_ROUTER_ENGINE_MIN="24"
+readonly OWL_EXTENSIONS_FEATURE="OwlExtensions"
+readonly OWL_FEATURE_CACHE_NAME="owl-feature-bootstrap-cache.json"
+readonly EXTENSIONS_RECEIPT_NAME="browser-extensions-override.plist"
+readonly APPLE_PASSWORDS_URL="https://chromewebstore.google.com/detail/icloud-passwords/pejdijmoenmkgeppbflobdenhhabjlaj?hl=en"
 
 # Both values are interpolated into a code-signing requirement, so they are
 # checked once here rather than at every use. A value carrying a quote can
@@ -447,6 +454,230 @@ instance_uses_vendor_engine() {
     local dir="$1" assigned
     assigned="$(iab_slot_slug)"
     [[ -n "$assigned" && "${dir:t}" == "$assigned" ]]
+}
+
+# MARK: - Per-profile Browser extensions override
+
+extensions_cache_path() {
+    print -r -- "$(config_value "$1" DOPPEL_PROFILE_ROOT)/$OWL_FEATURE_CACHE_NAME"
+}
+
+extensions_receipt_path() {
+    print -r -- "$1/$EXTENSIONS_RECEIPT_NAME"
+}
+
+feature_cache_array_is_valid() {
+    local file="$1" key="$2" count index
+    if ! /usr/bin/plutil -type "$key" "$file" >/dev/null 2>&1; then
+        return 0
+    fi
+    [[ "$(/usr/bin/plutil -type "$key" "$file" 2>/dev/null)" == "array" ]] || return 1
+    count="$(/usr/bin/plutil -extract "$key" raw "$file" 2>/dev/null)" || return 1
+    [[ "$count" == <0-> ]] || return 1
+    for (( index = 0; index < count; index++ )); do
+        [[ "$(/usr/bin/plutil -type "$key.$index" "$file" 2>/dev/null)" == "string" ]] || return 1
+    done
+}
+
+validate_feature_cache() {
+    local file="$1"
+    [[ -r "$file" ]] || return 1
+    # `plutil -lint` selects its parser from the filename extension. Atomic
+    # staging files deliberately have a random suffix, so validate by
+    # converting the content instead; this accepts both OpenAI's JSON and a
+    # staged plist without weakening the structural checks below.
+    /usr/bin/plutil -convert xml1 -o /dev/null "$file" >/dev/null 2>&1 || return 1
+    feature_cache_array_is_valid "$file" enabledOwlFeatureNames || return 1
+    feature_cache_array_is_valid "$file" disabledOwlFeatureNames || return 1
+}
+
+feature_array_contains() {
+    local file="$1" key="$2" wanted="$3" count index value
+    [[ "$(/usr/bin/plutil -type "$key" "$file" 2>/dev/null || true)" == "array" ]] || return 1
+    count="$(/usr/bin/plutil -extract "$key" raw "$file" 2>/dev/null || print -r -- 0)"
+    for (( index = 0; index < count; index++ )); do
+        value="$(/usr/bin/plutil -extract "$key.$index" raw "$file" 2>/dev/null || true)"
+        [[ "$value" == "$wanted" ]] && return 0
+    done
+    return 1
+}
+
+ensure_feature_array() {
+    local file="$1" key="$2"
+    if ! /usr/bin/plutil -type "$key" "$file" >/dev/null 2>&1; then
+        /usr/bin/plutil -insert "$key" -json '[]' "$file" >/dev/null || return 1
+    fi
+    [[ "$(/usr/bin/plutil -type "$key" "$file" 2>/dev/null)" == "array" ]]
+}
+
+remove_feature_from_array() {
+    local file="$1" key="$2" wanted="$3" count index value
+    ensure_feature_array "$file" "$key" || return 1
+    count="$(/usr/bin/plutil -extract "$key" raw "$file" 2>/dev/null)" || return 1
+    for (( index = count - 1; index >= 0; index-- )); do
+        value="$(/usr/bin/plutil -extract "$key.$index" raw "$file" 2>/dev/null || true)"
+        [[ "$value" != "$wanted" ]] || \
+            /usr/bin/plutil -remove "$key.$index" "$file" >/dev/null || return 1
+    done
+}
+
+add_feature_to_array() {
+    local file="$1" key="$2" wanted="$3" count
+    ensure_feature_array "$file" "$key" || return 1
+    feature_array_contains "$file" "$key" "$wanted" && return 0
+    count="$(/usr/bin/plutil -extract "$key" raw "$file" 2>/dev/null)" || return 1
+    [[ "$count" == <0-> ]] || return 1
+    /usr/bin/plutil -insert "$key.$count" -string "$wanted" "$file" >/dev/null
+}
+
+feature_cache_digest() {
+    /usr/bin/shasum -a 256 "$1" 2>/dev/null | /usr/bin/awk '{print $1}'
+}
+
+validate_extensions_receipt() {
+    local receipt="$1"
+    [[ -r "$receipt" ]] || return 1
+    /usr/bin/plutil -lint "$receipt" >/dev/null 2>&1 || return 1
+    [[ "$(/usr/bin/plutil -type priorEnabled "$receipt" 2>/dev/null)" == "bool" && \
+       "$(/usr/bin/plutil -type priorDisabled "$receipt" 2>/dev/null)" == "bool" && \
+       "$(/usr/bin/plutil -type writtenDigest "$receipt" 2>/dev/null)" == "string" && \
+       "$(/usr/bin/plutil -type sourceBuild "$receipt" 2>/dev/null)" == "string" ]] || return 1
+    local digest
+    digest="$(/usr/bin/plutil -extract writtenDigest raw "$receipt" 2>/dev/null || true)"
+    [[ ${#digest} -eq 64 && "$digest" != *[^a-f0-9]* ]]
+}
+
+require_extensions_capability() {
+    local dir="$1" asar="$PRIMARY_APP/Contents/Resources/app.asar" required cache
+    validate_vendor_app "$PRIMARY_APP" || \
+        die "the official ChatGPT engine is missing or is not valid OpenAI-signed code"
+    if [[ "${DOPPEL_DEV:-0}" == "1" && \
+          "${DOPPEL_IAB_DRY_RUN_UNSUPPORTED_EXTENSIONS:-0}" == "1" ]]; then
+        die "this ChatGPT build does not support Doppel's Browser extensions override"
+    fi
+    [[ -r "$asar" ]] || die "this ChatGPT build does not contain the expected Browser runtime"
+    for required in "chrome://extensions/" "https://chromewebstore.google.com/"; do
+        LC_ALL=C /usr/bin/grep -a -F -q "$required" "$asar" || \
+            die "this ChatGPT build does not support Doppel's Browser extensions override"
+    done
+
+    # Older builds embed the feature name in app.asar. Build 6971 moved the
+    # server-delivered gate out of that archive, while retaining it in the
+    # signed runtime's profile cache. Accept either first-party signal. Leave
+    # structural validation to reconciliation so a malformed cache receives
+    # the precise, non-mutating recovery error below.
+    LC_ALL=C /usr/bin/grep -a -F -q "$OWL_EXTENSIONS_FEATURE" "$asar" && return 0
+    cache="$(extensions_cache_path "$dir")"
+    [[ -r "$cache" ]] || \
+        die "this ChatGPT build does not support Doppel's Browser extensions override"
+    if validate_feature_cache "$cache"; then
+        feature_array_contains "$cache" enabledOwlFeatureNames "$OWL_EXTENSIONS_FEATURE" || \
+            feature_array_contains "$cache" disabledOwlFeatureNames "$OWL_EXTENSIONS_FEATURE" || \
+            die "this ChatGPT build does not support Doppel's Browser extensions override"
+    fi
+}
+
+require_extensions_owner() {
+    local dir="$1" assigned
+    assigned="$(iab_slot_slug)"
+    [[ -n "$assigned" && "$assigned" == "${dir:t}" ]] || \
+        die "'$(config_value "$dir" DOPPEL_DISPLAY_NAME)' must be assigned Built-in Browser before changing Browser extensions"
+}
+
+write_extensions_receipt() {
+    local receipt="$1" prior_enabled="$2" prior_disabled="$3" digest="$4" build="$5"
+    local staged
+    staged="$(/usr/bin/mktemp "$receipt.XXXXXXXX")" || return 1
+    if ! /usr/bin/plutil -create xml1 "$staged" >/dev/null || \
+       ! /usr/bin/plutil -insert priorEnabled -bool "$prior_enabled" "$staged" >/dev/null || \
+       ! /usr/bin/plutil -insert priorDisabled -bool "$prior_disabled" "$staged" >/dev/null || \
+       ! /usr/bin/plutil -insert writtenDigest -string "$digest" "$staged" >/dev/null || \
+       ! /usr/bin/plutil -insert sourceBuild -string "$build" "$staged" >/dev/null || \
+       ! /bin/chmod 600 "$staged" || ! /bin/mv "$staged" "$receipt"; then
+        /bin/rm -f "$staged"
+        return 1
+    fi
+}
+
+# Reapply the requested feature after OpenAI refreshes its bootstrap cache.
+# The receipt is committed before the cache: after a crash, the original state
+# is still known and the next launch can safely finish reconciliation.
+reconcile_extensions_override() {
+    local dir="$1" create_receipt="${2:-0}" cache receipt staged mode digest current_digest written_digest
+    local prior_enabled=false prior_disabled=false
+    cache="$(extensions_cache_path "$dir")"
+    receipt="$(extensions_receipt_path "$dir")"
+    [[ -r "$receipt" || "$create_receipt" == "1" ]] || return 0
+
+    if [[ -r "$receipt" ]]; then
+        validate_extensions_receipt "$receipt" || \
+            die "the Browser extensions receipt is malformed; the profile was left unchanged"
+        prior_enabled="$(/usr/bin/plutil -extract priorEnabled raw "$receipt")"
+        prior_disabled="$(/usr/bin/plutil -extract priorDisabled raw "$receipt")"
+        written_digest="$(/usr/bin/plutil -extract writtenDigest raw "$receipt")"
+    elif [[ -e "$receipt" ]]; then
+        die "the Browser extensions receipt is unreadable; the profile was left unchanged"
+    fi
+
+    /bin/mkdir -p "${cache:h}" || die "could not create the Browser profile directory"
+    if [[ -e "$cache" ]]; then
+        validate_feature_cache "$cache" || \
+            die "ChatGPT's Browser feature cache is malformed; it was left unchanged"
+        current_digest="$(feature_cache_digest "$cache")"
+        # OpenAI may enable the same feature after the user opted into
+        # Doppel's override. If its refreshed cache now carries that clean
+        # upstream state, relinquish the receipt rather than later restoring
+        # the obsolete pre-opt-in gate on Disable.
+        if [[ -r "$receipt" && "$current_digest" != "$written_digest" ]] && \
+           feature_array_contains "$cache" enabledOwlFeatureNames "$OWL_EXTENSIONS_FEATURE" && \
+           ! feature_array_contains "$cache" disabledOwlFeatureNames "$OWL_EXTENSIONS_FEATURE"; then
+            /bin/rm -f "$receipt" || \
+                die "OpenAI enabled Browser extensions, but Doppel could not retire its override receipt"
+            return 0
+        fi
+        mode="$(/usr/bin/stat -f '%Lp' "$cache" 2>/dev/null || print -r -- 600)"
+        staged="$(/usr/bin/mktemp "$cache.XXXXXXXX")" || die "could not stage the Browser feature cache"
+        /bin/cp "$cache" "$staged" || { /bin/rm -f "$staged"; die "could not stage the Browser feature cache"; }
+        if [[ ! -r "$receipt" ]]; then
+            feature_array_contains "$cache" enabledOwlFeatureNames "$OWL_EXTENSIONS_FEATURE" && prior_enabled=true
+            feature_array_contains "$cache" disabledOwlFeatureNames "$OWL_EXTENSIONS_FEATURE" && prior_disabled=true
+        fi
+    else
+        mode=600
+        staged="$(/usr/bin/mktemp "$cache.XXXXXXXX")" || die "could not stage the Browser feature cache"
+        /usr/bin/plutil -create json "$staged" >/dev/null || \
+            { /bin/rm -f "$staged"; die "could not create the Browser feature cache"; }
+    fi
+
+    if ! remove_feature_from_array "$staged" disabledOwlFeatureNames "$OWL_EXTENSIONS_FEATURE" || \
+       ! add_feature_to_array "$staged" enabledOwlFeatureNames "$OWL_EXTENSIONS_FEATURE" || \
+       ! validate_feature_cache "$staged"; then
+        /bin/rm -f "$staged"
+        die "could not safely enable Browser extensions; the profile was left unchanged"
+    fi
+    digest="$(feature_cache_digest "$staged")"
+    [[ ${#digest} -eq 64 ]] || { /bin/rm -f "$staged"; die "could not verify the staged Browser feature cache"; }
+    write_extensions_receipt "$receipt" "$prior_enabled" "$prior_disabled" "$digest" "$(primary_version)" || \
+        { /bin/rm -f "$staged"; die "could not save the Browser extensions receipt; the profile was left unchanged"; }
+    if ! /bin/chmod "$mode" "$staged" || ! /bin/mv "$staged" "$cache"; then
+        /bin/rm -f "$staged"
+        die "could not save the Browser feature cache"
+    fi
+}
+
+browser_extensions_state() {
+    local dir="$1" receipt cache
+    receipt="$(extensions_receipt_path "$dir")"
+    cache="$(extensions_cache_path "$dir")"
+    if [[ -e "$receipt" ]]; then
+        print -r -- "override"
+    elif [[ -r "$cache" ]] && validate_feature_cache "$cache" && \
+         feature_array_contains "$cache" enabledOwlFeatureNames "$OWL_EXTENSIONS_FEATURE" && \
+         ! feature_array_contains "$cache" disabledOwlFeatureNames "$OWL_EXTENSIONS_FEATURE"; then
+        print -r -- "upstream"
+    else
+        print -r -- "off"
+    fi
 }
 
 # All engine selection, launch and destructive profile operations share this
@@ -955,6 +1186,11 @@ launch_vendor_instance() {
     other_vendor_engine_is_running "$dir" && \
         die "the official ChatGPT engine is already running for another profile. Quit that ChatGPT window before launching '$name'."
 
+    # OpenAI can refresh this cache between launches. Reconcile only profiles
+    # carrying Doppel's explicit, private receipt and always do it while the
+    # global Browser/profile operation lock is held.
+    reconcile_extensions_override "$dir"
+
     # CODEX_HOME must exist before Codex starts. A private umask applies only
     # to newly created profile roots; existing account data is left untouched.
     local old_umask
@@ -971,8 +1207,12 @@ launch_vendor_instance() {
         [[ "$dry_run_delay" == (0|1|2|3|4|5) ]] || \
             die "the development IAB dry-run delay must be between 0 and 5 seconds"
         (( dry_run_delay > 0 )) && /bin/sleep "$dry_run_delay"
-        printf 'vendor-launch\t%s\t%s\t%s\t%s\n' \
+        [[ "${DOPPEL_IAB_DRY_RUN_URL_ROUTING_FAILURE:-0}" != "1" ]] || \
+            die "the official ChatGPT engine could not route the requested Browser URL"
+        printf 'vendor-launch\t%s\t%s\t%s\t%s' \
             "$PRIMARY_APP" "$profile_root" "$codex_home" "sparkle-disabled"
+        for arg in $forwarded_args; do printf '\t%s' "$arg"; done
+        print
         return 0
     fi
     # `open --env` adds to the caller environment; it does not replace it. A
@@ -1100,14 +1340,14 @@ remove_partial_instance() {
 
 cmd_list() {
     # --porcelain: stable machine-readable output, one instance per line:
-    # slug<TAB>name<TAB>app-path<TAB>installed|missing<TAB>tint<TAB>clone|vendor
+    # slug<TAB>name<TAB>app-path<TAB>installed|missing<TAB>tint<TAB>clone|vendor<TAB>off|override|upstream
     # Instance names cannot contain tabs (create validates them), so tab-
     # separated fields are unambiguous. The menu-bar app consumes this instead
     # of parsing config files itself, so the CLI stays the single source of truth.
     local porcelain=0
     [[ "${1:-}" == "--porcelain" ]] && porcelain=1
     [[ -d "$INSTANCES_ROOT" ]] || { (( porcelain )) || print "no instances"; return 0 }
-    local dir name app state engine
+    local dir name app state engine extensions
     for dir in "$INSTANCES_ROOT"/*(N/); do
         name="$(config_value "$dir" DOPPEL_DISPLAY_NAME)"
         [[ -n "$name" ]] || continue
@@ -1115,9 +1355,10 @@ cmd_list() {
         [[ -d "$app" ]] && state="installed" || state="missing"
         engine="clone"
         instance_uses_vendor_engine "$dir" && engine="vendor"
+        extensions="$(browser_extensions_state "$dir")"
         if (( porcelain )); then
-            printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${dir:t}" "$name" "$app" "$state" \
-                "$(config_value "$dir" DOPPEL_TINT)" "$engine"
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${dir:t}" "$name" "$app" "$state" \
+                "$(config_value "$dir" DOPPEL_TINT)" "$engine" "$extensions"
         elif [[ "$state" == "installed" && "$engine" == "vendor" ]]; then
             print -r -- "$name  ->  $app  [built-in browser]"
         elif [[ "$state" == "installed" ]]; then
@@ -1337,6 +1578,143 @@ cmd_browser_status() {
     fi
 }
 
+extensions_stop_profile() {
+    local dir="$1" quit_running="$2" name was_running=0
+    name="$(config_value "$dir" DOPPEL_DISPLAY_NAME)"
+    any_chatgpt_process_uses_profile "$dir" && was_running=1
+    [[ "${DOPPEL_DEV:-0}" != "1" || \
+       "${DOPPEL_IAB_DRY_RUN_PROFILE_RUNNING:-0}" != "1" ]] || was_running=1
+    (( was_running )) || { print -r -- 0; return 0; }
+    if (( ! quit_running )); then
+        die "the Browser extensions change needs running ChatGPT apps to quit: '$name' is using a ChatGPT engine."
+    fi
+    if [[ -n "$(vendor_main_pids)" ]]; then
+        quit_instance "$PRIMARY_APP" "$PRIMARY_BUNDLE_ID" "ChatGPT"
+    fi
+    if clone_instance_is_running "$dir"; then
+        quit_instance "$(app_path_for "$dir")" \
+            "$(config_value "$dir" DOPPEL_BUNDLE_ID)" "$name"
+    fi
+    any_chatgpt_process_uses_profile "$dir" && \
+        die "'$name' is still running, so Browser extensions were not changed."
+    print -r -- 1
+}
+
+enable_browser_extensions() {
+    local dir="$1" state
+    state="$(browser_extensions_state "$dir")"
+    if [[ "$state" == "upstream" ]]; then
+        print -r -- "Browser extensions are already enabled by OpenAI"
+        return 0
+    fi
+    reconcile_extensions_override "$dir" 1
+    print -r -- "Browser extensions enabled with Doppel's experimental override"
+}
+
+disable_browser_extensions() {
+    local dir="$1" receipt cache expected actual prior_enabled prior_disabled staged mode
+    receipt="$(extensions_receipt_path "$dir")"
+    cache="$(extensions_cache_path "$dir")"
+    if [[ ! -e "$receipt" ]]; then
+        print -r -- "Doppel's Browser extensions override is not enabled"
+        return 0
+    fi
+    validate_extensions_receipt "$receipt" || \
+        die "the Browser extensions receipt is malformed; the profile was left unchanged"
+    expected="$(/usr/bin/plutil -extract writtenDigest raw "$receipt")"
+    actual="$(feature_cache_digest "$cache")"
+    if [[ "$actual" != "$expected" ]]; then
+        /bin/rm -f "$receipt" || die "could not remove the Browser extensions receipt"
+        print -r -- "Browser extensions override disabled; ChatGPT changed its cache, so Doppel left the newer state untouched"
+        return 0
+    fi
+    validate_feature_cache "$cache" || \
+        die "ChatGPT's Browser feature cache is malformed; it was left unchanged"
+    prior_enabled="$(/usr/bin/plutil -extract priorEnabled raw "$receipt")"
+    prior_disabled="$(/usr/bin/plutil -extract priorDisabled raw "$receipt")"
+    mode="$(/usr/bin/stat -f '%Lp' "$cache" 2>/dev/null || print -r -- 600)"
+    staged="$(/usr/bin/mktemp "$cache.XXXXXXXX")" || die "could not stage the Browser feature cache"
+    /bin/cp "$cache" "$staged" || { /bin/rm -f "$staged"; die "could not stage the Browser feature cache"; }
+    remove_feature_from_array "$staged" enabledOwlFeatureNames "$OWL_EXTENSIONS_FEATURE" || \
+        { /bin/rm -f "$staged"; die "could not restore the Browser feature cache"; }
+    remove_feature_from_array "$staged" disabledOwlFeatureNames "$OWL_EXTENSIONS_FEATURE" || \
+        { /bin/rm -f "$staged"; die "could not restore the Browser feature cache"; }
+    [[ "$prior_enabled" != "true" ]] || add_feature_to_array "$staged" enabledOwlFeatureNames "$OWL_EXTENSIONS_FEATURE" || \
+        { /bin/rm -f "$staged"; die "could not restore the Browser feature cache"; }
+    [[ "$prior_disabled" != "true" ]] || add_feature_to_array "$staged" disabledOwlFeatureNames "$OWL_EXTENSIONS_FEATURE" || \
+        { /bin/rm -f "$staged"; die "could not restore the Browser feature cache"; }
+    validate_feature_cache "$staged" || \
+        { /bin/rm -f "$staged"; die "could not validate the restored Browser feature cache"; }
+    if ! /bin/chmod "$mode" "$staged" || ! /bin/mv "$staged" "$cache"; then
+        /bin/rm -f "$staged"
+        die "could not save the restored Browser feature cache"
+    fi
+    /bin/rm -f "$receipt" || die "could not remove the Browser extensions receipt"
+    print -r -- "Browser extensions override disabled and OpenAI's prior feature state restored"
+}
+
+cmd_browser_extensions() {
+    local action="${1:-status}" quit_running=0 porcelain=0 dir name was_running=0
+    local state_before launch_output created_override=0
+    (( $# > 0 )) && shift
+    if [[ "${1:-}" == "--quit-running" ]]; then
+        quit_running=1; shift
+    fi
+    if [[ "${1:-}" == "--porcelain" ]]; then
+        porcelain=1; shift
+    fi
+    [[ $# -eq 1 && -n "$1" ]] || \
+        die "usage: doppel browser extensions {status [--porcelain]|enable [--quit-running]|disable [--quit-running]|apple-passwords [--quit-running]} <name>"
+    dir="$(instance_dir_for "$1")"
+    name="$(config_value "$dir" DOPPEL_DISPLAY_NAME)"
+    require_extensions_owner "$dir"
+
+    case "$action" in
+        status)
+            [[ "$quit_running" == 0 ]] || die "--quit-running is not valid with status"
+            if (( porcelain )); then
+                print -r -- "$(browser_extensions_state "$dir")"
+            else
+                print -r -- "Browser extensions for $name: $(browser_extensions_state "$dir")"
+            fi
+            ;;
+        enable|disable|apple-passwords)
+            (( porcelain == 0 )) || die "--porcelain is only valid with status"
+            if [[ "$action" == "disable" ]]; then
+                # An OpenAI update may remove the experimental capability.
+                # Users must still be able to relinquish Doppel's receipt
+                # without rewriting newer vendor-managed cache state.
+                validate_vendor_app "$PRIMARY_APP" || \
+                    die "the official ChatGPT engine is missing or is not valid OpenAI-signed code"
+            else
+                require_extensions_capability "$dir"
+            fi
+            was_running="$(extensions_stop_profile "$dir" "$quit_running")"
+            if [[ "$action" == "disable" ]]; then
+                disable_browser_extensions "$dir"
+                [[ "$was_running" != "1" ]] || launch_vendor_instance "$dir"
+            else
+                state_before="$(browser_extensions_state "$dir")"
+                enable_browser_extensions "$dir"
+                [[ "$state_before" != "off" || "$(browser_extensions_state "$dir")" != "override" ]] || \
+                    created_override=1
+                if [[ "$action" == "apple-passwords" ]]; then
+                    if ! launch_output="$(launch_vendor_instance "$dir" "$APPLE_PASSWORDS_URL" 2>&1)"; then
+                        (( ! created_override )) || disable_browser_extensions "$dir" >/dev/null
+                        die "Apple Passwords setup could not open in the built-in browser; the new extension override was rolled back. ${launch_output#doppel: }"
+                    fi
+                    print -r -- "$launch_output"
+                elif [[ "$was_running" == "1" ]]; then
+                    launch_vendor_instance "$dir"
+                fi
+            fi
+            ;;
+        *)
+            die "usage: doppel browser extensions {status [--porcelain]|enable [--quit-running]|disable [--quit-running]|apple-passwords [--quit-running]} <name>"
+            ;;
+    esac
+}
+
 cmd_browser() {
     local action="${1:-status}"
     (( $# > 0 )) && shift
@@ -1344,7 +1722,8 @@ cmd_browser() {
         assign) with_iab_operation_lock cmd_browser_assign "$@" ;;
         release) with_iab_operation_lock cmd_browser_release "$@" ;;
         status) cmd_browser_status "$@" ;;
-        *) die "usage: doppel browser {assign [--quit-running] <name>|release|status [--porcelain]}" ;;
+        extensions) with_iab_operation_lock cmd_browser_extensions "$@" ;;
+        *) die "usage: doppel browser {assign [--quit-running] <name>|release|status [--porcelain]|extensions ...}" ;;
     esac
 }
 
@@ -2993,7 +3372,7 @@ if [[ "${1:-}" == "__iab-worker" ]]; then
     readonly IAB_WORKER_OPERATION="$3"
     shift 3
     case "$IAB_WORKER_OPERATION" in
-        cmd_create|cmd_launch|cmd_route_launch|cmd_rebuild|cmd_edit|cmd_remove|cmd_browser_assign|cmd_browser_release|cmd_update_apply)
+        cmd_create|cmd_launch|cmd_route_launch|cmd_rebuild|cmd_edit|cmd_remove|cmd_browser_assign|cmd_browser_release|cmd_browser_extensions|cmd_update_apply)
             "$IAB_WORKER_OPERATION" "$@"
             exit $?
             ;;

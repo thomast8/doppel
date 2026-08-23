@@ -23,8 +23,10 @@ readonly UNIVERSAL="${DOPPEL_UNIVERSAL:-0}"
 # Developer ID build; from there notarisation is only notarytool plus stapling.
 # Ad-hoc builds can still use EdDSA-verified Sparkle updates for personal use.
 readonly SIGN_ID="${DOPPEL_SIGN_ID:--}"
-readonly DOPPEL_VERSION="${DOPPEL_VERSION:-1.0.0}"
-readonly DOPPEL_BUILD="${DOPPEL_BUILD:-10}"
+# Plain local builds are visibly development builds. The release packager
+# always supplies an explicit clean version and increasing numeric build.
+readonly DOPPEL_VERSION="${DOPPEL_VERSION:-1.2.0-dev}"
+readonly DOPPEL_BUILD="${DOPPEL_BUILD:-17}"
 readonly DOPPEL_BUNDLE_ID="${DOPPEL_BUNDLE_ID:-ai.doppel.menubar}"
 readonly SPARKLE_FEED_URL="${DOPPEL_SPARKLE_FEED_URL:-https://raw.githubusercontent.com/thomast8/doppel/main/appcast.xml}"
 readonly SPARKLE_PUBLIC_KEY="${DOPPEL_SPARKLE_PUBLIC_KEY:-}"
@@ -150,9 +152,9 @@ ICON_WORK="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/doppel-appicon.XXXXXXXX")"
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.0</string>
+	<string>1.2.0-dev</string>
 	<key>CFBundleVersion</key>
-	<string>10</string>
+	<string>17</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>LSUIElement</key>

@@ -100,6 +100,9 @@ bin/doppel launch "ChatGPT Personal"
 bin/doppel browser assign "ChatGPT Personal"  # give this profile the built-in browser
 bin/doppel browser status
 bin/doppel browser release
+bin/doppel browser extensions status "ChatGPT Personal"
+bin/doppel browser extensions apple-passwords "ChatGPT Personal"
+bin/doppel browser extensions disable "ChatGPT Personal"
 bin/doppel rebuild "ChatGPT Personal"
 bin/doppel native-tools status
 bin/doppel native-tools repair
@@ -212,6 +215,28 @@ Doppel records the official process PID, start identity and build after launch
 or adoption. Status compares that stored assignment with the live official
 process: a normal Dock launch using a different managed profile is shown as an
 assignment mismatch rather than being reported as the stored owner.
+
+#### Apple Passwords and Browser extensions
+
+An assigned Built-in Browser profile can opt into ChatGPT's experimental
+extension manager and install Apple's official iCloud Passwords extension:
+
+```sh
+bin/doppel browser extensions apple-passwords "ChatGPT Veridue"
+```
+
+If ChatGPT is open, save any drafts and repeat with `--quit-running`. Doppel
+then restarts the official engine and opens the exact Apple extension in the
+Chrome Web Store. Installation and macOS authentication remain interactive;
+Doppel never exports, reads or copies credentials.
+
+This override unlocks the full extension manager and Chrome Web Store, not an
+Apple-only capability. Apple Passwords is also one macOS-wide vault: its
+credentials are not isolated between Personal and Work profiles. The setting
+is stored per Doppel profile, remains off by default, and is reconciled when
+OpenAI refreshes its feature cache. `browser extensions disable` removes only
+Doppel's override and keeps installed extensions and Browser data. If OpenAI
+changed the cache after Doppel wrote it, disable leaves that newer state alone.
 
 ### Permissions for managed apps
 
@@ -361,9 +386,14 @@ Release packaging is an explicit two-step publication flow:
 
 ```sh
 just sparkle-key             # once; keeps the private key in your Keychain
-${EDITOR:-open} release-notes/1.1.0.md
-just package-release 1.1.0 12
+${EDITOR:-open} release-notes/1.2.0.md
+just package-release 1.2.0 17
 ```
+
+A plain `just build` is a local developer install and carries a `-dev` version
+suffix. `package-release` always requires the clean release version and an
+explicit, increasing numeric build so local and published artifacts cannot be
+mistaken for one another.
 
 Back up that private key once to encrypted storage; do not commit the export:
 
@@ -389,7 +419,7 @@ release command:
 ```sh
 export DOPPEL_SIGN_ID="Developer ID Application: Example (TEAMID)"
 export NOTARY_KEYCHAIN_PROFILE="doppel-notary"
-just package-release 1.2.0 13
+just package-release 1.2.0 17
 ```
 
 With those variables set, the recipe also submits the app to Apple, staples and
