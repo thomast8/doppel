@@ -4,6 +4,10 @@
 #import <Security/Security.h>
 #import <UserNotifications/UserNotifications.h>
 #include <CommonCrypto/CommonDigest.h>
+#include <errno.h>
+#include <limits.h>
+#include <stdlib.h>
+#include <sysexits.h>
 #include <sys/xattr.h>
 #include <unistd.h>
 
@@ -26,6 +30,18 @@ static void show_error(NSString *message) {
     alert.messageText = [NSString stringWithFormat:@"%@ could not start", instance_name()];
     alert.informativeText = message;
     alert.alertStyle = NSAlertStyleCritical;
+    [alert addButtonWithTitle:@"OK"];
+    [alert runModal];
+}
+
+static void show_focus_error(NSString *message) {
+    [NSApplication sharedApplication];
+    [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+    [NSApp activateIgnoringOtherApps:YES];
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = [NSString stringWithFormat:@"%@ could not come forward", instance_name()];
+    alert.informativeText = message;
+    alert.alertStyle = NSAlertStyleWarning;
     [alert addButtonWithTitle:@"OK"];
     [alert runModal];
 }
@@ -217,6 +233,71 @@ static NSString *recorded_requirement(NSString *bundlePath) {
     return contents.length > 0 ? contents : nil;
 }
 
+// Branded Finder/Dock icons route an assigned profile through the untouched
+// OpenAI-signed app. Once that engine is already running, Launch Services may
+// accept another open request without actually bringing its windows forward.
+// Activate only the exact process whose PID, bundle identity and path were
+// verified by Doppel's runtime receipt. This private mode deliberately lives in
+// the signed launcher so it can use AppKit directly without Apple Events,
+// Accessibility access or an additional helper binary.
+static int activate_running_application(const char *pidText,
+                                        const char *expectedBundleIDText,
+                                        const char *expectedBundlePathText) {
+    errno = 0;
+    char *end = NULL;
+    long rawPID = strtol(pidText, &end, 10);
+    if (errno != 0 || end == pidText || *end != '\0' || rawPID <= 1 || rawPID > INT_MAX) {
+        fprintf(stderr, "doppel-activate: invalid process identifier\n");
+        return EX_USAGE;
+    }
+
+    NSString *expectedBundleID = [NSString stringWithUTF8String:expectedBundleIDText];
+    NSString *expectedBundlePath = [NSString stringWithUTF8String:expectedBundlePathText];
+    if (expectedBundleID.length == 0 || expectedBundlePath.length == 0 ||
+        !expectedBundlePath.isAbsolutePath) {
+        fprintf(stderr, "doppel-activate: invalid expected application identity\n");
+        return EX_USAGE;
+    }
+
+    pid_t pid = (pid_t)rawPID;
+    NSRunningApplication *target =
+        [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+    if (target == nil || target.isTerminated) {
+        fprintf(stderr, "doppel-activate: the verified process is no longer running\n");
+        return EX_UNAVAILABLE;
+    }
+    if (![target.bundleIdentifier isEqualToString:expectedBundleID]) {
+        fprintf(stderr, "doppel-activate: the running application has a different bundle identifier\n");
+        return EX_NOPERM;
+    }
+
+    NSString *actualPath = target.bundleURL.URLByResolvingSymlinksInPath.path.stringByStandardizingPath;
+    NSString *canonicalExpectedPath =
+        [NSURL fileURLWithPath:expectedBundlePath].URLByResolvingSymlinksInPath.path.stringByStandardizingPath;
+    if (actualPath.length == 0 || ![actualPath isEqualToString:canonicalExpectedPath]) {
+        fprintf(stderr, "doppel-activate: the running application has a different bundle path\n");
+        return EX_NOPERM;
+    }
+
+    [target unhide];
+    if (![target activateWithOptions:NSApplicationActivateAllWindows]) {
+        fprintf(stderr, "doppel-activate: macOS refused the activation request\n");
+        return EX_TEMPFAIL;
+    }
+
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:2.0];
+    do {
+        if (NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier == pid) {
+            return EX_OK;
+        }
+        [[NSRunLoop currentRunLoop]
+            runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+    } while ([deadline timeIntervalSinceNow] > 0);
+
+    fprintf(stderr, "doppel-activate: the verified application did not become frontmost\n");
+    return EX_TEMPFAIL;
+}
+
 int main(int argc, char *argv[]) {
     @autoreleasepool {
         NSString *bundlePath = NSBundle.mainBundle.bundlePath;
@@ -286,6 +367,28 @@ int main(int argc, char *argv[]) {
         // and contains an executable self-healing engine.
         if (argc == 2 && strcmp(argv[1], "--doppel-verify") == 0) {
             return 0;
+        }
+
+        // Private contract used by the embedded engine router after it has
+        // validated the built-in-browser runtime receipt. Keep all three
+        // identity inputs mandatory so a stale PID can never focus a different
+        // process after PID reuse.
+        if ((argc == 5 || argc == 6) && strcmp(argv[1], "--doppel-activate") == 0) {
+            BOOL alertOnFailure = argc == 6 && strcmp(argv[5], "--alert") == 0;
+            if (argc == 6 && !alertOnFailure) return EX_USAGE;
+            int activationStatus = activate_running_application(argv[2], argv[3], argv[4]);
+            if (alertOnFailure && activationStatus != EX_OK) {
+                NSString *message;
+                if (activationStatus == EX_UNAVAILABLE) {
+                    message = @"The verified ChatGPT process stopped before Doppel could focus it. Launch the green shortcut again.";
+                } else if (activationStatus == EX_NOPERM) {
+                    message = @"The running process no longer matches the verified official ChatGPT app, so Doppel refused to focus it.";
+                } else {
+                    message = @"ChatGPT is running with the built-in browser, but macOS did not bring its window forward. Use the white ChatGPT icon, then try again.";
+                }
+                show_focus_error(message);
+            }
+            return activationStatus;
         }
 
         // Read-only, stable output consumed by Doppel's aggregate permission

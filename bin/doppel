@@ -940,8 +940,7 @@ launch_vendor_instance() {
         die "'$name''s Electron profile is already open through another ChatGPT app. Quit that window before using the built-in browser."
     fi
 
-    if vendor_instance_is_running "$dir"; then
-        /usr/bin/open "$PRIMARY_APP" >/dev/null 2>&1 || true
+    if vendor_pid="$(iab_runtime_pid_for "$dir")"; then
         for arg in $forwarded_args; do
             [[ "$arg" == -psn_* ]] && continue
             [[ "$arg" != -* ]] || \
@@ -950,6 +949,17 @@ launch_vendor_instance() {
                 die "'$name' is running, but macOS could not deliver '$arg' to the official engine."
         done
         print -r -- "already running with built-in browser: $name"
+        if (( ROUTED_APP_LAUNCH )); then
+            # Preserve the original Finder/Dock process's foreground activation
+            # context. Its engine validates this private hand-off and execs the
+            # signed launcher in place rather than spawning a powerless child.
+            printf 'doppel-activate\t%s\t%s\t%s\n' \
+                "$vendor_pid" "$PRIMARY_BUNDLE_ID" "$PRIMARY_APP"
+        else
+            # A CLI launch has no Dock activation context. Retain the existing
+            # best-effort LaunchServices behaviour for that separate workflow.
+            /usr/bin/open "$PRIMARY_APP" >/dev/null 2>&1 || true
+        fi
         return 0
     fi
     other_vendor_engine_is_running "$dir" && \
@@ -1140,12 +1150,15 @@ cmd_launch() {
     launch_clone_instance "$dir"
 }
 
+typeset -gi ROUTED_APP_LAUNCH=0
+
 # Entry point used only by the signature-validated launcher embedded in a
 # managed app. It re-resolves the current assignment under the global lock. A
 # slot move that happened after the first process started therefore selects the
 # current engine safely instead of recursing or opening both engines.
 cmd_route_launch() {
     local dir
+    ROUTED_APP_LAUNCH=1
     dir="$(instance_dir_for "$1")"
     shift
     if instance_uses_vendor_engine "$dir"; then

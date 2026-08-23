@@ -5,6 +5,7 @@ test:
     ./qa/release-notes.zsh
 
 qa:
+    ./qa/launcher-activation.zsh
     ./qa/e2e.zsh
     ./qa/edge.zsh
     ./qa/update-reconcile.zsh
