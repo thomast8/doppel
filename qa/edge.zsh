@@ -11,6 +11,7 @@
 
 set -u
 setopt PIPE_FAIL
+unsetopt BG_NICE
 
 readonly REPO_ROOT="${0:A:h:h}"
 CLI="$REPO_ROOT/bin/doppel"
@@ -27,6 +28,7 @@ readonly APPS="$SCRATCH/Applications"
 export DOPPEL_RELAUNCH=0
 
 typeset -i PASSED=0 FAILED=0
+typeset -a LIVE_SWITCH_PIDS=()
 pass() { print -r -- "  ✓ $1"; (( PASSED += 1 )); return 0 }
 fail() { print -r -- "  ✗ $1"; print -r -- "      $2"; (( FAILED += 1 )); return 0 }
 check() {
@@ -47,6 +49,7 @@ run_real() {
 }
 
 config_field() { ( source "$1/instance-config.zsh" 2>/dev/null || true; print -r -- "${(P)2:-}" ) }
+tab_field() { print -r -- "$1" | /usr/bin/awk -F'\t' -v field="$2" '{ print $field }' }
 
 # Rewrites a config the way the CLI writes it, so a value with spaces in it is
 # escaped exactly as the real thing would escape it.
@@ -83,6 +86,11 @@ pin_file() {
 
 cleanup() {
     local final
+    local live_pid
+    for live_pid in $LIVE_SWITCH_PIDS; do
+        /bin/kill "$live_pid" 2>/dev/null || true
+        wait "$live_pid" 2>/dev/null || true
+    done
     final="$(app_path)"
     # Without --purge-data: the throwaway profile lives under $TMPDIR, and
     # purging refuses anything outside the home directory by design.
@@ -153,6 +161,83 @@ check "list still succeeds" "$STATUS" "0"
 run_isolated broken remove "Anything"
 [[ "$OUT" == *"no instance named"* ]] && pass "remove says what is wrong" \
     || fail "remove says what is wrong" "got status $STATUS, output: '$OUT'"
+
+print -r -- ""
+print -r -- "live switching resolves exactly one managed process"
+LIVE_HOME="$SCRATCH/live-switch"
+LIVE_DIR="$LIVE_HOME/instances/work"
+LIVE_APPS="$SCRATCH/live-switch-apps"
+LIVE_APP="$LIVE_APPS/ChatGPT Work.app"
+/bin/mkdir -p "$LIVE_DIR" "$LIVE_APP/Contents/MacOS"
+write_config_file "$LIVE_DIR" "ChatGPT Work" "com.example.doppel.work" \
+    "codex-work" "$SCRATCH/live-profile" "$SCRATCH/live-codex" "3B82F6"
+print -r -- "$LIVE_APPS" > "$LIVE_DIR/install-root"
+/usr/bin/plutil -create xml1 "$LIVE_APP/Contents/Info.plist"
+/usr/bin/plutil -insert CFBundleIdentifier -string "com.example.doppel.work" \
+    "$LIVE_APP/Contents/Info.plist"
+/usr/bin/plutil -insert CFBundleVersion -string "7000" "$LIVE_APP/Contents/Info.plist"
+/usr/bin/printf '%s\n' '#include <unistd.h>' 'int main(void) { sleep(60); return 0; }' \
+    > "$SCRATCH/live-switch-main.c"
+/usr/bin/clang -O2 "$SCRATCH/live-switch-main.c" -o "$LIVE_APP/Contents/MacOS/ChatGPT"
+
+run_isolated live-switch live-switch target work
+LIVE_VERSION="$(tab_field "$OUT" 1)"
+LIVE_SLUG="$(tab_field "$OUT" 2)"
+LIVE_ENGINE="$(tab_field "$OUT" 3)"
+LIVE_BUNDLE="$(tab_field "$OUT" 4)"
+LIVE_PATH="$(tab_field "$OUT" 5)"
+LIVE_CODEX="$(tab_field "$OUT" 6)"
+LIVE_STATE="$(tab_field "$OUT" 7)"
+LIVE_PID="$(tab_field "$OUT" 8)"
+LIVE_FINGERPRINT="$(tab_field "$OUT" 9)"
+LIVE_BUILD="$(tab_field "$OUT" 10)"
+check "the target contract is versioned" "$LIVE_VERSION" "live-switch-target-v1"
+check "a stopped clone remains a managed target" "$LIVE_STATE" "stopped"
+check "the target retains the configured CODEX_HOME" "$LIVE_CODEX" "$SCRATCH/live-codex"
+
+"$LIVE_APP/Contents/MacOS/ChatGPT" 60 &
+LIVE_SWITCH_PIDS+=("$!")
+/bin/sleep 0.1
+run_isolated live-switch live-switch target work
+LIVE_STATE="$(tab_field "$OUT" 7)"
+LIVE_PID="$(tab_field "$OUT" 8)"
+LIVE_FINGERPRINT="$(tab_field "$OUT" 9)"
+LIVE_BUILD="$(tab_field "$OUT" 10)"
+check "the one matching clone is running" "$LIVE_STATE" "running"
+check "the exact process id is returned" "$LIVE_PID" "${LIVE_SWITCH_PIDS[1]}"
+[[ ${#LIVE_FINGERPRINT} -eq 64 ]] && pass "the process start fingerprint is returned" \
+    || fail "the process start fingerprint is returned" "got: $LIVE_FINGERPRINT"
+check "the installed build is returned" "$LIVE_BUILD" "7000"
+
+"$LIVE_APP/Contents/MacOS/ChatGPT" 60 &
+LIVE_SWITCH_PIDS+=("$!")
+/bin/sleep 0.1
+run_isolated live-switch live-switch target work
+[[ "$OUT" == *"more than one managed app process matches"* && $STATUS -ne 0 ]] \
+    && pass "two matching processes fail closed" \
+    || fail "two matching processes fail closed" "got status $STATUS: $OUT"
+/bin/kill "${LIVE_SWITCH_PIDS[2]}" 2>/dev/null || true
+wait "${LIVE_SWITCH_PIDS[2]}" 2>/dev/null || true
+LIVE_SWITCH_PIDS=("${LIVE_SWITCH_PIDS[1]}")
+
+/usr/bin/plutil -replace CFBundleIdentifier -string "com.example.wrong" \
+    "$LIVE_APP/Contents/Info.plist"
+run_isolated live-switch live-switch target work
+[[ "$OUT" == *"bundle identifier does not match"* && $STATUS -ne 0 ]] \
+    && pass "bundle identity drift fails closed" \
+    || fail "bundle identity drift fails closed" "got status $STATUS: $OUT"
+/usr/bin/plutil -replace CFBundleIdentifier -string "com.example.doppel.work" \
+    "$LIVE_APP/Contents/Info.plist"
+
+/bin/mkdir -p "$LIVE_HOME/state"
+print -r -- "work" > "$LIVE_HOME/state/iab-engine-slot"
+run_isolated live-switch live-switch target work
+LIVE_ENGINE="$(tab_field "$OUT" 3)"
+LIVE_BUNDLE="$(tab_field "$OUT" 4)"
+LIVE_STATE="$(tab_field "$OUT" 7)"
+check "an assigned official engine uses the vendor target" "$LIVE_ENGINE" "vendor"
+check "an unreceipted official process is never adopted" "$LIVE_STATE" "stopped"
+check "the vendor target is the official bundle" "$LIVE_BUNDLE" "com.openai.codex"
 
 print -r -- ""
 print -r -- "a name resolves to the instance that carries it, not to the one whose"
