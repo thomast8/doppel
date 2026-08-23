@@ -6,6 +6,20 @@
         <description>Signed Doppel releases</description>
         <language>en</language>
         <item>
+            <title>1.1.4</title>
+            <pubDate>Sun, 23 Aug 2026 10:26:42 +0100</pubDate>
+            <link>https://github.com/thomast8/doppel</link>
+            <sparkle:version>16</sparkle:version>
+            <sparkle:shortVersionString>1.1.4</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Doppel 1.1.4
+
+- Rebuilds instances again on ChatGPT 26.818 and later. The previous version could not patch the newest ChatGPT layout, so instances failed with "Patching the instance OAuth callback routing failed" and would not start.
+- Recognises the reworked deep-link handling in current ChatGPT builds without pinning to one release, so a routine ChatGPT update no longer strands your instances.
+]]></description>
+            <enclosure url="https://github.com/thomast8/doppel/releases/download/v1.1.4/Doppel-1.1.4-macOS.zip" length="3020381" type="application/octet-stream" sparkle:edSignature="eYIMxXk10g2SP0SnMK4MHjb3gyJZwSNKAaAEdbGW+d4j5l9yQCFAZOdzNRkm2B5S8GlFLT0a2DsNvsLtjoSsAQ=="/>
+        </item>
+        <item>
             <title>1.1.3</title>
             <pubDate>Sat, 15 Aug 2026 14:54:07 +0100</pubDate>
             <link>https://github.com/thomast8/doppel</link>
@@ -36,21 +50,6 @@
 - Shows assignment mismatches and unmanaged Browser sessions directly in the Doppel menu.
 ]]></description>
             <enclosure url="https://github.com/thomast8/doppel/releases/download/v1.1.2/Doppel-1.1.2-macOS.zip" length="3014686" type="application/octet-stream" sparkle:edSignature="uBWBryDt0Vc23Gz4YHppe9uZeL7529N6i7uDD5kI8nLOaOIwxUetrOwbnN0GDDo9k/R2LLSQ56sBH0wCeLt4Ag=="/>
-        </item>
-        <item>
-            <title>1.1.1</title>
-            <pubDate>Tue, 11 Aug 2026 09:49:17 +0100</pubDate>
-            <link>https://github.com/thomast8/doppel</link>
-            <sparkle:version>13</sparkle:version>
-            <sparkle:shortVersionString>1.1.1</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[# Doppel 1.1.1
-
-- Adds a compact, Doppel-styled update window.
-- Clearly identifies signed and critical updates before installation.
-- Adds Skip, Later, and Install controls, plus an option to install future updates automatically.
-]]></description>
-            <enclosure url="https://github.com/thomast8/doppel/releases/download/v1.1.1/Doppel-1.1.1-macOS.zip" length="3000704" type="application/octet-stream" sparkle:edSignature="fd7tgqdRSFsBmmPdiFswMB/jYiFpaqRhm230maRhBCUOj7ZKvqSttQLsQ+WITxD0vS5RqH0mnrsi7JEDxqoEAw=="/>
         </item>
     </channel>
 </rss>
