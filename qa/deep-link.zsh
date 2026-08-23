@@ -78,11 +78,12 @@ else
 fi
 
 # Everything above runs against whichever vendor build happens to be installed,
-# which is the real signal but only ever covers one build at a time. These two
+# which is the real signal but only ever covers one build at a time. These
 # shapes are the ones that actually shipped: 6321 and 6662 differ only in names
-# the minifier chooses and in an argument the vendor added, and pinning either
-# of those is what broke clone builds twice. A machine on one build still has
-# to notice a patcher that has been re-pinned to the other.
+# the minifier chooses and in an argument the vendor added, and 6971 folded the
+# whole open-url path into one shared handler plus a startup drain. Pinning any
+# one of them is what broke clone builds three times running. A machine on one
+# build still has to notice a patcher that has been re-pinned to another.
 SHAPES_OUT="$(/usr/bin/python3 - "$PATCHER" <<'PY'
 import importlib.util, sys
 
@@ -101,6 +102,9 @@ queued = {
     "6321": b'if(i){let n=(e,t)=>{let n=XW(e);if(n){m(n),l?.(eG(n)?e:void 0),t?.preventDefault();return}let r=fG(e);r&&(h(r),t?.preventDefault())};e.on(`open-url`,(e,t)=>{n(t,e)});',
     "6662": b'if(i){let n=(e,t)=>{let n=TW(e);if(n){m(n),l?.(kW(n,e)?e:void 0),t?.preventDefault();return}let r=HW(e);r&&(h(r),t?.preventDefault())};e.on(`open-url`,(e,t)=>{n(t,e)});',
 }
+drained = {
+    "6971": b'if(i){let n=(e,t)=>{let n=PW(e);if(n){h(n),u?.(BW(n,e)),t?.preventDefault();return}let r=$W(e);r&&(g(r),t?.preventDefault())};e.on(`open-url`,(e,t)=>{n(t,e)});for(let e of t.a())n(e)}',
+}
 missed = []
 for build, sample in oauth.items():
     if len(patcher.OAUTH_CALLBACK_HANDLER.findall(sample)) != 1:
@@ -108,13 +112,16 @@ for build, sample in oauth.items():
 for build, sample in queued.items():
     if len(patcher.QUEUED_OPEN_URL_HANDLER.findall(sample)) != 1:
         missed.append(f"open-url {build}")
+for build, sample in drained.items():
+    if len(patcher.DRAINED_OPEN_URL_HANDLER.findall(sample)) != 1:
+        missed.append(f"open-url {build}")
 print(",".join(missed))
 PY
 )"
 if [[ -z "$SHAPES_OUT" ]]; then
-    pass "both shipped minified shapes still match"
+    pass "all shipped minified shapes still match"
 else
-    fail "both shipped minified shapes still match" "no match for: $SHAPES_OUT"
+    fail "all shipped minified shapes still match" "no match for: $SHAPES_OUT"
 fi
 
 print -r -- "$PASSED passed, $FAILED failed"
