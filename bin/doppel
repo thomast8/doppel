@@ -548,18 +548,33 @@ validate_extensions_receipt() {
 }
 
 require_extensions_capability() {
+    local dir="$1" asar="$PRIMARY_APP/Contents/Resources/app.asar" required cache
     validate_vendor_app "$PRIMARY_APP" || \
         die "the official ChatGPT engine is missing or is not valid OpenAI-signed code"
-    local asar="$PRIMARY_APP/Contents/Resources/app.asar" required
     if [[ "${DOPPEL_DEV:-0}" == "1" && \
           "${DOPPEL_IAB_DRY_RUN_UNSUPPORTED_EXTENSIONS:-0}" == "1" ]]; then
         die "this ChatGPT build does not support Doppel's Browser extensions override"
     fi
     [[ -r "$asar" ]] || die "this ChatGPT build does not contain the expected Browser runtime"
-    for required in "$OWL_EXTENSIONS_FEATURE" "chrome://extensions/" "https://chromewebstore.google.com/"; do
+    for required in "chrome://extensions/" "https://chromewebstore.google.com/"; do
         LC_ALL=C /usr/bin/grep -a -F -q "$required" "$asar" || \
             die "this ChatGPT build does not support Doppel's Browser extensions override"
     done
+
+    # Older builds embed the feature name in app.asar. Build 6971 moved the
+    # server-delivered gate out of that archive, while retaining it in the
+    # signed runtime's profile cache. Accept either first-party signal. Leave
+    # structural validation to reconciliation so a malformed cache receives
+    # the precise, non-mutating recovery error below.
+    LC_ALL=C /usr/bin/grep -a -F -q "$OWL_EXTENSIONS_FEATURE" "$asar" && return 0
+    cache="$(extensions_cache_path "$dir")"
+    [[ -r "$cache" ]] || \
+        die "this ChatGPT build does not support Doppel's Browser extensions override"
+    if validate_feature_cache "$cache"; then
+        feature_array_contains "$cache" enabledOwlFeatureNames "$OWL_EXTENSIONS_FEATURE" || \
+            feature_array_contains "$cache" disabledOwlFeatureNames "$OWL_EXTENSIONS_FEATURE" || \
+            die "this ChatGPT build does not support Doppel's Browser extensions override"
+    fi
 }
 
 require_extensions_owner() {
@@ -1665,7 +1680,15 @@ cmd_browser_extensions() {
             ;;
         enable|disable|apple-passwords)
             (( porcelain == 0 )) || die "--porcelain is only valid with status"
-            require_extensions_capability
+            if [[ "$action" == "disable" ]]; then
+                # An OpenAI update may remove the experimental capability.
+                # Users must still be able to relinquish Doppel's receipt
+                # without rewriting newer vendor-managed cache state.
+                validate_vendor_app "$PRIMARY_APP" || \
+                    die "the official ChatGPT engine is missing or is not valid OpenAI-signed code"
+            else
+                require_extensions_capability "$dir"
+            fi
             was_running="$(extensions_stop_profile "$dir" "$quit_running")"
             if [[ "$action" == "disable" ]]; then
                 disable_browser_extensions "$dir"

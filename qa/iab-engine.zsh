@@ -302,6 +302,7 @@ print -r -- '{"enabledOwlFeatureNames":["OwlHistory","UnknownEnabled"],"disabled
 /bin/chmod 640 "$FEATURE_CACHE"
 expect "$(run_cli browser extensions status --porcelain "ChatGPT Work QA")" "off" \
     "the remote-disabled feature should begin off"
+print -u2 -r -- "iab-engine QA: extension enablement"
 run_cli browser extensions enable "ChatGPT Work QA" >/dev/null
 expect "$(run_cli browser extensions status --porcelain "ChatGPT Work QA")" "override" \
     "enable should publish the per-profile override"
@@ -324,6 +325,7 @@ expect "$(/usr/bin/shasum -a 256 "$FEATURE_CACHE" | /usr/bin/awk '{print $1}')" 
 
 # Simulate an OpenAI cache refresh. Launch reconciliation must restore only the
 # requested feature and update the receipt to the new exact digest.
+print -u2 -r -- "iab-engine QA: extension cache reconciliation"
 print -r -- '{"enabledOwlFeatureNames":["OwlPrinting","RemoteNew"],"disabledOwlFeatureNames":["OwlExtensions","RemoteDisabled"]}' > "$FEATURE_CACHE"
 if ! refresh_launch_output="$(run_cli launch "ChatGPT Work QA" 2>&1)"; then
     fail "launch reconciliation failed: $refresh_launch_output"
@@ -356,6 +358,7 @@ expect "$(/usr/bin/shasum -a 256 "$FEATURE_CACHE" | /usr/bin/awk '{print $1}')" 
 
 # A clean disable restores the exact prior membership without deleting other
 # Browser data or extension files.
+print -u2 -r -- "iab-engine QA: extension rollback"
 print -r -- '{"enabledOwlFeatureNames":["OwlHistory"],"disabledOwlFeatureNames":["OwlExtensions","KeepMe"]}' > "$FEATURE_CACHE"
 /bin/mkdir -p "$WORK_PROFILE/Default/Extensions/example"
 print -r -- keep > "$WORK_PROFILE/Default/Extensions/example/data"
@@ -368,6 +371,7 @@ run_cli browser extensions disable "ChatGPT Work QA" >/dev/null
 
 # Apple setup uses the exact official store URL. A routing failure after a new
 # opt-in must restore the pre-command feature state and remove its receipt.
+print -u2 -r -- "iab-engine QA: Apple Passwords routing"
 apple_output="$(run_cli browser extensions apple-passwords "ChatGPT Work QA")"
 [[ "$apple_output" == *$'\t'https://chromewebstore.google.com/detail/icloud-passwords/pejdijmoenmkgeppbflobdenhhabjlaj?hl=en ]] || \
     fail "Apple Passwords setup should route the exact official extension URL (got '$apple_output')"
@@ -383,6 +387,7 @@ expect "$(run_cli browser extensions status --porcelain "ChatGPT Work QA")" "off
 
 # Malformed state, unsupported builds, and a running profile all fail before
 # changing either the cache or receipt.
+print -u2 -r -- "iab-engine QA: extension refusal cases"
 print -r -- '{not-json' > "$FEATURE_CACHE"
 malformed_digest="$(/usr/bin/shasum -a 256 "$FEATURE_CACHE" | /usr/bin/awk '{print $1}')"
 if malformed_output="$(run_cli browser extensions enable "ChatGPT Work QA" 2>&1)"; then
@@ -393,6 +398,15 @@ fi
 expect "$(/usr/bin/shasum -a 256 "$FEATURE_CACHE" | /usr/bin/awk '{print $1}')" "$malformed_digest" \
     "malformed cache should remain byte-for-byte unchanged"
 [[ ! -e "$RECEIPT" ]] || fail "malformed cache should not create a receipt"
+
+# Builds that retain Browser routes but advertise no OwlExtensions feature in
+# either the signed archive or the profile cache must still fail closed.
+print -r -- '{"enabledOwlFeatureNames":["OwlHistory"],"disabledOwlFeatureNames":[]}' > "$FEATURE_CACHE"
+if missing_feature_output="$(run_cli browser extensions enable "ChatGPT Work QA" 2>&1)"; then
+    fail "a cache without OwlExtensions should be refused"
+fi
+[[ "$missing_feature_output" == *"does not support"* ]] || \
+    fail "a missing OwlExtensions signal should identify the build capability"
 
 print -r -- '{"enabledOwlFeatureNames":[],"disabledOwlFeatureNames":["OwlExtensions"]}' > "$FEATURE_CACHE"
 if unsupported_output="$(DOPPEL_IAB_DRY_RUN_UNSUPPORTED_EXTENSIONS=1 run_cli browser extensions enable "ChatGPT Work QA" 2>&1)"; then
