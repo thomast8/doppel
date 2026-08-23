@@ -115,6 +115,44 @@ QUEUED_OPEN_URL_HANDLER = re.compile(
     rb"(?P=handler)\((?P=listener_url),(?P=listener_event)\)\}\);)"
 )
 
+# Build 6971 folded macOS URL intake into one shared handler. The codex-route
+# branch and the http(s) branch live in a single arrow function, the
+# ``open-url`` listener delegates to it, and a startup drain then replays the
+# URLs an early open-path queue captured before this handler existed. The
+# deep-link callback no longer receives a predicate ternary; it takes a source
+# URL derived from the route (the derivation call keeps its second argument
+# optional — requiring one argument shape is what broke against 6644).
+# Insertion still lands between the deep-link callback and preventDefault, so
+# a drained startup delivery takes the same restored-ownership path as a live
+# event: the drain invokes the handler without an event, and the event is
+# optional throughout. The minifier reuses one-letter names across scopes
+# (this build names both the handler and the route ``n``, and both the url
+# parameter and the app ``e``), so every backreference below stays within a
+# single scope and same-looking names still get distinct groups.
+DRAINED_OPEN_URL_HANDLER = re.compile(
+    rb"(?P<prefix>if\((?P<enabled>[A-Za-z_$][A-Za-z0-9_$]*)\)\{let "
+    rb"(?P<handler>[A-Za-z_$][A-Za-z0-9_$]*)=\("
+    rb"(?P<url>[A-Za-z_$][A-Za-z0-9_$]*),(?P<event>[A-Za-z_$][A-Za-z0-9_$]*)"
+    rb"\)=>\{let (?P<route>[A-Za-z_$][A-Za-z0-9_$]*)="
+    rb"(?P<parse>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=url)\);if\((?P=route)\)\{"
+    rb"(?P<queue>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=route)\),"
+    rb"(?P<callback>[A-Za-z_$][A-Za-z0-9_$]*)\?\.\("
+    rb"(?P<source>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=route)(?:,(?P=url))?\)\)),"
+    rb"(?P<suffix>(?P=event)\?\.preventDefault\(\);return\}let "
+    rb"(?P<http>[A-Za-z_$][A-Za-z0-9_$]*)="
+    rb"(?P<parse_http>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=url)\);"
+    rb"(?P=http)&&\((?P<queue_http>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=http)\),"
+    rb"(?P=event)\?\.preventDefault\(\)\)\};"
+    rb"(?P<app>[A-Za-z_$][A-Za-z0-9_$]*)\.on\(`open-url`,\("
+    rb"(?P<listener_event>[A-Za-z_$][A-Za-z0-9_$]*),"
+    rb"(?P<listener_url>[A-Za-z_$][A-Za-z0-9_$]*)\)=>\{"
+    rb"(?P=handler)\((?P=listener_url),(?P=listener_event)\)\}\);"
+    rb"for\(let (?P<drained>[A-Za-z_$][A-Za-z0-9_$]*) of "
+    rb"(?P<queue_module>[A-Za-z_$][A-Za-z0-9_$]*)\."
+    rb"(?P<flush>[A-Za-z_$][A-Za-z0-9_$]*)\(\)\)"
+    rb"(?P=handler)\((?P=drained)\)\})"
+)
+
 
 class PatchError(RuntimeError):
     pass
@@ -361,6 +399,22 @@ def patched_queued_open_url_handler(match: re.Match[bytes]) -> bytes:
     )
 
 
+def patched_drained_open_url_handler(match: re.Match[bytes]) -> bytes:
+    route = match.group("route")
+    return (
+        match.group("prefix")
+        + b";if("
+        + route
+        + b".kind===`connectorOAuthCallback`&&process.env."
+        + RESTORE_PATCH_MARKER
+        + b"&&process.env.DOPPEL_PRIMARY_APP&&process.env.DOPPEL_PRIMARY_BUNDLE_ID)try{"
+        + b'require("node:child_process").spawn(process.env.'
+        + RESTORE_PATCH_MARKER
+        + b",[`set`,`codex`,process.env.DOPPEL_PRIMARY_APP,process.env.DOPPEL_PRIMARY_BUNDLE_ID],{detached:!0,stdio:`ignore`}).unref()}catch{};"
+        + match.group("suffix")
+    )
+
+
 def locate_restore_member(archive: Archive) -> tuple[Member, bytes, bool]:
     patched: list[tuple[Member, bytes]] = []
     unpatched: list[tuple[Member, bytes, str, re.Match[bytes]]] = []
@@ -381,6 +435,8 @@ def locate_restore_member(archive: Archive) -> tuple[Member, bytes, bool]:
             ("legacy", match) for match in OPEN_URL_HANDLER.finditer(data)
         ] + [
             ("queued", match) for match in QUEUED_OPEN_URL_HANDLER.finditer(data)
+        ] + [
+            ("drained", match) for match in DRAINED_OPEN_URL_HANDLER.finditer(data)
         ]
         if not handler_matches:
             continue
@@ -398,8 +454,10 @@ def locate_restore_member(archive: Archive) -> tuple[Member, bytes, bool]:
         member, data, handler_kind, match = unpatched[0]
         if handler_kind == "legacy":
             replacement = patched_open_url_handler(match)
-        else:
+        elif handler_kind == "queued":
             replacement = patched_queued_open_url_handler(match)
+        else:
+            replacement = patched_drained_open_url_handler(match)
         return member, data[: match.start()] + replacement + data[match.end() :], False
     count = len(patched) + len(unpatched)
     if count == 0:
