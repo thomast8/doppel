@@ -436,11 +436,19 @@ final class InstanceStore: ObservableObject {
     }
 
     private func promptForUpdate(_ update: ChatGPTUpdate, force: Bool = false) {
-        // An update has to land somewhere. With nothing registered and managed
-        // apps installed, every apply the CLI could run would refuse itself, so
-        // the reconnection is offered instead of an update that cannot finish.
-        if instances.isEmpty && unregisteredInstanceCount > 0 {
-            promptToAdopt(force: force)
+        // An update has to land somewhere, and `update apply` decides that on
+        // the instances whose app is actually installed — it never moves the
+        // primary on its own, because with no clones the vendor's own updater
+        // owns it. So the same predicate is used here: an entry whose app was
+        // dragged to the Trash is not something an update can land on, and
+        // offering one would download a whole build and then be refused.
+        let installed = instances.filter(\.installed).count
+        if installed == 0 {
+            if unregisteredInstanceCount > 0 {
+                promptToAdopt(force: force)
+            } else if force {
+                showNothingToUpdateAlert(update)
+            }
             return
         }
         switch update.state {
@@ -456,17 +464,12 @@ final class InstanceStore: ObservableObject {
         guard shouldPrompt(update, force: force) else { return }
         let alert = updateAlert()
         alert.messageText = "A new version of ChatGPT is available!"
-        let installed = instances.filter(\.installed).count
-        // Said in the singular or not at all: "all 0 managed instances" is a
-        // promise about an inventory that is empty for a reason worth its own
-        // sentence, and "all 1" reads as a bug.
-        let scope: String
-        switch installed {
-        case 0: scope = "Doppel will apply this update to the primary app."
-        case 1: scope = "Doppel will apply this update to the primary app and its managed instance together."
-        default:
-            scope = "Doppel will apply this update to the primary app and all \(installed) managed instances together."
-        }
+        // Said in the singular where that is what it is: "all 1 managed
+        // instances" reads as a bug. The zero case never reaches here — an
+        // update with nothing to land on is not offered at all.
+        let scope = installed == 1
+            ? "Doppel will apply this update to the primary app and its managed instance together."
+            : "Doppel will apply this update to the primary app and all \(installed) managed instances together."
         alert.informativeText = """
             ChatGPT \(update.targetVersion) is now available—you have \(update.currentVersion). Would you like to download it now?
 
@@ -662,6 +665,22 @@ final class InstanceStore: ObservableObject {
         window.collectionBehavior.insert([.canJoinAllSpaces, .fullScreenAuxiliary])
         window.orderFrontRegardless()
         return alert.runModal()
+    }
+
+    /// Raised only when the user asked. Doppel updates the primary as one
+    /// transaction with the instances built from it and does nothing on its own
+    /// when there are none, so there is a real release here and nothing for
+    /// Doppel to do with it.
+    private func showNothingToUpdateAlert(_ update: ChatGPTUpdate) {
+        let alert = updateAlert()
+        alert.messageText = "Nothing for Doppel to Update"
+        alert.informativeText = """
+            ChatGPT \(update.targetVersion) is available, and you have \(update.currentVersion).
+
+            Doppel is not managing any instances on this Mac, so it has nothing to rebuild and leaves the ChatGPT app to its own updater. Create an instance and Doppel will keep the two in step from then on.
+            """
+        alert.addButton(withTitle: "OK")
+        present(alert)
     }
 
     private func showCurrentAlert() {

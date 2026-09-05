@@ -43,7 +43,7 @@ readonly PREBUILT_DIR="$REPO_ROOT/prebuilt"
 if [[ ("${0:A}" == */Doppel.app/Contents/Resources/doppel/* || \
        "${0:A}" == */Contents/Resources/Doppel/bin/doppel) && \
       "${DOPPEL_DEV:-0}" != "1" ]]; then
-    unset DOPPEL_HOME DOPPEL_APPCAST_URL DOPPEL_UPDATE_ROOT \
+    unset DOPPEL_HOME DOPPEL_APPCAST_URL DOPPEL_UPDATE_ROOT DOPPEL_ADOPT_SCAN_ROOTS \
           DOPPEL_PRIMARY_APP DOPPEL_PRIMARY_BUNDLE_ID \
           DOPPEL_PRIMARY_SCHEME DOPPEL_PRIMARY_TEAM_ID \
           DOPPEL_SIGN_IDENTITY DOPPEL_SIGN_IDENTITY_NAME DOPPEL_SIGN_LEAF_SHA1 \
@@ -51,6 +51,9 @@ if [[ ("${0:A}" == */Doppel.app/Contents/Resources/doppel/* || \
           DOPPEL_IAB_DRY_RUN DOPPEL_IAB_DRY_RUN_DELAY
 fi
 
+# A config is a comment and six assignments. Anything longer is not one, and
+# reading it to the end is the only unbounded work the orphan scan would do.
+readonly CONFIG_MAX_LINES=64
 readonly DOPPEL_HOME="${DOPPEL_HOME:-$HOME/Library/Application Support/Doppel}"
 readonly INSTANCES_ROOT="$DOPPEL_HOME/instances"
 readonly BUILD_CACHE="$DOPPEL_HOME/build"
@@ -456,11 +459,36 @@ config_value() {
         # A config is seven short lines. Reading an arbitrarily long file to the
         # end is the only expensive thing this does on a scan of every app in
         # two directories, so it stops instead.
-        (( ++lines <= 64 )) || break
+        (( ++lines <= CONFIG_MAX_LINES )) || break
         [[ "$line" == "$var="* ]] || continue
         print -r -- "${(Q)${line#$var=}}"
         break
-    done < "$dir/instance-config.zsh" 2>/dev/null || true
+    done 2>/dev/null < "$dir/instance-config.zsh" || true
+    return 0
+}
+
+# True when a config is nothing but comments and one assignment per field —
+# the shape write_config produces, and the only shape that means the same thing
+# whether it is parsed or sourced.
+#
+# That equivalence is now load-bearing. The CLI parses these files; the engine
+# inside each bundle still sources its own. Any line the parser skips is a line
+# the engine would still run, so a payload could declare a harmless URL scheme
+# on the line adopt validates and the primary's own scheme on a second line, or
+# behind an `if`, and launch as something other than what was approved. Refusing
+# the shapes that can differ is what keeps the two readers agreeing; taking the
+# last assignment instead would close only the first of those two tricks.
+config_is_plain() {
+    local file="$1" line lines=0 key
+    local -A seen
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        (( ++lines <= CONFIG_MAX_LINES )) || return 1
+        [[ -n "$line" && "$line" != '#'* ]] || continue
+        key="${line%%=*}"
+        [[ "$line" == *=* && "$key" == DOPPEL_[A-Z]* && "$key" != *[^A-Z_]* ]] || return 1
+        [[ -z "${seen[$key]:-}" ]] || return 1
+        seen[$key]=1
+    done 2>/dev/null < "$file" || return 1
     return 0
 }
 
@@ -591,7 +619,16 @@ is_managed_bundle() {
 # system one, which is where an instance someone did not place by hand lives.
 typeset -ga ADOPT_SCAN_ROOTS=()
 adopt_scan_roots() {
-    ADOPT_SCAN_ROOTS=("$HOME/Applications" /Applications)
+    # Overridable only from a checkout, and stripped from an installed copy with
+    # the rest. QA isolates by pointing HOME at a scratch directory, which
+    # confines the first root and not the second: without this, a Mac that keeps
+    # a managed clone in /Applications makes the suite's own fixtures compete
+    # with real instances, and the result depends on the machine it ran on.
+    if [[ -n "${DOPPEL_ADOPT_SCAN_ROOTS:-}" ]]; then
+        ADOPT_SCAN_ROOTS=(${(s.:.)DOPPEL_ADOPT_SCAN_ROOTS})
+    else
+        ADOPT_SCAN_ROOTS=("$HOME/Applications" /Applications)
+    fi
     ADOPT_SCAN_ROOTS=(${(u)ADOPT_SCAN_ROOTS})
 }
 
@@ -1315,6 +1352,8 @@ adopt_bundle() {
     is_managed_bundle "$app" || \
         die "$app is not a Doppel-managed app: it carries no instance config"
     payload="$(bundle_payload_dir "$app")"
+    config_is_plain "$payload/instance-config.zsh" || \
+        die "$app carries a config that is not a plain list of settings; it cannot be adopted"
     name="$(config_value "$payload" DOPPEL_DISPLAY_NAME)"
     bundle_id="$(config_value "$payload" DOPPEL_BUNDLE_ID)"
     scheme="$(config_value "$payload" DOPPEL_URL_SCHEME)"
@@ -1347,8 +1386,11 @@ adopt_bundle() {
     # creation lands under the slug of its current name without anything
     # noticing. A collision is still fatal — two instances cannot share one
     # directory, and both would become unreachable by name.
-    [[ ! -d "$INSTANCES_ROOT/$slug" ]] || \
-        die "an instance directory already exists at $INSTANCES_ROOT/$slug; remove it first"
+    if [[ -d "$INSTANCES_ROOT/$slug" ]]; then
+        is_instance_dir "$INSTANCES_ROOT/$slug" && \
+            die "an instance with slug '$slug' already exists ($INSTANCES_ROOT/$slug); rename '$name' or remove that instance first"
+        die "an earlier create or adopt left an incomplete directory at $INSTANCES_ROOT/$slug; delete it and try again"
+    fi
 
     # Taken from the bundle rather than regenerated from the tint: --icon and
     # --original-icon leave no tint to regenerate from, and even a tinted icon
@@ -1382,6 +1424,9 @@ cmd_adopt() {
         case "$1" in
             --all) all=1; shift ;;
             -*) die "unknown option: $1" ;;
+            # An empty argument used to pass the usage check and then disappear
+            # from the loop, so the command reported success having done nothing.
+            "") die "usage: doppel adopt --all | doppel adopt <app path>..." ;;
             *) targets+=("$1"); shift ;;
         esac
     done

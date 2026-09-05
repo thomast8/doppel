@@ -935,8 +935,13 @@ fabricate_adoptable_bundle() {
     print -r -- "icns" > "$payload/assets/icon.icns"
     print -r -- "png" > "$payload/assets/icon.png"
 }
+# HOME confines the first scan root; /Applications is the second, and a Mac that
+# keeps a managed clone there would otherwise let a real instance into a scratch
+# run. The override exists for exactly this and is stripped from an installed
+# copy along with the rest.
 run_adopt() {
-    OUT="$(HOME="$ADOPT_HOME" DOPPEL_HOME="$ADOPT_STATE" "$CLI" "$@" 2>&1)"
+    OUT="$(HOME="$ADOPT_HOME" DOPPEL_HOME="$ADOPT_STATE" \
+        DOPPEL_ADOPT_SCAN_ROOTS="$ADOPT_APPS" "$CLI" "$@" 2>&1)"
     STATUS=$?
     return 0
 }
@@ -972,6 +977,7 @@ run_adopt list
     && pass "a hostile payload is read, not run, by the scan" \
     || fail "a hostile payload is read, not run, by the scan" "the payload executed during list"
 OUT="$(HOME="$ADOPT_HOME" DOPPEL_HOME="$ADOPT_STATE" \
+    DOPPEL_ADOPT_SCAN_ROOTS="$ADOPT_APPS" \
     DOPPEL_APPCAST_URL="file://${SCRATCH// /%20}/appcast.xml" \
     "$CLI" update check 2>&1)"
 [[ ! -e "$ADOPT_CANARY" ]] \
@@ -989,6 +995,7 @@ check "and --porcelain stays a table of instances only" "$OUT" ""
 
 check_orphan_column() {
     print -r -- "$(HOME="$ADOPT_HOME" DOPPEL_HOME="$ADOPT_STATE" \
+        DOPPEL_ADOPT_SCAN_ROOTS="$ADOPT_APPS" \
         DOPPEL_APPCAST_URL="file://${SCRATCH// /%20}/appcast.xml" \
         "$CLI" update check --porcelain 2>&1 | /usr/bin/awk -F'\t' '{print $9}')"
 }
@@ -1043,6 +1050,43 @@ check "adopting a bundle whose identity is already registered fails" "$STATUS" "
     && pass "and no second entry was left behind" \
     || fail "and no second entry was left behind" "a directory was created"
 /bin/rm -rf "$ADOPT_APPS/Doppel Adopt Copy.app"
+
+print -r -- ""
+print -r -- "a payload that reads differently than it runs is refused"
+# The CLI parses these configs; the engine inside each bundle still sources its
+# own. Any line the parser skips is a line the engine would still run, so a
+# payload could show adopt a harmless URL scheme and hand the launcher the
+# primary's. Taking the last assignment would close the first of these and not
+# the second, which is why the shape itself is what gets refused.
+divergent_payload() {
+    {
+        print -r -- "DOPPEL_DISPLAY_NAME=Doppel\\ Adopt"
+        print -r -- "DOPPEL_BUNDLE_ID=com.example.doppel-adopt"
+        print -r -- "DOPPEL_URL_SCHEME=codex-adopt"
+        printf 'DOPPEL_PROFILE_ROOT=%q\n' "$ADOPT_HOME/Library/Doppel Adopt"
+        printf 'DOPPEL_CODEX_HOME=%q\n' "$ADOPT_HOME/.codex-adopt"
+        print -r -- "DOPPEL_TINT=3B82F6"
+        print -r -- "$1"
+    } > "$ADOPT_PAYLOAD/instance-config.zsh"
+    /bin/rm -rf "$ADOPT_STATE/instances"
+    run_adopt adopt "$ADOPT_APP"
+}
+divergent_payload 'DOPPEL_URL_SCHEME=codex'
+check "a field declared twice is refused" "$STATUS" "1"
+[[ "$OUT" == *"not a plain list of settings"* ]] \
+    && pass "and the refusal is about the shape, not the value" \
+    || fail "and the refusal is about the shape, not the value" "got: $OUT"
+divergent_payload 'if true; then DOPPEL_URL_SCHEME=codex; fi'
+check "an assignment the parser would skip is refused too" "$STATUS" "1"
+divergent_payload 'DOPPEL_URL_SCHEME=codex-adopt'
+check "and a duplicate that agrees with itself is still refused" "$STATUS" "1"
+fabricate_adoptable_bundle
+run_adopt adopt "$ADOPT_APP"
+check "while the shape write_config produces is adopted" "$STATUS" "0"
+/bin/rm -rf "$ADOPT_STATE/instances"
+
+run_adopt adopt ""
+check "an empty app path is a usage error, not a silent success" "$STATUS" "1"
 
 print -r -- ""
 print -r -- "adoption re-validates a payload it did not just write"
@@ -1100,6 +1144,7 @@ check "but the readable one was adopted anyway" \
 # installed clones unmentioned.
 fabricate_adoptable_bundle
 OUT="$(HOME="$ADOPT_HOME" DOPPEL_HOME="$ADOPT_STATE" \
+    DOPPEL_ADOPT_SCAN_ROOTS="$ADOPT_APPS" \
     DOPPEL_APPCAST_URL="file://${SCRATCH// /%20}/appcast.xml" \
     "$CLI" update apply "$DRIFT_BUILD" 2>&1)"
 [[ "$OUT" == *"no installed managed instances"* && "$OUT" == *"doppel adopt --all"* ]] \
