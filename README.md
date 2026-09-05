@@ -75,6 +75,18 @@ running. APFS copy-on-write clones avoid copying the unchanged parts of the
 download changes nothing; a failed install restores the previous primary; and a
 partial rebuild keeps the restart manifest and reports the exact instance.
 
+The profile assigned the built-in browser is running through the untouched
+official app rather than through a clone, so the restart manifest records it as
+that profile rather than as the bare primary. Doppel quits it with everything
+else and reopens it the way it was started, on the same Electron root and
+`CODEX_HOME` and with the vendor's own updater still disabled, after the clones
+are back. It still refuses before taking the lock or closing anything when the
+official window belongs to a managed profile other than the assigned one, when
+it belongs to a profile Doppel does not manage at all, or when more than one
+official process is open. Those are shapes it cannot put back exactly as it
+found them, and the refusal names the window to quit. A reconcile never closes
+the official window, so it never asks.
+
 ## Usage
 
 The menu bar app covers the everyday flows; **New Instance…** asks for a name

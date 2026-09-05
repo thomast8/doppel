@@ -525,7 +525,7 @@ final class InstanceStore: ObservableObject {
 
             Doppel will close every running managed instance, update the primary ChatGPT app, rebuild and verify all managed instances, then reopen only the ones you were using.
 
-            If a profile is using Built-in Browser, quit that official ChatGPT window first. Doppel will otherwise stop before changing any app.
+            A profile using Built-in Browser is closed and reopened through the official app on that same profile. If an official ChatGPT window is open on some other profile, or more than one is open, Doppel stops before changing any app.
 
             Active local chats will be interrupted. If a managed app asks you to confirm quitting, choose Quit so Doppel can continue safely.
             """

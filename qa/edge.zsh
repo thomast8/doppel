@@ -186,6 +186,65 @@ check "no official process at all reads as none" \
     "$(snapshot_fields none)" "none|||"
 
 print -r -- ""
+print -r -- "an aborted update puts the built-in browser's own engine back"
+# The restart manifest used to hold app paths only, so anything official came
+# back as the bare primary. The profile assigned the built-in browser is not
+# that shape: reopening it bare would drop CODEX_HOME and hand the profile back
+# to the vendor's own Sparkle updater. The slug is read off disk, so it gets
+# the same charset check the engine slot gets, for the same reason. Only the
+# manifest replay is driven here; producing the real thing needs a live
+# official process.
+abort_replay() {
+    ABORT_CLI="$CLI" ABORT_MANIFEST="$1" ABORT_PIDS="$2" ABORT_ROOT="$3" \
+    ABORT_LOG="$4" /bin/zsh -c '
+        body="$(/usr/bin/sed -n "/^abort_update_cleanup() {/,/^}/p" "$ABORT_CLI")"
+        # Without this the extraction failing reads as a relaunch that did not
+        # happen rather than as a renamed or reindented function.
+        [[ -n "$body" ]] || {
+            print -r -- "abort_update_cleanup not found in $ABORT_CLI"
+            exit 0
+        }
+        eval "$body"
+        INSTANCES_ROOT="$ABORT_ROOT"
+        PRIMARY_APP="$ABORT_ROOT/absent/ChatGPT.app"
+        UPDATE_ABORT_MANIFEST="$ABORT_MANIFEST"
+        is_instance_dir() { [[ -r "$1/instance-config.zsh" ]] }
+        vendor_main_pids() { [[ -z "$ABORT_PIDS" ]] || print -r -- "$ABORT_PIDS" }
+        launch_vendor_instance() { print -r -- "$1" >> "$ABORT_LOG" }
+        launch_clone_instance() { : }
+        instance_dir_for_app_path() { return 1 }
+        release_update_lock() { : }
+        abort_update_cleanup
+    '
+}
+ABORT_ROOT="$SCRATCH/abort/instances"
+ABORT_LOG="$SCRATCH/abort/launched"
+ABORT_MANIFEST="$SCRATCH/abort/manifest"
+/bin/mkdir -p "$ABORT_ROOT/personal" "$SCRATCH/abort/escaped"
+: > "$ABORT_ROOT/personal/instance-config.zsh"
+: > "$SCRATCH/abort/escaped/instance-config.zsh"
+
+: > "$ABORT_LOG"
+printf 'vendor-profile\tpersonal\n' > "$ABORT_MANIFEST"
+abort_replay "$ABORT_MANIFEST" "" "$ABORT_ROOT" "$ABORT_LOG"
+check "the assigned profile's official engine is relaunched" \
+    "$(/bin/cat "$ABORT_LOG")" "$ABORT_ROOT/personal"
+
+: > "$ABORT_LOG"
+abort_replay "$ABORT_MANIFEST" "701" "$ABORT_ROOT" "$ABORT_LOG"
+check "but not once something official has already come back" \
+    "$(/bin/cat "$ABORT_LOG")" ""
+
+# A readable config outside the instances root is all a traversing slug needs:
+# launch_vendor_instance reads its display name first, and reading a config
+# means sourcing it.
+: > "$ABORT_LOG"
+printf 'vendor-profile\t../escaped\n' > "$ABORT_MANIFEST"
+abort_replay "$ABORT_MANIFEST" "" "$ABORT_ROOT" "$ABORT_LOG"
+check "and a slug that climbs out of the instances root is refused" \
+    "$(/bin/cat "$ABORT_LOG")" ""
+
+print -r -- ""
 print -r -- "quitting an instance takes its helper processes with it"
 # Electron's crashpad handlers and the modifier monitor live under Frameworks
 # and Resources, not Contents/MacOS, so the graceful quit never covered them.

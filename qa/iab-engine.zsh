@@ -301,4 +301,58 @@ run_cli browser release >/dev/null
 [[ ! -e "$FIXTURE_STATE/state/iab-engine-slot" ]] || \
     fail "release should remove an invalid engine-slot file"
 
+# What `update apply` decides to do with the official ChatGPT app. Doppel can
+# always quit that app; the question is which shape it has to be put back in,
+# and the only honest answer for a shape the restart manifest cannot rebuild is
+# to refuse before anything is downloaded or closed. Driven directly, because
+# reaching these branches for real needs a live official process sitting on a
+# managed profile.
+plan() { run_cli update __restart-plan "$1" "$2" }
+
+expect "$(plan "" "none")" "none" \
+    "nothing official running is nothing to restart"
+expect "$(plan "personal" "none")" "none" \
+    "an assignment on its own is not a reason to restart anything"
+expect "$(plan "" $'unmanaged\t\tChatGPT\t701')" "bare" \
+    "an unassigned official window is reopened as itself"
+expect "$(plan "" $'managed\tpersonal\tChatGPT Personal QA\t701')" "bare" \
+    "without an assignment the official app is only ever itself"
+expect "$(plan "personal" $'managed\tpersonal\tChatGPT Personal QA\t701')" \
+    $'vendor-profile\tpersonal' \
+    "the assigned profile's own official window is reopened through its engine"
+
+PLAN_MISMATCH="$(plan "personal" $'managed\twork\tChatGPT Work QA\t701')"
+expect "${PLAN_MISMATCH%%$'\t'*}" "refuse" \
+    "an official window on a different managed profile cannot be put back"
+[[ "$PLAN_MISMATCH" == *"'ChatGPT Personal QA'"* && "$PLAN_MISMATCH" == *"'ChatGPT Work QA'"* ]] || \
+    fail "the mismatch refusal should name the assigned profile and the running one"
+
+expect "$(plan "" $'ambiguous\t\tOne, Two\t701 702')" "bare" \
+    "an unassigned slot does not care how many official windows are open"
+
+# Each refusal has to be distinguishable from the others, or merging two of
+# them into one arm would go unnoticed.
+PLAN_AMBIGUOUS="$(plan "personal" $'ambiguous\t\tChatGPT Personal QA, ChatGPT Work QA\t701 702')"
+expect "${PLAN_AMBIGUOUS%%$'\t'*}" "refuse" \
+    "more than one official process cannot be put back"
+[[ "$PLAN_AMBIGUOUS" == *"more than one official ChatGPT process"* && \
+   "$PLAN_AMBIGUOUS" == *"ChatGPT Work QA"* && "$PLAN_AMBIGUOUS" == *"Quit those windows"* ]] || \
+    fail "the ambiguous refusal should count the windows and name them"
+
+PLAN_UNMANAGED="$(plan "personal" $'unmanaged\t\tChatGPT\t701')"
+expect "${PLAN_UNMANAGED%%$'\t'*}" "refuse" \
+    "an official window on an unmanaged profile cannot be put back"
+[[ "$PLAN_UNMANAGED" == *"profile Doppel does not manage"* ]] || \
+    fail "the unmanaged refusal should say the profile is not Doppel's"
+[[ "$PLAN_UNMANAGED" == *"no apps were changed"* ]] || \
+    fail "a refusal should say that nothing was touched"
+
+# The stray-argument form used to fall through to reading live state, which in
+# a QA script would silently check the real machine instead of the fixture.
+if stray_output="$(run_cli update __restart-plan personal 2>&1)"; then
+    fail "a one-argument restart plan should not be accepted"
+fi
+[[ "$stray_output" == *"usage: doppel update"* ]] || \
+    fail "a malformed restart plan should print the update usage"
+
 print -r -- "iab-engine QA: passed"
