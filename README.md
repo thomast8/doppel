@@ -139,14 +139,18 @@ refused, because one of the two would then be unreachable.
 
 `remove` never erases anything: the app bundle goes to the Trash, the instance
 definition is preserved under `state/Removed/` so the removal can be undone, and
-account data (profile and `CODEX_HOME`) is left in place unless `--purge-data` is
-given — and even then it is moved to the Trash, not deleted.
+account data (profile, `CODEX_HOME`, and the Electron cache that sits beside
+the profile under `~/Library/Caches`) is left in place unless `--purge-data` is
+given — and even then it is moved to the Trash, not deleted. The cache is
+derived from the profile path rather than recorded, so an instance whose profile
+lives outside `Application Support` simply has none to move.
 
 `--purge-data` also refuses to touch anything that is not clearly the
 instance's own: a home directory or one of its standard folders, a path outside
 the home directory, data another instance is using, and the directories the
-primary app and the Codex CLI use by default. An instance can legitimately be
-pointed at those to adopt an existing account, which is exactly why removing it
+primary app and the Codex CLI use by default, including their caches. An
+instance can legitimately be pointed at those to adopt an existing account,
+which is exactly why removing it
 must not take them with it. The refusal happens before anything is moved, so a
 refused purge leaves the instance intact; remove it without the flag and delete
 what you actually want gone yourself.

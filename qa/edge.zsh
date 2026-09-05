@@ -186,6 +186,136 @@ check "no official process at all reads as none" \
     "$(snapshot_fields none)" "none|||"
 
 print -r -- ""
+print -r -- "quitting an instance takes its helper processes with it"
+# Electron's crashpad handlers and the modifier monitor live under Frameworks
+# and Resources, not Contents/MacOS, so the graceful quit never covered them.
+# They outlived every remove and rebuild, and moving the bundle afterwards left
+# them pointing at a path that no longer existed.
+HELPER_APP="$SCRATCH/Helpers Live.app"
+/bin/mkdir -p "$HELPER_APP/Contents/MacOS" \
+    "$HELPER_APP/Contents/Frameworks/Codex Framework.framework/Helpers" \
+    "$HELPER_APP/Contents/Resources/native"
+/bin/ln -sf /bin/sleep "$HELPER_APP/Contents/Frameworks/Codex Framework.framework/Helpers/browser_crashpad_handler"
+/bin/ln -sf /bin/sleep "$HELPER_APP/Contents/Resources/native/bare-modifier-monitor"
+/bin/mkdir -p "$HELPER_APP/Contents/Frameworks/Sparkle.framework/Versions/B" \
+    "$HELPER_APP/Contents/Resources/cua_node/bin"
+/bin/ln -sf /bin/sleep "$HELPER_APP/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate"
+/bin/ln -sf /bin/sleep "$HELPER_APP/Contents/Resources/cua_node/bin/node"
+"$HELPER_APP/Contents/Frameworks/Codex Framework.framework/Helpers/browser_crashpad_handler" 300 &
+CRASHPAD_PID=$!
+"$HELPER_APP/Contents/Resources/native/bare-modifier-monitor" 300 &
+MONITOR_PID=$!
+# Sparkle's updater is detached on purpose so it can outlive the app it is
+# updating, and the Computer Use node server sits elsewhere under Resources.
+# Sweeping the whole bundle took both, which on the stock ChatGPT app threw
+# away a staged vendor update for nothing.
+"$HELPER_APP/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate" 300 &
+SPARKLE_PID=$!
+"$HELPER_APP/Contents/Resources/cua_node/bin/node" 300 &
+CUA_PID=$!
+/bin/sleep 1
+# The app itself is already gone, which is precisely the state that stranded
+# them: quit_instance saw nothing under Contents/MacOS and returned happy.
+HELPERS_BEFORE=0
+/bin/kill -0 "$CRASHPAD_PID" 2>/dev/null && (( HELPERS_BEFORE += 1 ))
+/bin/kill -0 "$MONITOR_PID" 2>/dev/null && (( HELPERS_BEFORE += 1 ))
+check "both helpers are running to begin with" "$HELPERS_BEFORE" "2"
+REAP_FUNCS='/^reapable_bundle_path() {/,/^}/p;/^bundle_pids() {/,/^}/p'
+REAP_FUNCS="$REAP_FUNCS;/^bundle_app_is_running() {/,/^}/p"
+REAP_FUNCS="$REAP_FUNCS;/^reap_bundle_processes() {/,/^}/p;/^quit_instance() {/,/^}/p"
+SNAPSHOT_CLI="$CLI" HELPER_APP="$HELPER_APP" REAP_FUNCS="$REAP_FUNCS" /bin/zsh -c '
+    body="$(/usr/bin/sed -n "$REAP_FUNCS" "$SNAPSHOT_CLI")"
+    [[ -n "$body" ]] || { print -r -- "quit_instance not found in $SNAPSHOT_CLI"; exit 1 }
+    die() { print -u2 -r -- "die: $*"; exit 1 }
+    eval "$body"
+    quit_instance "$HELPER_APP" "com.example.helpers-live" "Helpers Live"
+' >/dev/null 2>&1
+HELPERS_AFTER=0
+/bin/kill -0 "$CRASHPAD_PID" 2>/dev/null && (( HELPERS_AFTER += 1 ))
+/bin/kill -0 "$MONITOR_PID" 2>/dev/null && (( HELPERS_AFTER += 1 ))
+check "and none survive the quit" "$HELPERS_AFTER" "0"
+SURVIVORS=0
+/bin/kill -0 "$SPARKLE_PID" 2>/dev/null && (( SURVIVORS += 1 ))
+/bin/kill -0 "$CUA_PID" 2>/dev/null && (( SURVIVORS += 1 ))
+check "but the detached updater and the node server are left alone" "$SURVIVORS" "2"
+/bin/kill -9 "$CRASHPAD_PID" "$MONITOR_PID" "$SPARKLE_PID" "$CUA_PID" 2>/dev/null || true
+
+# A bundle path that is empty or not an app would turn the prefix match into
+# "/", which is every process on the machine. The sweep has to refuse rather
+# than signal anything at all.
+/bin/sleep 300 &
+BYSTANDER_PID=$!
+REAP_REFUSED="$(SNAPSHOT_CLI="$CLI" REAP_FUNCS="$REAP_FUNCS" /bin/zsh -c '
+    set -u
+    body="$(/usr/bin/sed -n "$REAP_FUNCS" "$SNAPSHOT_CLI")"
+    [[ -n "$body" ]] || { print -r -- "missing"; exit 0 }
+    eval "$body"
+    # Anything printed to stderr here means the sweep errored rather than
+    # refusing, which would make this check pass for the wrong reason.
+    for bad in "" "/" "/Users" "relative.app" "/tmp/../.app"; do
+        reap_bundle_processes "$bad" 2>&1 >/dev/null | /usr/bin/grep -q . && \
+            { print -r -- "errored on [$bad]"; exit 0 }
+    done
+    print -r -- "refused"
+')"
+/bin/sleep 1
+check "a sweep of a non-bundle path signals nothing" \
+    "$([[ "$REAP_REFUSED" == "refused" ]] && /bin/kill -0 "$BYSTANDER_PID" 2>/dev/null && print safe || print unsafe)" \
+    "safe"
+/bin/kill -9 "$BYSTANDER_PID" 2>/dev/null || true
+
+# The running check and the sweep have to agree about what "running" means.
+# `pgrep -f` reads its argument as a regular expression, so an install root
+# holding regex punctuation made it miss a live app. That mattered once the
+# sweep existed: the graceful quit was skipped and the app was signalled
+# instead of asked, taking the dialog-open refusal with it.
+META_APP="$SCRATCH/Applications (Work)/Meta+Bundle [1].app"
+/bin/mkdir -p "$META_APP/Contents/MacOS"
+/bin/ln -sf /bin/sleep "$META_APP/Contents/MacOS/ChatGPT"
+"$META_APP/Contents/MacOS/ChatGPT" 300 &
+META_PID=$!
+/bin/sleep 1
+check "pgrep -f misses a bundle path holding regex punctuation" \
+    "$(/usr/bin/pgrep -f "$META_APP/Contents/MacOS/" >/dev/null 2>&1 && print found || print missed)" \
+    "missed"
+check "the literal matcher finds it" \
+    "$(SNAPSHOT_CLI="$CLI" META_APP="$META_APP" REAP_FUNCS="$REAP_FUNCS" /bin/zsh -c '
+        eval "$(/usr/bin/sed -n "$REAP_FUNCS" "$SNAPSHOT_CLI")"
+        bundle_app_is_running "$META_APP" && print found || print missed')" \
+    "found"
+/bin/kill -9 "$META_PID" 2>/dev/null || true
+
+print -r -- ""
+print -r -- "an instance's cache is purged with the rest of its data"
+cache_for() {
+    SNAPSHOT_CLI="$CLI" PROFILE_ROOT="$1" /bin/zsh -c '
+        body="$(/usr/bin/sed -n "/^instance_cache_path() {/,/^}/p" "$SNAPSHOT_CLI")"
+        [[ -n "$body" ]] || { print -r -- "instance_cache_path not found in $SNAPSHOT_CLI"; exit 1 }
+        eval "$body"
+        instance_cache_path "$PROFILE_ROOT"
+    '
+}
+check "a profile under Application Support has a matching cache" \
+    "$(cache_for "$HOME/Library/Application Support/Doppel QA 1")" \
+    "$HOME/Library/Caches/Doppel QA 1"
+check "a nested profile keeps its shape" \
+    "$(cache_for "$HOME/Library/Application Support/Vendor/Nested")" \
+    "$HOME/Library/Caches/Vendor/Nested"
+check "a profile kept elsewhere has no separate cache" \
+    "$(cache_for "$SCRATCH/somewhere-else")" ""
+# The stock app's own cache has to be as untouchable as its profile, or an
+# instance pointed at the primary's profile root would purge the primary's
+# cache along with it. Veridue is pointed exactly there on this machine.
+PRIMARY_CACHE_GUARDED="$(SNAPSHOT_CLI="$CLI" PRIMARY_APP="$PRIMARY" /bin/zsh -c '
+    body="$(/usr/bin/sed -n "/^primary_data_paths() {/,/^}/p" "$SNAPSHOT_CLI")"
+    [[ -n "$body" ]] || { print -r -- "primary_data_paths not found in $SNAPSHOT_CLI"; exit 1 }
+    eval "$body"
+    primary_data_paths | /usr/bin/grep -c "Library/Caches/" || true
+')"
+check "the primary's cache is guarded, not just its profile" \
+    "$([[ "${PRIMARY_CACHE_GUARDED:-0}" -ge 1 ]] && print yes || print no)" "yes"
+
+print -r -- ""
 print -r -- "a name resolves to the instance that carries it, not to the one whose"
 print -r -- "directory happens to be spelled the same way"
 # Two definitions whose names differ but whose identifiers would match. The

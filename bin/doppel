@@ -280,27 +280,90 @@ assemble_instance() {
 # Asks a running instance to quit, twice across 40 seconds. Electron apps can
 # take a while to wind down, especially one that has just been relaunched, and
 # a single impatient attempt turns an ordinary edit or removal into a failure.
+# Everything still running out of a bundle, stopped. Quitting the app is not
+# enough: Electron's crashpad handlers and the modifier monitor live under
+# Frameworks and Resources rather than Contents/MacOS, so they outlive the quit
+# and then outlive the bundle itself, because remove and rebuild move it out
+# from under them. Prefix matching against ps rather than `pgrep -f`, because
+# these paths carry spaces and a regex is the wrong tool right before a kill.
+# True when a path is unmistakably one app bundle. Everything below builds a
+# match out of it, and an empty or malformed value would widen that match to
+# "/", which is every process on the machine.
+reapable_bundle_path() {
+    [[ "${1:-}" == /*.app && "${1:-}" != */../* ]]
+}
+
+# Processes running out of a bundle, matched as a literal path prefix. This is
+# deliberately not `pgrep -f`, which takes a regular expression: an install root
+# holding ( ) [ ] + * ? | { } made pgrep miss, and the caller then believed a
+# running app was not running. String comparison cannot disagree with itself.
+bundle_pids() {
+    local app="$1" suffix="${2:-}" pid command
+    reapable_bundle_path "$app" || return 0
+    while read -r pid command; do
+        [[ "$pid" == <1-> ]] || continue
+        [[ "$command" == "$app/$suffix"* ]] || continue
+        print -r -- "$pid"
+    done < <(/bin/ps -axo pid=,command= 2>/dev/null)
+    return 0
+}
+
+bundle_app_is_running() {
+    [[ -n "$(bundle_pids "$1" "Contents/MacOS/")" ]]
+}
+
+# Only the two subtrees that actually strand processes: Electron's crashpad
+# handlers and renderers, which sit below a framework's Helpers directory, and
+# the modifier monitor under Resources. Sweeping the whole bundle instead would
+# also take Sparkle's detached updater, which exists precisely to outlive the
+# app it is updating, along with the app-server and Computer Use node processes
+# that live elsewhere under Resources.
+reap_bundle_processes() {
+    local app="$1" signal pid command
+    local -a strays
+    reapable_bundle_path "$app" || return 0
+    for signal in TERM KILL; do
+        strays=()
+        while read -r pid command; do
+            [[ "$pid" == <1-> ]] || continue
+            [[ "$command" == "$app/Contents/Frameworks/"*"/Helpers/"* || \
+               "$command" == "$app/Contents/Resources/native/"* ]] || continue
+            [[ "$command" != "$app/Contents/Frameworks/Sparkle.framework/"* ]] || continue
+            strays+=("$pid")
+        done < <(/bin/ps -axo pid=,command= 2>/dev/null)
+        (( ${#strays} > 0 )) || return 0
+        /bin/kill -"$signal" ${strays} 2>/dev/null || true
+        [[ "$signal" == TERM ]] || break
+        /bin/sleep 2
+    done
+    return 0
+}
+
 quit_instance() {
     local app="$1" bundle_id="$2" label="$3"
-    /usr/bin/pgrep -f "${app}/Contents/MacOS/" >/dev/null 2>&1 || return 0
-
-    local quit_error waited attempt
-    for attempt in 1 2; do
-        quit_error="$(/usr/bin/osascript -e "tell application id \"$bundle_id\" to quit" 2>&1)" || true
-        waited=0
-        while (( waited < 20 )) && /usr/bin/pgrep -f "${app}/Contents/MacOS/" >/dev/null 2>&1; do
-            /bin/sleep 1
-            waited=$(( waited + 1 ))
+    # The app may already be gone while its helpers are not, which is exactly
+    # the state that used to strand them, so the sweep below runs either way.
+    if bundle_app_is_running "$app"; then
+        local quit_error waited attempt
+        for attempt in 1 2; do
+            quit_error="$(/usr/bin/osascript -e "tell application id \"$bundle_id\" to quit" 2>&1)" || true
+            waited=0
+            while (( waited < 20 )) && bundle_app_is_running "$app"; do
+                /bin/sleep 1
+                waited=$(( waited + 1 ))
+            done
+            bundle_app_is_running "$app" || break
         done
-        /usr/bin/pgrep -f "${app}/Contents/MacOS/" >/dev/null 2>&1 || return 0
-    done
-
-    # -128 is "user cancelled": the app refused, which normally means a dialog
-    # is waiting for an answer.
-    if [[ "$quit_error" == *-128* ]]; then
-        die "'$label' would not quit — it has a dialog open (a keychain prompt, for example). Answer or dismiss it, then try again."
+        if bundle_app_is_running "$app"; then
+            # -128 is "user cancelled": the app refused, which normally means a
+            # dialog is waiting for an answer.
+            if [[ "$quit_error" == *-128* ]]; then
+                die "'$label' would not quit — it has a dialog open (a keychain prompt, for example). Answer or dismiss it, then try again."
+            fi
+            die "'$label' would not quit after 40 seconds. Quit it yourself, then try again."
+        fi
     fi
-    die "'$label' would not quit after 40 seconds. Quit it yourself, then try again."
+    reap_bundle_processes "$app"
 }
 
 # Replacing electron.icns is not enough on its own: Finder and the Dock keep
@@ -371,11 +434,28 @@ instance_dir_for() {
 # move to the Trash.
 primary_data_paths() {
     print -r -- "$HOME/Library/Application Support/Codex"
+    # The primary keeps a cache beside its profile, and an instance can legally
+    # be pointed at the primary's profile root. Guarding only the profile would
+    # let a purge of that instance take the primary's cache with it.
+    print -r -- "$HOME/Library/Caches/Codex"
     print -r -- "$HOME/.codex"
     local product
     product="$(/usr/bin/plutil -extract CFBundleName raw "$PRIMARY_APP/Contents/Info.plist" 2>/dev/null)" || product=""
-    [[ -n "$product" ]] && print -r -- "$HOME/Library/Application Support/$product"
+    if [[ -n "$product" ]]; then
+        print -r -- "$HOME/Library/Application Support/$product"
+        print -r -- "$HOME/Library/Caches/$product"
+    fi
     return 0
+}
+
+# Where an instance's Electron cache lives, or nothing when its profile is kept
+# somewhere Chromium would put the cache inside the profile instead. Nothing
+# records this path, so a purge that moved only the profile and CODEX_HOME left
+# the cache behind permanently.
+instance_cache_path() {
+    local profile_root="${1:-}" support="$HOME/Library/Application Support/"
+    [[ -n "$profile_root" && "$profile_root" == "$support"* ]] || return 0
+    print -r -- "$HOME/Library/Caches/${profile_root#$support}"
 }
 
 # True when a path is something --purge-data must refuse to touch: a home
@@ -1377,12 +1457,13 @@ cmd_remove() {
     done
     [[ -n "$target" ]] || die "usage: doppel remove <name> [--purge-data]"
 
-    local dir app bundle_id profile_root codex_home was_iab=0
+    local dir app bundle_id profile_root codex_home cache_root was_iab=0
     dir="$(instance_dir_for "$target")"
     app="$(app_path_for "$dir")"
     bundle_id="$(config_value "$dir" DOPPEL_BUNDLE_ID)"
     profile_root="$(config_value "$dir" DOPPEL_PROFILE_ROOT)"
     codex_home="$(config_value "$dir" DOPPEL_CODEX_HOME)"
+    cache_root="$(instance_cache_path "$profile_root")"
     if any_chatgpt_process_uses_profile "$dir" && ! clone_instance_is_running "$dir"; then
         die "'$target' is using another ChatGPT engine. Quit that window before removing the profile."
     fi
@@ -1398,7 +1479,7 @@ cmd_remove() {
     # refusal costs nothing and the answer is never "half of it went".
     if (( purge )); then
         local data
-        for data in "$profile_root" "$codex_home"; do
+        for data in "$profile_root" "$codex_home" "$cache_root"; do
             [[ -n "$data" ]] || continue
             ! protected_data_path "$data" || \
                 die "refusing to purge $data: it is a shared or system location, not a directory this instance owns. Remove '$target' without --purge-data, then delete anything you actually want gone yourself."
@@ -1435,7 +1516,7 @@ cmd_remove() {
     print -r -- "instance definition kept at: $removed_root/${dir:t}.$stamp"
 
     if (( purge )); then
-        for data in "$profile_root" "$codex_home"; do
+        for data in "$profile_root" "$codex_home" "$cache_root"; do
             [[ -n "$data" && -d "$data" ]] || continue
             /bin/mv "$data" "$trash/${data:t}.$stamp" || die "moving $data to the Trash failed"
             print -r -- "moved to Trash: ${data:t}"
@@ -1444,6 +1525,7 @@ cmd_remove() {
         print -r -- "account data left in place (pass --purge-data to move it to the Trash):"
         [[ -n "$profile_root" ]] && print -r -- "  $profile_root"
         [[ -n "$codex_home" ]] && print -r -- "  $codex_home"
+        [[ -n "$cache_root" && -d "$cache_root" ]] && print -r -- "  $cache_root"
     fi
 }
 
