@@ -912,5 +912,282 @@ check "the readable one still moved" \
 set_codex_home "$CLAIM_DIR" "$CLAIM_SAVED_HOME"
 
 print -r -- ""
+print -r -- "an installed instance whose registry directory is gone is still adoptable"
+# The registry is a record of an instance, not the only copy of one: the bundle
+# carries the config and icon its own engine reads at launch. Losing the
+# directory used to make every inventory-driven command report an empty Mac,
+# including the update the menu app had just offered.
+# :a because that is what the CLI records: adopt normalises the path it is
+# given so install-root is something app_path_for can rebuild from, and TMPDIR
+# on macOS ends in a slash.
+readonly ADOPT_HOME="${SCRATCH:a}/adopt-user"
+readonly ADOPT_STATE="$SCRATCH/adopt-state"
+readonly ADOPT_APPS="$ADOPT_HOME/Applications"
+readonly ADOPT_APP="$ADOPT_APPS/Doppel Adopt.app"
+readonly ADOPT_PAYLOAD="$ADOPT_APP/Contents/Resources/Doppel"
+fabricate_adoptable_bundle() {
+    local name="${1:-Doppel Adopt}" id="${2:-com.example.doppel-adopt}" scheme="${3:-codex-adopt}"
+    local app="$ADOPT_APPS/$name.app" payload
+    payload="$app/Contents/Resources/Doppel"
+    /bin/mkdir -p "$payload/assets" "$app/Contents/MacOS"
+    write_config_file "$payload" "$name" "$id" "$scheme" \
+        "$ADOPT_HOME/Library/Application Support/$name" "$ADOPT_HOME/.codex-adopt" "3B82F6"
+    print -r -- "icns" > "$payload/assets/icon.icns"
+    print -r -- "png" > "$payload/assets/icon.png"
+}
+# HOME confines the first scan root; /Applications is the second, and a Mac that
+# keeps a managed clone there would otherwise let a real instance into a scratch
+# run. The override exists for exactly this and is stripped from an installed
+# copy along with the rest.
+run_adopt() {
+    OUT="$(HOME="$ADOPT_HOME" DOPPEL_HOME="$ADOPT_STATE" \
+        DOPPEL_ADOPT_SCAN_ROOTS="$ADOPT_APPS" "$CLI" "$@" 2>&1)"
+    STATUS=$?
+    return 0
+}
+/bin/mkdir -p "$ADOPT_APPS"
+fabricate_adoptable_bundle
+
+run_adopt list
+[[ "$OUT" == *"no instances"* && "$OUT" == *"not registered with Doppel"* && "$OUT" == *"$ADOPT_APP"* ]] \
+    && pass "an empty registry names the managed app it cannot see" \
+    || fail "an empty registry names the managed app it cannot see" "got: $OUT"
+
+# A payload is data. Reading these configs by sourcing them was safe only while
+# every one of them lived in a directory Doppel had written; the scan reads them
+# out of app bundles, which anything running as the user can write. A planted
+# bundle's config used to run during `list` — and during the update check the
+# menu app makes unattended every six hours — before a single field had been
+# looked at, which is to say before any of the validation below.
+readonly ADOPT_CANARY="$SCRATCH/adopt-canary"
+# Both shapes: a command on its own line, and a substitution standing where a
+# value belongs. The value comes first, because the parser stops at the first
+# line naming the field it was asked for.
+{
+    printf 'DOPPEL_DISPLAY_NAME=$(/usr/bin/touch %q)\n' "$ADOPT_CANARY"
+    print -r -- "DOPPEL_BUNDLE_ID=com.example.doppel-hostile"
+    print -r -- "DOPPEL_URL_SCHEME=codex-hostile"
+    printf 'DOPPEL_PROFILE_ROOT=%q\n' "$ADOPT_HOME/Library/hostile"
+    printf 'DOPPEL_CODEX_HOME=%q\n' "$ADOPT_HOME/.codex-hostile"
+    print -r -- "DOPPEL_TINT=3B82F6"
+    printf '/usr/bin/touch %q\n' "$ADOPT_CANARY"
+} > "$ADOPT_PAYLOAD/instance-config.zsh"
+run_adopt list
+[[ ! -e "$ADOPT_CANARY" ]] \
+    && pass "a hostile payload is read, not run, by the scan" \
+    || fail "a hostile payload is read, not run, by the scan" "the payload executed during list"
+OUT="$(HOME="$ADOPT_HOME" DOPPEL_HOME="$ADOPT_STATE" \
+    DOPPEL_ADOPT_SCAN_ROOTS="$ADOPT_APPS" \
+    DOPPEL_APPCAST_URL="file://${SCRATCH// /%20}/appcast.xml" \
+    "$CLI" update check 2>&1)"
+[[ ! -e "$ADOPT_CANARY" ]] \
+    && pass "nor by the update check the menu app runs unattended" \
+    || fail "nor by the update check the menu app runs unattended" "the payload executed during update check"
+run_adopt adopt --all
+[[ ! -e "$ADOPT_CANARY" ]] \
+    && pass "nor by adoption itself" \
+    || fail "nor by adoption itself" "the payload executed during adopt"
+check "and the substitution is refused as the text it is" "$STATUS" "1"
+fabricate_adoptable_bundle
+
+run_adopt list --porcelain
+check "and --porcelain stays a table of instances only" "$OUT" ""
+
+check_orphan_column() {
+    print -r -- "$(HOME="$ADOPT_HOME" DOPPEL_HOME="$ADOPT_STATE" \
+        DOPPEL_ADOPT_SCAN_ROOTS="$ADOPT_APPS" \
+        DOPPEL_APPCAST_URL="file://${SCRATCH// /%20}/appcast.xml" \
+        "$CLI" update check --porcelain 2>&1 | /usr/bin/awk -F'\t' '{print $9}')"
+}
+check "the unregistered count reaches the ninth porcelain column" \
+    "$(check_orphan_column)" "1"
+
+run_adopt adopt --all
+check "adoption succeeds" "$STATUS" "0"
+[[ "$OUT" == *"adopted: Doppel Adopt"* ]] && pass "and says what it adopted" \
+    || fail "and says what it adopted" "got: $OUT"
+check "the instance is registered under the slug of its current name" \
+    "$(config_field "$ADOPT_STATE/instances/doppel-adopt" DOPPEL_BUNDLE_ID)" \
+    "com.example.doppel-adopt"
+check "the recorded install root is where the bundle actually is" \
+    "$(cat "$ADOPT_STATE/instances/doppel-adopt/install-root" 2>/dev/null)" "$ADOPT_APPS"
+run_adopt list --porcelain
+check "and the instance resolves back to its installed app" \
+    "$(print -r -- "$OUT" | /usr/bin/awk -F'\t' '{print $3 FS $4}')" \
+    "$ADOPT_APP"$'\t'"installed"
+# Copied out of the bundle rather than regenerated: --icon and --original-icon
+# leave no tint to regenerate from, and a tinted icon would be re-derived from
+# whatever artwork the primary carries today.
+check "the icon comes from the bundle" \
+    "$(cat "$ADOPT_STATE/instances/doppel-adopt/assets/icon.icns" 2>/dev/null)" "icns"
+
+run_adopt adopt --all
+[[ "$OUT" == *"no unregistered managed apps found"* ]] \
+    && pass "a second sweep finds nothing left to adopt" \
+    || fail "a second sweep finds nothing left to adopt" "got: $OUT"
+
+run_adopt list
+[[ "$OUT" != *"not registered with Doppel"* ]] \
+    && pass "and the warning is gone once the app is managed" \
+    || fail "and the warning is gone once the app is managed" "got: $OUT"
+check "and the ninth porcelain column goes back to zero" \
+    "$(check_orphan_column)" "0"
+run_adopt list --porcelain
+check "while --porcelain still describes only the instance, in six columns" \
+    "$(print -r -- "$OUT" | /usr/bin/awk -F'\t' '{print NF}')" "6"
+
+# A copy of a managed bundle is not a second instance: both would claim one
+# bundle id, which is what Launch Services and the launcher's own slug lookup
+# resolve by. The same check keeps a bundle that was moved from being adopted
+# alongside the entry that already describes it.
+fabricate_adoptable_bundle "Doppel Adopt Copy" "com.example.doppel-adopt" "codex-adopt-copy"
+run_adopt adopt "$ADOPT_APPS/Doppel Adopt Copy.app"
+check "adopting a bundle whose identity is already registered fails" "$STATUS" "1"
+[[ "$OUT" == *"bundle id 'com.example.doppel-adopt' is already used by instance"* ]] \
+    && pass "and it names the instance that already claims it" \
+    || fail "and it names the instance that already claims it" "got: $OUT"
+[[ ! -d "$ADOPT_STATE/instances/doppel-adopt-copy" ]] \
+    && pass "and no second entry was left behind" \
+    || fail "and no second entry was left behind" "a directory was created"
+/bin/rm -rf "$ADOPT_APPS/Doppel Adopt Copy.app"
+
+print -r -- ""
+print -r -- "a payload that reads differently than it runs is refused"
+# The CLI parses these configs; the engine inside each bundle still sources its
+# own. Anything the parser treats as inert text is something source would run or
+# read differently, so a payload could show adopt a harmless URL scheme and hand
+# the launcher the primary's. What gets refused is therefore the shape — line
+# and token both — rather than any particular value.
+# Two shapes can diverge, and each is invisible to the check that catches the
+# other: an extra line the parser skips, and a single line whose value is more
+# than one token. The canary proves the difference is not academic — `source`,
+# which is still what the engine does to its own copy, runs these.
+readonly DIVERGENT_CANARY="$SCRATCH/divergent-canary"
+divergent_payload() {
+    local extra_line="${2:-}"
+    {
+        print -r -- "DOPPEL_DISPLAY_NAME=Doppel\\ Adopt"
+        print -r -- "DOPPEL_BUNDLE_ID=com.example.doppel-adopt"
+        print -r -- "DOPPEL_URL_SCHEME=codex-adopt"
+        printf 'DOPPEL_PROFILE_ROOT=%q\n' "$ADOPT_HOME/Library/Doppel Adopt"
+        print -r -- "DOPPEL_CODEX_HOME=$1"
+        print -r -- "DOPPEL_TINT=3B82F6"
+        [[ -z "$extra_line" ]] || print -r -- "$extra_line"
+    } > "$ADOPT_PAYLOAD/instance-config.zsh"
+    /bin/rm -rf "$ADOPT_STATE/instances"
+    /bin/rm -f "$DIVERGENT_CANARY"
+    run_adopt adopt "$ADOPT_APP"
+}
+divergent_refused() {
+    local label="$1"
+    if (( STATUS != 0 )) && [[ "$OUT" == *"not a plain list of settings"* ]]; then
+        pass "$label"
+    else
+        fail "$label" "status $STATUS, got: $OUT"
+    fi
+    [[ ! -e "$DIVERGENT_CANARY" ]] || fail "  and it did not run" "the payload executed"
+}
+readonly PLAIN_CODEX_HOME="$(printf '%q' "$ADOPT_HOME/.codex-adopt")"
+
+divergent_payload "$PLAIN_CODEX_HOME" 'DOPPEL_URL_SCHEME=codex'
+divergent_refused "a field declared twice is refused"
+divergent_payload "$PLAIN_CODEX_HOME" 'if true; then DOPPEL_URL_SCHEME=codex; fi'
+divergent_refused "so is an assignment the parser would skip entirely"
+divergent_payload "$PLAIN_CODEX_HOME" 'DOPPEL_URL_SCHEME=codex-adopt'
+divergent_refused "and a duplicate that agrees with itself"
+# A valid key and one line, but the value is not one token: text to the parser,
+# code to source. The absolute-path rule these two fields carry is satisfied by
+# every one of them.
+divergent_payload "$PLAIN_CODEX_HOME; /usr/bin/touch $(printf '%q' "$DIVERGENT_CANARY")"
+divergent_refused "a value carrying a second command is refused"
+divergent_payload "$PLAIN_CODEX_HOME\$(/usr/bin/touch $(printf '%q' "$DIVERGENT_CANARY"))"
+divergent_refused "so is one carrying a command substitution"
+divergent_payload "\`/usr/bin/touch $(printf '%q' "$DIVERGENT_CANARY")\`"
+divergent_refused "and one carrying backticks"
+divergent_payload "$PLAIN_CODEX_HOME DOPPEL_URL_SCHEME=codex DOPPEL_BUNDLE_ID=com.openai.codex"
+divergent_refused "a value that smuggles the next two assignments is refused"
+divergent_payload "$PLAIN_CODEX_HOME #trailing"
+divergent_refused "and one with a comment source would drop"
+
+fabricate_adoptable_bundle
+run_adopt adopt "$ADOPT_APP"
+check "while the shape write_config produces is adopted" "$STATUS" "0"
+/bin/rm -rf "$ADOPT_STATE/instances"
+
+run_adopt adopt ""
+check "an empty app path is a usage error, not a silent success" "$STATUS" "1"
+
+print -r -- ""
+print -r -- "adoption re-validates a payload it did not just write"
+# The payload sits in a user-writable bundle. Trusting it because Doppel wrote
+# it once would trust whatever edited it since.
+adopt_reject() {
+    local label="$1" name="$2" expect="$3"
+    /bin/rm -rf "$ADOPT_STATE/instances"
+    run_adopt adopt "$ADOPT_APPS/$name.app"
+    if (( STATUS != 0 )) && [[ "$OUT" == *"$expect"* ]]; then
+        pass "$label"
+    else
+        fail "$label" "status $STATUS, got: $OUT"
+    fi
+    [[ ! -d "$ADOPT_STATE/instances/$(print -r -- "$name" | /usr/bin/tr '[:upper:]' '[:lower:]' | /usr/bin/sed -E 's/[^a-z0-9]+/-/g')" ]] \
+        && pass "  and nothing was registered" \
+        || fail "  and nothing was registered" "a directory was left behind"
+}
+fabricate_adoptable_bundle "Doppel Adopt Primary" "com.example.doppel-primary" "codex"
+adopt_reject "a payload claiming the primary URL scheme is refused" \
+    "Doppel Adopt Primary" "belongs to the primary app"
+
+fabricate_adoptable_bundle "Doppel Adopt Bad Id" "not a bundle id" "codex-badid"
+adopt_reject "a payload with an unusable bundle id is refused" \
+    "Doppel Adopt Bad Id" "bundle ids may contain only"
+
+fabricate_adoptable_bundle "Doppel Adopt Renamed" "com.example.doppel-renamed" "codex-renamed"
+/bin/mv "$ADOPT_APPS/Doppel Adopt Renamed.app" "$ADOPT_APPS/Doppel Adopt Moved.app"
+adopt_reject "a bundle renamed in Finder is refused rather than registered as missing" \
+    "Doppel Adopt Moved" "rename the bundle to"
+
+/bin/rm -rf "$ADOPT_STATE/instances"
+/bin/rm -rf "$ADOPT_PAYLOAD/assets"
+run_adopt adopt "$ADOPT_APP"
+check "a payload with no icon to copy is refused" "$STATUS" "1"
+[[ "$OUT" == *"no icon assets to adopt"* ]] && pass "and it says what is missing" \
+    || fail "and it says what is missing" "got: $OUT"
+
+# A sweep exists to recover what can be recovered. The rejected bundles above
+# are all still on disk, so this is the mixed Mac rather than a contrived one.
+fabricate_adoptable_bundle
+run_adopt adopt --all
+check "a sweep over a mixed set still fails overall" "$STATUS" "1"
+[[ "$OUT" == *"could not be adopted"* ]] && pass "and says how many it could not take" \
+    || fail "and says how many it could not take" "got: $OUT"
+check "but the readable one was adopted anyway" \
+    "$(config_field "$ADOPT_STATE/instances/doppel-adopt" DOPPEL_BUNDLE_ID)" \
+    "com.example.doppel-adopt"
+/bin/rm -rf "$ADOPT_APPS/Doppel Adopt Primary.app" "$ADOPT_APPS/Doppel Adopt Bad Id.app" \
+    "$ADOPT_APPS/Doppel Adopt Moved.app"
+/bin/rm -rf "$ADOPT_STATE/instances"
+
+# The message that would have saved the session this came from: an apply with
+# nothing registered used to stop at "no managed instances" and leave the two
+# installed clones unmentioned.
+#
+# This reaches the reconcile branch's refusal. The other one, after the instance
+# loop, carries the identical string and stays uncovered: reaching it needs a
+# named build newer than the installed primary that has already been downloaded
+# and passes the vendor signature check, so the only way to test it is to point
+# the suite at a real prepared build in someone's own update root. That makes
+# the case machine-dependent and puts a 1.4GB download in reach of a failure
+# path, for a message that is already asserted here.
+fabricate_adoptable_bundle
+OUT="$(HOME="$ADOPT_HOME" DOPPEL_HOME="$ADOPT_STATE" \
+    DOPPEL_ADOPT_SCAN_ROOTS="$ADOPT_APPS" \
+    DOPPEL_APPCAST_URL="file://${SCRATCH// /%20}/appcast.xml" \
+    "$CLI" update apply "$DRIFT_BUILD" 2>&1)"
+[[ "$OUT" == *"no installed managed instances"* && "$OUT" == *"doppel adopt --all"* ]] \
+    && pass "an apply with an empty registry points at the apps it cannot see" \
+    || fail "an apply with an empty registry points at the apps it cannot see" "got: $OUT"
+
+print -r -- ""
 print -r -- "$PASSED passed, $FAILED failed"
 (( FAILED == 0 ))

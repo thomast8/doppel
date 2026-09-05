@@ -1,6 +1,6 @@
 import Foundation
 
-enum ChatGPTUpdateState: String {
+enum ChatGPTUpdateState: String, CaseIterable {
     case available
     case ready
     /// The primary is current but managed instances were built from an older
@@ -9,6 +9,13 @@ enum ChatGPTUpdateState: String {
     /// instances are rebuilt from the app already installed.
     case staleInstances = "stale-instances"
 }
+
+/// The words `doppel update check --porcelain` can lead with. Derived from the
+/// state enum plus the one state that raises no prompt and so has no case, so a
+/// state added to the CLI does not have to be remembered separately in each of
+/// the parsers that only use it to recognise the line as theirs.
+private let updateCheckStates: Set<String> =
+    Set(ChatGPTUpdateState.allCases.map(\.rawValue)).union(["current"])
 
 struct ChatGPTUpdate: Equatable {
     let state: ChatGPTUpdateState
@@ -57,6 +64,30 @@ struct ChatGPTUpdate: Equatable {
     }
 }
 
+/// Managed app bundles installed on disk that Doppel's registry does not
+/// account for, read from the same porcelain line.
+///
+/// An instance keeps a full copy of its own definition inside its bundle, so a
+/// registry directory can go missing without the app going anywhere. Every
+/// inventory-driven command then reports an empty Mac — including `update
+/// apply`, which refuses the update this app had just offered. The count is
+/// what tells those two emptinesses apart.
+struct UnregisteredInstances: Equatable {
+    let count: Int
+
+    static func parse(_ output: String) -> UnregisteredInstances? {
+        let fields = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: "\t", omittingEmptySubsequences: false)
+        // Column nine, so a CLI older than this app reports nothing rather
+        // than having its drift counts read as an orphan count.
+        guard fields.count >= 9,
+              updateCheckStates.contains(String(fields[0])),
+              let count = Int(fields[8])
+        else { return nil }
+        return UnregisteredInstances(count: count)
+    }
+}
+
 /// The vendor build Doppel currently sees installed, read from the same
 /// porcelain line as the update decision.
 ///
@@ -76,7 +107,7 @@ struct InstalledChatGPT: Equatable {
         // The leading state word is what identifies this as an update-check
         // line; without it a stray row could be read as a version.
         guard fields.count >= 3,
-              ["current", "available", "ready", "stale-instances"].contains(String(fields[0])),
+              updateCheckStates.contains(String(fields[0])),
               let build = Int(fields[1]),
               !fields[2].isEmpty
         else { return nil }

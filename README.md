@@ -96,6 +96,8 @@ bin/doppel create --name "ChatGPT Personal" \
     --tint F28C28
 
 bin/doppel list
+bin/doppel adopt --all                               # re-register installed instances
+                                                     # Doppel has no record of
 bin/doppel launch "ChatGPT Personal"
 bin/doppel browser assign "ChatGPT Personal"  # give this profile the built-in browser
 bin/doppel browser status
@@ -116,6 +118,26 @@ bin/doppel remove "ChatGPT Personal" --purge-data    # data to the Trash too
 bin/doppel prune                                     # drop old rollback copies
 bin/doppel prune "ChatGPT Personal"                  # just this instance's
 ```
+
+`adopt` covers the case where the instance directories under
+`~/Library/Application Support/Doppel/instances` are gone but the apps they
+describe are still installed. An instance keeps a complete copy of its own
+definition inside its bundle, because the engine that launches it runs from
+there, so that directory is a record of an instance rather than the only copy of
+one: adoption reads the config and icon back out of each app, reinstalls the
+engine assets, and registers it again. Nothing about the app is written, no app
+is closed, and account data was never in the instance directory to begin with.
+Every field is re-validated on the way in with the rules `create` applies —
+the payload sits in a user-writable bundle, and trusting it because Doppel wrote
+it once would trust whatever edited it since — the config in a bundle is parsed
+rather than sourced for the same reason, so a planted app cannot run its own
+payload just by sitting in a folder Doppel looks in. `list` names, and `update
+check` counts, any installed managed app that no instance accounts for, because
+an unregistered instance is invisible to every command that iterates the
+registry, including `update apply`, which would otherwise refuse the update the
+menu app had just offered. Both look in `~/Applications` and `/Applications`; an
+instance installed elsewhere with `create --install-to` has to be named,
+`doppel adopt "/path/to/My Instance.app"`.
 
 `rebuild` opens the rebuilt instance when it succeeds, even if the instance was
 closed before the command began. Set `DOPPEL_RELAUNCH=0` for maintenance or QA

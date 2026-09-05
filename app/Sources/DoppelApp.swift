@@ -424,7 +424,26 @@ struct MenuContent: View {
             NSApp.activate(ignoringOtherApps: true)
         }
         .disabled(store.engineOperationBusy)
-        Button("Refresh") { store.reload() }
+        // Reachable without waiting for the next update check to raise it: an
+        // unregistered instance is invisible to the list above, so the menu is
+        // otherwise the wrong place to look for the thing that fixes it.
+        if store.unregisteredInstanceCount > 0 {
+            let count = store.unregisteredInstanceCount
+            Button(store.busy.contains("adopt")
+                   ? "Reconnecting…"
+                   : "Reconnect \(count) Unregistered \(count == 1 ? "Instance" : "Instances")…") {
+                store.promptToAdopt(force: true)
+            }
+            .disabled(store.engineOperationBusy)
+        }
+        // Also re-reads the update check, because that is the only thing that
+        // reports unregistered apps: without it Refresh could neither notice a
+        // registry that went missing since launch nor clear the reconnect entry
+        // after an adopt run from the CLI, for up to six hours.
+        Button("Refresh") {
+            store.reload()
+            store.checkForUpdates()
+        }
         if store.busy.contains("update") {
             Text("Updating ChatGPT and managed instances…")
         } else if let update = store.chatGPTUpdate {

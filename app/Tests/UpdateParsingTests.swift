@@ -122,6 +122,27 @@ final class UpdateParsingTests: XCTestCase {
         expect(InstalledChatGPT.parse("current\t6119\t\n") == nil,
                "an empty version field should be rejected")
 
+        // Managed apps the registry has lost. The count is what separates
+        // "nothing to update" from "nothing Doppel can see", so a CLI too old
+        // to report it must yield nothing rather than a confident zero.
+        let orphaned = "ready\t6067\t26.727.40816\t6119\t26.727.51351\thttps://example.invalid/update.zip\t0\t0\t2\n"
+        expect(UnregisteredInstances.parse(orphaned) == UnregisteredInstances(count: 2),
+               "the unregistered count should be read from the ninth column")
+        expect(UnregisteredInstances.parse(
+            "current\t6119\t26.727.51351\t6119\t26.727.51351\thttps://example.invalid/update.zip\t0\t0\t0\n")
+            == UnregisteredInstances(count: 0),
+            "a Mac with nothing unregistered should report zero, not nothing")
+        expect(UnregisteredInstances.parse(driftWithAhead) == nil,
+               "a line from a CLI without the column should yield no count at all")
+        expect(UnregisteredInstances.parse(
+            "rollbacks\t3\t0\t0\t0\t0\t0\t0\t2\n") == nil,
+            "a row from another command must not be read as an orphan count")
+        // The drift counts sit in columns seven and eight; reading either as
+        // the orphan count would raise a reconnection prompt over ordinary
+        // drift.
+        expect(UnregisteredInstances.parse(drift) == nil,
+               "a seven-column drift row must not be mistaken for an orphan count")
+
         // A source build can be missing either version key, and the menu row
         // must still read like a version rather than "Doppel  ()".
         expect(MenuContent.versionLabel(short: "1.0.0", build: "10") == "Doppel 1.0.0 (10)",

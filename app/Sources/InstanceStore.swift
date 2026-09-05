@@ -30,6 +30,8 @@ final class InstanceStore: ObservableObject {
     @Published var chatGPTUpdate: ChatGPTUpdate?
     /// The installed vendor build, shown in the menu even when it is current.
     @Published var installedChatGPT: InstalledChatGPT?
+    /// Managed apps installed on this Mac that Doppel's registry has lost.
+    @Published var unregisteredInstanceCount = 0
     @Published var checkingForUpdates = false
     @Published var permissionStatuses: [PermissionIssue] = []
     @Published var checkingPermissions = false
@@ -227,7 +229,8 @@ final class InstanceStore: ObservableObject {
     /// offering operations that would only be refused as concurrent work.
     var engineOperationBusy: Bool {
         busy.contains("iab-slot") || busy.contains("update") || busy.contains("signing") ||
-            busy.contains("create") || instances.contains { busy.contains($0.id) }
+            busy.contains("create") || busy.contains("adopt") ||
+            instances.contains { busy.contains($0.id) }
     }
 
     // MARK: - Native tools
@@ -376,6 +379,12 @@ final class InstanceStore: ObservableObject {
                     // Recorded whether or not there is an update to offer, so
                     // the menu can show the installed build either way.
                     self.installedChatGPT = InstalledChatGPT.parse(output)
+                    // A CLI too old to report the column says nothing about
+                    // orphans; absent is not the same as none, so the last
+                    // known count is left alone rather than zeroed.
+                    if let unregistered = UnregisteredInstances.parse(output) {
+                        self.unregisteredInstanceCount = unregistered.count
+                    }
                     guard let update = ChatGPTUpdate.parse(output) else {
                         self.chatGPTUpdate = nil
                         // Only the CLI saying "current" means current. A line
@@ -414,13 +423,34 @@ final class InstanceStore: ObservableObject {
     /// suppressed by an earlier download offer that happened to name the same
     /// number.
     private func shouldPrompt(_ update: ChatGPTUpdate, force: Bool) -> Bool {
-        let key = "\(update.state.rawValue)-\(update.targetBuild)"
+        shouldPrompt(key: "\(update.state.rawValue)-\(update.targetBuild)", force: force)
+    }
+
+    /// The same one-shot rule for a prompt that is not about an update build.
+    /// Callers own their key; this owns the set, so there is one place that
+    /// decides whether a given prompt has already been raised.
+    private func shouldPrompt(key: String, force: Bool) -> Bool {
         guard force || !promptedUpdates.contains(key) else { return false }
         promptedUpdates.insert(key)
         return true
     }
 
     private func promptForUpdate(_ update: ChatGPTUpdate, force: Bool = false) {
+        // An update has to land somewhere, and `update apply` decides that on
+        // the instances whose app is actually installed — it never moves the
+        // primary on its own, because with no clones the vendor's own updater
+        // owns it. So the same predicate is used here: an entry whose app was
+        // dragged to the Trash is not something an update can land on, and
+        // offering one would download a whole build and then be refused.
+        let installed = instances.filter(\.installed).count
+        if installed == 0 {
+            if unregisteredInstanceCount > 0 {
+                promptToAdopt(force: force)
+            } else if force {
+                showNothingToUpdateAlert(update)
+            }
+            return
+        }
         switch update.state {
         case .ready:
             promptToRestart(update, force: force)
@@ -434,10 +464,16 @@ final class InstanceStore: ObservableObject {
         guard shouldPrompt(update, force: force) else { return }
         let alert = updateAlert()
         alert.messageText = "A new version of ChatGPT is available!"
+        // Said in the singular where that is what it is: "all 1 managed
+        // instances" reads as a bug. The zero case never reaches here — an
+        // update with nothing to land on is not offered at all.
+        let scope = installed == 1
+            ? "Doppel will apply this update to the primary app and its managed instance together."
+            : "Doppel will apply this update to the primary app and all \(installed) managed instances together."
         alert.informativeText = """
             ChatGPT \(update.targetVersion) is now available—you have \(update.currentVersion). Would you like to download it now?
 
-            Doppel will apply this update to the primary app and all \(instances.filter(\.installed).count) managed instances together.
+            \(scope)
             """
         alert.addButton(withTitle: "Install Update")
         alert.addButton(withTitle: "Remind Me Later")
@@ -492,6 +528,39 @@ final class InstanceStore: ObservableObject {
         let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let last = trimmed.split(separator: "\n").last else { return [] }
         return last.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+    }
+
+    /// Offered when managed apps are installed that Doppel has no record of.
+    /// Nothing about them is rebuilt: their definitions are read back out of the
+    /// bundles that carry them, so an adopted instance keeps its identity, its
+    /// icon and its account data.
+    func promptToAdopt(force: Bool = false) {
+        let count = unregisteredInstanceCount
+        guard count > 0 else { return }
+        let noun = count == 1 ? "app" : "apps"
+        guard shouldPrompt(key: "adopt-\(count)", force: force) else { return }
+        let alert = updateAlert()
+        alert.messageText = "Managed Instances Are Not Registered"
+        alert.informativeText = """
+            \(count) managed \(noun) \(count == 1 ? "is" : "are") installed on this Mac, but Doppel has no record of \(count == 1 ? "it" : "them"), so updates and permissions cannot reach \(count == 1 ? "it" : "them").
+
+            Doppel can read each app's own definition back out of the app itself. Nothing is rebuilt, no app is closed, and account data is not touched.
+            """
+        alert.addButton(withTitle: "Reconnect \(count == 1 ? "Instance" : "Instances")")
+        alert.addButton(withTitle: "Later")
+        guard present(alert) == .alertFirstButtonReturn else { return }
+        adoptUnregisteredInstances()
+    }
+
+    func adoptUnregisteredInstances() {
+        runCLI(["adopt", "--all"], busyKey: "adopt") { [weak self] failure in
+            guard let self, failure == nil else { return }
+            self.reload()
+            // The inventory it refused to act on is what changed, so the offer
+            // that was blocked is re-derived rather than replayed from cache.
+            self.chatGPTUpdate = nil
+            self.checkForUpdates(userInitiated: true)
+        }
     }
 
     /// Offered when ChatGPT's own updater moved the primary on its own: the
@@ -596,6 +665,31 @@ final class InstanceStore: ObservableObject {
         window.collectionBehavior.insert([.canJoinAllSpaces, .fullScreenAuxiliary])
         window.orderFrontRegardless()
         return alert.runModal()
+    }
+
+    /// Raised only when the user asked. Doppel updates the primary as one
+    /// transaction with the instances built from it and does nothing on its own
+    /// when there are none, so there is a real release here and nothing for
+    /// Doppel to do with it.
+    ///
+    /// Two ways to have nothing installed, and they need different answers: no
+    /// instances at all, or instances whose apps are gone. Telling someone in
+    /// the second case that Doppel manages nothing would be false, and telling
+    /// them to create an instance would be the wrong remedy for one they
+    /// already have.
+    private func showNothingToUpdateAlert(_ update: ChatGPTUpdate) {
+        let alert = updateAlert()
+        alert.messageText = "Nothing for Doppel to Update"
+        let reason = instances.isEmpty
+            ? "Doppel is not managing any instances on this Mac, so it has nothing to rebuild and leaves the ChatGPT app to its own updater. Create an instance and Doppel will keep the two in step from then on."
+            : "Doppel manages \(instances.count == 1 ? "an instance" : "\(instances.count) instances") on this Mac, but \(instances.count == 1 ? "its app is" : "none of their apps are") installed any more, so there is nothing for this update to rebuild. Use Rebuild & Reopen to put \(instances.count == 1 ? "it" : "them") back, then check again."
+        alert.informativeText = """
+            ChatGPT \(update.targetVersion) is available, and you have \(update.currentVersion).
+
+            \(reason)
+            """
+        alert.addButton(withTitle: "OK")
+        present(alert)
     }
 
     private func showCurrentAlert() {
