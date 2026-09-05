@@ -229,7 +229,8 @@ final class InstanceStore: ObservableObject {
     /// offering operations that would only be refused as concurrent work.
     var engineOperationBusy: Bool {
         busy.contains("iab-slot") || busy.contains("update") || busy.contains("signing") ||
-            busy.contains("create") || instances.contains { busy.contains($0.id) }
+            busy.contains("create") || busy.contains("adopt") ||
+            instances.contains { busy.contains($0.id) }
     }
 
     // MARK: - Native tools
@@ -422,7 +423,13 @@ final class InstanceStore: ObservableObject {
     /// suppressed by an earlier download offer that happened to name the same
     /// number.
     private func shouldPrompt(_ update: ChatGPTUpdate, force: Bool) -> Bool {
-        let key = "\(update.state.rawValue)-\(update.targetBuild)"
+        shouldPrompt(key: "\(update.state.rawValue)-\(update.targetBuild)", force: force)
+    }
+
+    /// The same one-shot rule for a prompt that is not about an update build.
+    /// Callers own their key; this owns the set, so there is one place that
+    /// decides whether a given prompt has already been raised.
+    private func shouldPrompt(key: String, force: Bool) -> Bool {
         guard force || !promptedUpdates.contains(key) else { return false }
         promptedUpdates.insert(key)
         return true
@@ -528,8 +535,7 @@ final class InstanceStore: ObservableObject {
         let count = unregisteredInstanceCount
         guard count > 0 else { return }
         let noun = count == 1 ? "app" : "apps"
-        guard force || !promptedUpdates.contains("adopt-\(count)") else { return }
-        promptedUpdates.insert("adopt-\(count)")
+        guard shouldPrompt(key: "adopt-\(count)", force: force) else { return }
         let alert = updateAlert()
         alert.messageText = "Managed Instances Are Not Registered"
         alert.informativeText = """

@@ -436,7 +436,14 @@ struct MenuContent: View {
             }
             .disabled(store.engineOperationBusy)
         }
-        Button("Refresh") { store.reload() }
+        // Also re-reads the update check, because that is the only thing that
+        // reports unregistered apps: without it Refresh could neither notice a
+        // registry that went missing since launch nor clear the reconnect entry
+        // after an adopt run from the CLI, for up to six hours.
+        Button("Refresh") {
+            store.reload()
+            store.checkForUpdates()
+        }
         if store.busy.contains("update") {
             Text("Updating ChatGPT and managed instances…")
         } else if let update = store.chatGPTUpdate {

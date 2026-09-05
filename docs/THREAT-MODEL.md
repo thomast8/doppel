@@ -256,6 +256,8 @@ front of someone who is still deciding whether to trust you.
 | Official engine self-updating ahead of its fallback clone | Addressed for Doppel launches. Sparkle is disabled in the vendor-slot session, and release/reassignment verifies the outgoing fallback build. |
 | A vendor release changing the assumptions Doppel patches | Addressed by failing closed. A rebuild refuses rather than producing a half-working clone. |
 | `--purge-data` deleting data an instance does not own | Addressed. Shared, system and primary-owned paths are refused before anything moves. |
+| A planted app bundle in a scan root running its own config | Addressed. `list`, `update check` and `adopt` look for managed apps in `~/Applications` and `/Applications`, so the config they read comes from a bundle anything running as you can write, including one downloaded and never opened. Those configs are parsed, never sourced, so a value spelling a command substitution comes back as those characters and is refused by the same field checks `create` applies. |
+| An adopted bundle naming account paths its owner never chose | Partly mitigated. Adoption prints the profile root and Codex home it took on, and `--purge-data` still refuses shared, system and primary-owned paths at the point of deletion. It does not refuse an ordinary in-home path, because that is also what a legitimate instance records. |
 | Tampering with a built instance | Detected only with a local signing identity. Not prevented. |
 | Same-user process deleting a pin record | Accepted. Documented, not prevented. |
 | Same-user process asking `codesign` to sign with the local key | Accepted. Keep the keychain locked; documented in the README. |

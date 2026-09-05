@@ -948,8 +948,52 @@ run_adopt list
     && pass "an empty registry names the managed app it cannot see" \
     || fail "an empty registry names the managed app it cannot see" "got: $OUT"
 
+# A payload is data. Reading these configs by sourcing them was safe only while
+# every one of them lived in a directory Doppel had written; the scan reads them
+# out of app bundles, which anything running as the user can write. A planted
+# bundle's config used to run during `list` — and during the update check the
+# menu app makes unattended every six hours — before a single field had been
+# looked at, which is to say before any of the validation below.
+readonly ADOPT_CANARY="$SCRATCH/adopt-canary"
+# Both shapes: a command on its own line, and a substitution standing where a
+# value belongs. The value comes first, because the parser stops at the first
+# line naming the field it was asked for.
+{
+    printf 'DOPPEL_DISPLAY_NAME=$(/usr/bin/touch %q)\n' "$ADOPT_CANARY"
+    print -r -- "DOPPEL_BUNDLE_ID=com.example.doppel-hostile"
+    print -r -- "DOPPEL_URL_SCHEME=codex-hostile"
+    printf 'DOPPEL_PROFILE_ROOT=%q\n' "$ADOPT_HOME/Library/hostile"
+    printf 'DOPPEL_CODEX_HOME=%q\n' "$ADOPT_HOME/.codex-hostile"
+    print -r -- "DOPPEL_TINT=3B82F6"
+    printf '/usr/bin/touch %q\n' "$ADOPT_CANARY"
+} > "$ADOPT_PAYLOAD/instance-config.zsh"
+run_adopt list
+[[ ! -e "$ADOPT_CANARY" ]] \
+    && pass "a hostile payload is read, not run, by the scan" \
+    || fail "a hostile payload is read, not run, by the scan" "the payload executed during list"
+OUT="$(HOME="$ADOPT_HOME" DOPPEL_HOME="$ADOPT_STATE" \
+    DOPPEL_APPCAST_URL="file://${SCRATCH// /%20}/appcast.xml" \
+    "$CLI" update check 2>&1)"
+[[ ! -e "$ADOPT_CANARY" ]] \
+    && pass "nor by the update check the menu app runs unattended" \
+    || fail "nor by the update check the menu app runs unattended" "the payload executed during update check"
+run_adopt adopt --all
+[[ ! -e "$ADOPT_CANARY" ]] \
+    && pass "nor by adoption itself" \
+    || fail "nor by adoption itself" "the payload executed during adopt"
+check "and the substitution is refused as the text it is" "$STATUS" "1"
+fabricate_adoptable_bundle
+
 run_adopt list --porcelain
 check "and --porcelain stays a table of instances only" "$OUT" ""
+
+check_orphan_column() {
+    print -r -- "$(HOME="$ADOPT_HOME" DOPPEL_HOME="$ADOPT_STATE" \
+        DOPPEL_APPCAST_URL="file://${SCRATCH// /%20}/appcast.xml" \
+        "$CLI" update check --porcelain 2>&1 | /usr/bin/awk -F'\t' '{print $9}')"
+}
+check "the unregistered count reaches the ninth porcelain column" \
+    "$(check_orphan_column)" "1"
 
 run_adopt adopt --all
 check "adoption succeeds" "$STATUS" "0"
@@ -979,6 +1023,11 @@ run_adopt list
 [[ "$OUT" != *"not registered with Doppel"* ]] \
     && pass "and the warning is gone once the app is managed" \
     || fail "and the warning is gone once the app is managed" "got: $OUT"
+check "and the ninth porcelain column goes back to zero" \
+    "$(check_orphan_column)" "0"
+run_adopt list --porcelain
+check "while --porcelain still describes only the instance, in six columns" \
+    "$(print -r -- "$OUT" | /usr/bin/awk -F'\t' '{print NF}')" "6"
 
 # A copy of a managed bundle is not a second instance: both would claim one
 # bundle id, which is what Launch Services and the launcher's own slug lookup
@@ -1014,11 +1063,11 @@ adopt_reject() {
 }
 fabricate_adoptable_bundle "Doppel Adopt Primary" "com.example.doppel-primary" "codex"
 adopt_reject "a payload claiming the primary URL scheme is refused" \
-    "Doppel Adopt Primary" "records the primary app's URL scheme"
+    "Doppel Adopt Primary" "belongs to the primary app"
 
 fabricate_adoptable_bundle "Doppel Adopt Bad Id" "not a bundle id" "codex-badid"
 adopt_reject "a payload with an unusable bundle id is refused" \
-    "Doppel Adopt Bad Id" "bundle id that is not valid"
+    "Doppel Adopt Bad Id" "bundle ids may contain only"
 
 fabricate_adoptable_bundle "Doppel Adopt Renamed" "com.example.doppel-renamed" "codex-renamed"
 /bin/mv "$ADOPT_APPS/Doppel Adopt Renamed.app" "$ADOPT_APPS/Doppel Adopt Moved.app"

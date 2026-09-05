@@ -1,6 +1,6 @@
 import Foundation
 
-enum ChatGPTUpdateState: String {
+enum ChatGPTUpdateState: String, CaseIterable {
     case available
     case ready
     /// The primary is current but managed instances were built from an older
@@ -9,6 +9,13 @@ enum ChatGPTUpdateState: String {
     /// instances are rebuilt from the app already installed.
     case staleInstances = "stale-instances"
 }
+
+/// The words `doppel update check --porcelain` can lead with. Derived from the
+/// state enum plus the one state that raises no prompt and so has no case, so a
+/// state added to the CLI does not have to be remembered separately in each of
+/// the parsers that only use it to recognise the line as theirs.
+private let updateCheckStates: Set<String> =
+    Set(ChatGPTUpdateState.allCases.map(\.rawValue)).union(["current"])
 
 struct ChatGPTUpdate: Equatable {
     let state: ChatGPTUpdateState
@@ -74,7 +81,7 @@ struct UnregisteredInstances: Equatable {
         // Column nine, so a CLI older than this app reports nothing rather
         // than having its drift counts read as an orphan count.
         guard fields.count >= 9,
-              ["current", "available", "ready", "stale-instances"].contains(String(fields[0])),
+              updateCheckStates.contains(String(fields[0])),
               let count = Int(fields[8])
         else { return nil }
         return UnregisteredInstances(count: count)
@@ -100,7 +107,7 @@ struct InstalledChatGPT: Equatable {
         // The leading state word is what identifies this as an update-check
         // line; without it a stray row could be read as a version.
         guard fields.count >= 3,
-              ["current", "available", "ready", "stale-instances"].contains(String(fields[0])),
+              updateCheckStates.contains(String(fields[0])),
               let build = Int(fields[1]),
               !fields[2].isEmpty
         else { return nil }

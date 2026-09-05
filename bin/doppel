@@ -214,7 +214,47 @@ install_engine_assets() {
         "$helpers/doppel-url-handler" "$dir/bin/"
 }
 
-# The name lands in a sourced config file, an Info.plist JSON fragment, and a
+# The identity rules an instance must satisfy, wherever its fields came from.
+# Shared by create and adopt so a tightening lands in both: the values arrive by
+# different routes — flags someone typed, a payload read out of a bundle — but
+# what has to be true of them is the same invariant, and the only thing that
+# genuinely differs is who the refusal is about.
+#
+# `subject` prefixes each refusal. Empty for create, which is answering for
+# arguments the caller just passed; the bundle path for adopt, which is
+# answering for a file it found.
+validate_instance_identity() {
+    local bundle_id="$1" scheme="$2" profile_root="$3" codex_home="$4" subject="${5:-}"
+    [[ -z "$subject" ]] || subject="$subject: "
+    # These reach an Info.plist JSON literal and a state-directory path
+    # component, so restrict them to inert characters.
+    [[ "$bundle_id" == [A-Za-z0-9]*([A-Za-z0-9.-]) && "$bundle_id" != *[^A-Za-z0-9.-]* ]] || \
+        die "${subject}bundle ids may contain only letters, digits, dots, and hyphens"
+    [[ "$scheme" == [A-Za-z]* && "$scheme" != *[^A-Za-z0-9.+-]* ]] || \
+        die "${subject}URL schemes must start with a letter and contain only letters, digits, '+', '-', '.'"
+    # URI schemes are case-insensitive. Comparing their spelling directly
+    # would let `Codex` bypass the primary-scheme guard and make an ordinary
+    # clone launch compete for the shared OAuth callback.
+    [[ "${scheme:l}" != "${PRIMARY_SCHEME:l}" ]] || \
+        die "${subject}URL scheme '$scheme' belongs to the primary app; pick another so deep links keep working"
+    [[ "$profile_root" == /* && "$codex_home" == /* ]] || \
+        die "${subject}the profile root and Codex home must be absolute paths"
+
+    # Identity fields must be unique across instances: a shared bundle id
+    # confuses Launch Services, a shared profile silently mixes accounts.
+    local existing existing_scheme
+    for existing in "$INSTANCES_ROOT"/*(N/); do
+        [[ "$(config_value "$existing" DOPPEL_BUNDLE_ID)" != "$bundle_id" ]] || \
+            die "${subject}bundle id '$bundle_id' is already used by instance '${existing:t}'"
+        existing_scheme="$(config_value "$existing" DOPPEL_URL_SCHEME)"
+        [[ "${existing_scheme:l}" != "${scheme:l}" ]] || \
+            die "${subject}URL scheme '$scheme' is already used by instance '${existing:t}'"
+        [[ "$(config_value "$existing" DOPPEL_PROFILE_ROOT)" != "$profile_root" ]] || \
+            die "${subject}profile root '$profile_root' is already used by instance '${existing:t}'"
+    done
+}
+
+# The name lands in a config file, an Info.plist JSON fragment, and a
 # bundle filename; restrict it to characters that are inert in all three.
 validate_name() {
     local name="$1"
@@ -390,19 +430,38 @@ is_instance_dir() {
     [[ -r "$1/instance-config.zsh" ]]
 }
 
-# Reads one variable from an instance config by sourcing it in a subshell —
-# the same parser the engine uses, so the two can't disagree. Safe because
-# create writes %q-escaped values.
+# Reads one variable from an instance config, without evaluating it.
+#
+# This used to source the file in a subshell, which was safe for exactly as long
+# as every config it was pointed at lived in a registry directory Doppel had
+# written itself. Adoption asks the same question of the payload inside an app
+# bundle, and a bundle in ~/Applications is writable by anything running as the
+# user: a subshell contains variable pollution, not code execution. A planted
+# bundle's config ran during `doppel list`, and during the unattended update
+# check the menu app makes every six hours — before a single field had been
+# looked at, so adopt's validation, which happens afterwards, protected nothing
+# against it. Parsing rather than sourcing is what makes that validation the
+# first thing to touch the payload instead of the last.
+#
+# ${(Q)} removes exactly the quoting write_config's %q applies, and removes it
+# as text: a value spelling $(...) or backticks comes back as those characters.
 #
 # This never reports failure. It used to: an unreadable config made the
 # subshell exit 127, and `name="$(config_value ...)"` then took that status and
 # killed the whole command under set -e, printing nothing at all.
 config_value() {
-    local dir="$1" var="$2"
+    local dir="$1" var="$2" line lines=0
     is_instance_dir "$dir" || return 0
-    # ${(P)var:-} rather than ${(P)var}: a config written before a field existed
-    # must read as empty, not abort the caller under set -u.
-    ( source "$dir/instance-config.zsh" 2>/dev/null || true; print -r -- "${(P)var:-}" )
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        # A config is seven short lines. Reading an arbitrarily long file to the
+        # end is the only expensive thing this does on a scan of every app in
+        # two directories, so it stops instead.
+        (( ++lines <= 64 )) || break
+        [[ "$line" == "$var="* ]] || continue
+        print -r -- "${(Q)${line#$var=}}"
+        break
+    done < "$dir/instance-config.zsh" 2>/dev/null || true
+    return 0
 }
 
 # Resolves an instance by its current display name, falling back to its
@@ -1211,32 +1270,7 @@ cmd_create() {
     [[ -n "$profile_root" ]] || profile_root="$HOME/Library/Application Support/$name"
     [[ -n "$codex_home" ]] || codex_home="$HOME/.codex-$slug"
 
-    # These reach an Info.plist JSON literal and a state-directory path
-    # component, so restrict them to inert characters.
-    [[ "$bundle_id" == [A-Za-z0-9]*([A-Za-z0-9.-]) && "$bundle_id" != *[^A-Za-z0-9.-]* ]] || \
-        die "bundle ids may contain only letters, digits, dots, and hyphens"
-    [[ "$scheme" == [A-Za-z]* && "$scheme" != *[^A-Za-z0-9.+-]* ]] || \
-        die "URL schemes must start with a letter and contain only letters, digits, '+', '-', '.'"
-    # URI schemes are case-insensitive. Comparing their spelling directly
-    # would let `Codex` bypass the primary-scheme guard and make an ordinary
-    # clone launch compete for the shared OAuth callback.
-    [[ "${scheme:l}" != "${PRIMARY_SCHEME:l}" ]] || \
-        die "URL scheme '$scheme' belongs to the primary app; pick another so deep links keep working"
-    [[ "$profile_root" == /* && "$codex_home" == /* ]] || \
-        die "--profile-root and --codex-home must be absolute paths"
-
-    # Identity fields must be unique across instances: a shared bundle id
-    # confuses Launch Services, a shared profile silently mixes accounts.
-    local existing existing_scheme
-    for existing in "$INSTANCES_ROOT"/*(N/); do
-        [[ "$(config_value "$existing" DOPPEL_BUNDLE_ID)" != "$bundle_id" ]] || \
-            die "bundle id '$bundle_id' is already used by instance '${existing:t}'"
-        existing_scheme="$(config_value "$existing" DOPPEL_URL_SCHEME)"
-        [[ "${existing_scheme:l}" != "${scheme:l}" ]] || \
-            die "URL scheme '$scheme' is already used by instance '${existing:t}'"
-        [[ "$(config_value "$existing" DOPPEL_PROFILE_ROOT)" != "$profile_root" ]] || \
-            die "profile root '$profile_root' is already used by instance '${existing:t}'"
-    done
+    validate_instance_identity "$bundle_id" "$scheme" "$profile_root" "$codex_home"
 
     compile_helpers
     # Anything that goes wrong from here leaves a half-built instance
@@ -1275,6 +1309,9 @@ remove_partial_instance() {
 adopt_bundle() {
     local app="$1" payload name bundle_id scheme profile_root codex_home tint slug dir
     [[ -d "$app" ]] || die "no app bundle at $app"
+    # The install root is stored as a line and read back with `cat`, so a path
+    # carrying a newline would come back truncated and resolve to the wrong app.
+    [[ "$app" != *$'\n'* ]] || die "an app path containing a newline cannot be adopted"
     is_managed_bundle "$app" || \
         die "$app is not a Doppel-managed app: it carries no instance config"
     payload="$(bundle_payload_dir "$app")"
@@ -1293,17 +1330,15 @@ adopt_bundle() {
     # instance whose app `list` immediately reports as missing.
     [[ "${app:t:r}" == "$name" ]] || \
         die "$app is named '${app:t:r}' but its config says '$name'; rename the bundle to '$name.app' first"
-    [[ "$bundle_id" == [A-Za-z0-9]*([A-Za-z0-9.-]) && "$bundle_id" != *[^A-Za-z0-9.-]* ]] || \
-        die "$app records a bundle id that is not valid: '$bundle_id'"
-    [[ "$scheme" == [A-Za-z]* && "$scheme" != *[^A-Za-z0-9.+-]* ]] || \
-        die "$app records a URL scheme that is not valid: '$scheme'"
-    [[ "${scheme:l}" != "${PRIMARY_SCHEME:l}" ]] || \
-        die "$app records the primary app's URL scheme '$scheme'; it cannot be adopted"
-    [[ "$profile_root" == /* && "$codex_home" == /* ]] || \
-        die "$app records a relative profile or Codex home path; it cannot be adopted"
+    # The same rules create applies, and applied here before anything is
+    # written. The tint is the one field create does not check itself: it hands
+    # the value to the doppel-icon helper, which refuses a malformed one, and
+    # adoption never runs that helper because it copies the icon the bundle
+    # already carries.
     [[ -z "$tint" || "$tint" == "original" || \
        ( ${#tint} -eq 6 && "$tint" != *[^0-9A-Fa-f]* ) ]] || \
         die "$app records a tint that is not valid: '$tint'"
+    validate_instance_identity "$bundle_id" "$scheme" "$profile_root" "$codex_home" "$app"
 
     slug="$(slugify "$name")"
     [[ -n "$slug" ]] || die "'$name' produces an empty identifier; it cannot be adopted"
@@ -1314,16 +1349,6 @@ adopt_bundle() {
     # directory, and both would become unreachable by name.
     [[ ! -d "$INSTANCES_ROOT/$slug" ]] || \
         die "an instance directory already exists at $INSTANCES_ROOT/$slug; remove it first"
-    local existing existing_scheme
-    for existing in "$INSTANCES_ROOT"/*(N/); do
-        [[ "$(config_value "$existing" DOPPEL_BUNDLE_ID)" != "$bundle_id" ]] || \
-            die "bundle id '$bundle_id' is already used by instance '${existing:t}'"
-        existing_scheme="$(config_value "$existing" DOPPEL_URL_SCHEME)"
-        [[ "${existing_scheme:l}" != "${scheme:l}" ]] || \
-            die "URL scheme '$scheme' is already used by instance '${existing:t}'"
-        [[ "$(config_value "$existing" DOPPEL_PROFILE_ROOT)" != "$profile_root" ]] || \
-            die "profile root '$profile_root' is already used by instance '${existing:t}'"
-    done
 
     # Taken from the bundle rather than regenerated from the tint: --icon and
     # --original-icon leave no tint to regenerate from, and even a tinted icon
@@ -1342,6 +1367,12 @@ adopt_bundle() {
     print -r -- "${app:h}" > "$dir/install-root"
     PARTIAL_INSTANCE_DIR=""
     print -r -- "adopted: $name -> $app (instance assets: $dir)"
+    # Adoption touches none of this, but it is what the adopted instance is now
+    # pointed at, and what a later `remove --purge-data` would be asked about.
+    # The paths came out of the bundle rather than from whoever ran the command,
+    # so they are said out loud rather than left to be discovered.
+    print -r -- "  account data: $profile_root"
+    print -r -- "  Codex home:   $codex_home"
 }
 
 cmd_adopt() {
