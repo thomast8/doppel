@@ -11,7 +11,7 @@
 set -u
 setopt PIPE_FAIL
 
-readonly ENGINE_VERSION="26"
+readonly ENGINE_VERSION="27"
 
 # When this engine copy runs from inside an installed bundle, environment
 # overrides are ignored: otherwise a same-uid process could point a
@@ -690,6 +690,119 @@ route_managed_engine() {
     exit 0
 }
 
+# True when this launch carries something the app itself has to receive, which
+# activating an already-running window would silently drop. Finder and the Dock
+# pass a process serial number and nothing else; that is not a request.
+launch_carries_arguments() {
+    local arg
+    for arg in "$@"; do
+        [[ "$arg" == -psn_* ]] && continue
+        return 0
+    done
+    return 1
+}
+
+# Main ChatGPT processes, official or cloned. `comm` is the executable path
+# without arguments, so the anchored suffix keeps this to the app processes and
+# leaves out Electron's helpers under Frameworks and Resources. pgrep is not
+# usable: on macOS it hides its own ancestors, and a Doppel launch can well be
+# a descendant of the very ChatGPT process it has to find.
+#
+# Kept in step with the CLI's copy at the same name, with one deliberate
+# difference: the CLI's returns nothing at all under DOPPEL_IAB_DRY_RUN, which
+# it can afford because its dry run asserts a decision made from stored state.
+# The engine's fast path is a decision made from the process table, so its own
+# QA has to be able to put stand-in processes in front of this scan.
+chatgpt_process_candidates() {
+    /bin/ps -ww -axo pid=,comm= 2>/dev/null | \
+        /usr/bin/awk '/\/Contents\/MacOS\/ChatGPT(\.real)?$/ { print $1 }' || true
+}
+
+# The executable a pid is actually running, asked of the kernel. Everything
+# `ps` prints, `comm` included, is that process's own argv, which any same-uid
+# process can forge: exec /bin/sleep with argv[0] of "/Evil.app/Contents/
+# MacOS/ChatGPT" and it is indistinguishable from a real instance in the scan
+# above. The open file of type `txt` is the mapped executable itself, so it
+# cannot be dressed up.
+process_executable_path() {
+    /usr/sbin/lsof -p "$1" -a -d txt -Fn 2>/dev/null | \
+        /usr/bin/awk '/^n\// { print substr($0, 2); exit }'
+}
+
+# Kept in step with the CLI's copy. An instance may deliberately adopt the
+# vendor's own Electron root so one profile keeps the account the untouched app
+# has always used.
+profile_root_is_primary_default() {
+    local root="${1:A}" product candidate
+    for candidate in "$HOME/Library/Application Support/Codex"; do
+        [[ "$root" == "${candidate:A}" ]] && return 0
+    done
+    product="$(/usr/bin/plutil -extract CFBundleName raw \
+        "$PRIMARY_APP/Contents/Info.plist" 2>/dev/null || true)"
+    if [[ -n "$product" ]]; then
+        candidate="$HOME/Library/Application Support/$product"
+        [[ "$root" == "${candidate:A}" ]] && return 0
+    fi
+    return 1
+}
+
+# True when the untouched primary app already has this instance's Electron
+# profile open. Two rules decide that, kept in step with the CLI's
+# vendor_command_uses_profile: an explicit --user-data-dir naming this profile,
+# which is how an assigned Built-in Browser profile runs, or no such argument at
+# all, which is how a Finder or Dock launch of the official app owns the vendor
+# default root. The second is the one that bites, because an instance that
+# adopts that root is exactly the instance the untouched app takes over from.
+#
+# The explicit form is matched at the end of the command line, so a holder that
+# was itself started with a deep link after its --user-data-dir is not spotted.
+# The CLI's copy has the same blind spot, and the two are worth more kept
+# identical than separately clever; the cost of missing one is a launch that
+# behaves the way it did before this path existed.
+#
+# Only the primary is asked about, and only ever by its own fixed path. A clone
+# holding its own profile is left to the CLI, which owns that case under the
+# engine-operation lock and can activate a window without this path guessing;
+# answering it here as well would mean opening a bundle this code is itself
+# running from, and if Launch Services ever disagreed with `ps` about whether
+# that bundle is running, each activation would start another launcher that
+# reached the same conclusion.
+#
+# The scan itself is not believed. A command line is a process's own argv, and
+# a same-uid process can put anything in it, so an unguarded scan would hand
+# /usr/bin/open an attacker-chosen string, which open follows as happily when it
+# spells a URL or an option as when it names a bundle. Nothing from argv is
+# carried forward: this answers yes or no, the caller opens a constant. The
+# kernel is then asked whether the process really is running out of the primary,
+# so a forged entry cannot fake a holder that is not there, and cannot hide a
+# real one either, because a rejected candidate only ends its own iteration.
+primary_holds_profile() {
+    local pid command executable
+    local primary_real="${PRIMARY_APP:A}"
+    # Asking the kernel costs a process each time, and a fleet of forgeries
+    # would otherwise turn this into the slow launch the whole path exists to
+    # avoid. Real life presents one candidate; a run of them that all fail is
+    # somebody playing games, and giving up leaves the launch exactly where it
+    # was before this path existed.
+    local -i lookups=0
+    for pid in ${(f)"$(chatgpt_process_candidates)"}; do
+        [[ "$pid" == <1-> ]] || continue
+        command="$(/bin/ps -p "$pid" -o command= 2>/dev/null || true)"
+        [[ "$command" == "$PRIMARY_APP/Contents/MacOS/"* ]] || continue
+        if [[ "$command" != *"--user-data-dir=$DOPPEL_PROFILE_ROOT" ]]; then
+            [[ "$command" != *"--user-data-dir="* ]] || continue
+            profile_root_is_primary_default "$DOPPEL_PROFILE_ROOT" || continue
+        fi
+        (( ++lookups > 8 )) && return 1
+        executable="$(process_executable_path "$pid")"
+        # lsof answers with the fully resolved path, and an app can sit behind a
+        # symlinked volume, so both sides are compared resolved.
+        [[ -n "$executable" && "${executable:A}" == "$primary_real/Contents/MacOS/"* ]] || continue
+        return 0
+    done
+    return 1
+}
+
 exec_clone_binary() {
     local app="$1"
     shift
@@ -716,6 +829,44 @@ launch_instance() {
             fail_closed "This clone launch was not authorized by Doppel's active engine coordinator."
         authorized_clone=1
     fi
+
+    # Clicking a branded icon whose profile another ChatGPT already has open
+    # must not boot a second Electron against it. Chromium allows one process
+    # per user-data-dir, so that copy exits on the singleton about a second
+    # after macOS hands it the keyboard focus, and the click reads as a Dock
+    # bounce that opened nothing. Activate the process that owns the profile.
+    #
+    # Nothing is read or executed out of this bundle to get there: the profile
+    # comes from the config the bundle executable already validated, the scan
+    # only answers yes or no, and what is opened is the primary's own fixed
+    # path. Health and version checks are deliberately skipped, since a rebuild
+    # could not launch this profile anyway while the primary holds it; Doppel's
+    # update coordinator is what rebuilds a stale instance.
+    #
+    # The CLI's routed launches keep their own contract: that path has already
+    # ruled out a foreign owner and waits for this process to adopt the profile.
+    #
+    # Deciding this outside the CLI's engine-operation lock is deliberate. That
+    # lock serialises changes to who owns a profile; this changes nothing and
+    # writes nothing, and taking it would mean paying for a whole coordinator
+    # just to raise a window. The worst a lost race costs is starting the app
+    # that was holding this profile a moment earlier.
+    if (( ! authorized_clone )) && [[ "${DOPPEL_INSTALL_ONLY:-0}" != "1" ]] && \
+       ! launch_carries_arguments "$@" && primary_holds_profile; then
+        log_message "Profile already open in the official app; activating it"
+        if [[ "${DOPPEL_DEV:-0}" == "1" && "${DOPPEL_IAB_DRY_RUN:-0}" == "1" ]]; then
+            printf 'activated-existing\t%s\n' "$PRIMARY_APP"
+            return 0
+        fi
+        # `open` starts a bundle that is not running rather than failing, and
+        # the primary can quit between the scan and here. Starting the app that
+        # was holding this profile a moment ago is a sane outcome rather than a
+        # wrong one. The terminator is belt and braces: this path is a constant.
+        /usr/bin/open -- "$PRIMARY_APP" >/dev/null 2>&1 || \
+            fail_closed "This profile is already open in the official ChatGPT app, but macOS could not bring it forward."
+        exit 0
+    fi
+
     require_engine_assets
 
     local version executable_hash
