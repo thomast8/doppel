@@ -6,6 +6,20 @@
         <description>Signed Doppel releases</description>
         <language>en</language>
         <item>
+            <title>1.1.8</title>
+            <pubDate>Sat, 05 Sep 2026 16:14:28 +0100</pubDate>
+            <link>https://github.com/thomast8/doppel</link>
+            <sparkle:version>20</sparkle:version>
+            <sparkle:shortVersionString>1.1.8</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Doppel 1.1.8
+
+- Installing a ChatGPT update no longer stops when a profile is using the built-in browser. That profile runs through the untouched official app rather than through its own clone, and Doppel previously had no way to put such a window back, so it refused the whole update and asked you to quit the window yourself. It now closes that window along with everything else and reopens it on the same profile, with the same account data and the vendor's own updater still disabled. It still stops before touching anything when the official window belongs to a different profile, to a profile Doppel does not manage, or when more than one is open, and it names the window to quit.
+- When ChatGPT asks you to confirm quitting, Doppel now brings that dialog to the front and gives you two minutes to answer it. ChatGPT refuses the quit request instantly and only then puts its "Quit ChatGPT?" dialog on screen, often behind another window, so Doppel used to give up after forty seconds and tell you to dismiss a keychain prompt that was never there. If it does still give up, it now tells you to click Quit in ChatGPT's own dialog.
+]]></description>
+            <enclosure url="https://github.com/thomast8/doppel/releases/download/v1.1.8/Doppel-1.1.8-macOS.zip" length="3028161" type="application/octet-stream" sparkle:edSignature="a6+aiDkjuS+ayYVkDEwoh6pdYwQ/olNj5CwlV0v3ixsZt5G2+8v17OgKA/8glFJf8cPA8DZzdeBhLZm6cMnMDA=="/>
+        </item>
+        <item>
             <title>1.1.7</title>
             <pubDate>Sat, 05 Sep 2026 11:31:34 +0100</pubDate>
             <link>https://github.com/thomast8/doppel</link>
@@ -31,19 +45,6 @@
 - Brings an instance to the front when its ChatGPT profile is already open in another ChatGPT window, instead of bouncing in the Dock and opening nothing. This affected an instance that shares ChatGPT's own profile folder: the official app claims that profile as soon as it starts, so the instance could never take it and quit again a moment after the click. Clicking its icon now raises the window that actually has the profile.
 ]]></description>
             <enclosure url="https://github.com/thomast8/doppel/releases/download/v1.1.6/Doppel-1.1.6-macOS.zip" length="3023922" type="application/octet-stream" sparkle:edSignature="vJ80J+92/Tme6tlFsxaoOl1/e9upuJa5gLdXHLB8sqBsl5LomDOyd3TxxlEiUFZWLPrtc6nd78fEFNQf33C+Dw=="/>
-        </item>
-        <item>
-            <title>1.1.5</title>
-            <pubDate>Sat, 05 Sep 2026 09:54:46 +0100</pubDate>
-            <link>https://github.com/thomast8/doppel</link>
-            <sparkle:version>17</sparkle:version>
-            <sparkle:shortVersionString>1.1.5</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[# Doppel 1.1.5
-
-- Names the app that is holding the built-in browser engine. When ChatGPT is running on its own, outside Doppel, the Native Tools section said a profile called "701" was running, which was the process ID rather than a name.
-]]></description>
-            <enclosure url="https://github.com/thomast8/doppel/releases/download/v1.1.5/Doppel-1.1.5-macOS.zip" length="3021056" type="application/octet-stream" sparkle:edSignature="D5bjQGagZupwzyKUCSxbQdJGZt+7gDuUVaqlBGeQg6kNXlMAWqsJnA0md2FzwhWJ79hdzd5UIFq0nmKu+5iiBA=="/>
         </item>
     </channel>
 </rss>
