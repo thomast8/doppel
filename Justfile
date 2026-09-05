@@ -15,7 +15,7 @@ qa:
 # unable to update itself; `just install` is for when that overwrite is the point.
 # Builds into app/.build/app, leaving ~/Applications/Doppel.app alone.
 build:
-    ./app/build-app.zsh {{justfile_directory()}}/app/.build/app
+    ./app/build-app.zsh "{{justfile_directory()}}/app/.build/app"
 
 # Installs a local build over ~/Applications/Doppel.app, updates disabled.
 install:
