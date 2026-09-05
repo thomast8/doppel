@@ -671,13 +671,22 @@ final class InstanceStore: ObservableObject {
     /// transaction with the instances built from it and does nothing on its own
     /// when there are none, so there is a real release here and nothing for
     /// Doppel to do with it.
+    ///
+    /// Two ways to have nothing installed, and they need different answers: no
+    /// instances at all, or instances whose apps are gone. Telling someone in
+    /// the second case that Doppel manages nothing would be false, and telling
+    /// them to create an instance would be the wrong remedy for one they
+    /// already have.
     private func showNothingToUpdateAlert(_ update: ChatGPTUpdate) {
         let alert = updateAlert()
         alert.messageText = "Nothing for Doppel to Update"
+        let reason = instances.isEmpty
+            ? "Doppel is not managing any instances on this Mac, so it has nothing to rebuild and leaves the ChatGPT app to its own updater. Create an instance and Doppel will keep the two in step from then on."
+            : "Doppel manages \(instances.count == 1 ? "an instance" : "\(instances.count) instances") on this Mac, but \(instances.count == 1 ? "its app is" : "none of their apps are") installed any more, so there is nothing for this update to rebuild. Use Rebuild & Reopen to put \(instances.count == 1 ? "it" : "them") back, then check again."
         alert.informativeText = """
             ChatGPT \(update.targetVersion) is available, and you have \(update.currentVersion).
 
-            Doppel is not managing any instances on this Mac, so it has nothing to rebuild and leaves the ChatGPT app to its own updater. Create an instance and Doppel will keep the two in step from then on.
+            \(reason)
             """
         alert.addButton(withTitle: "OK")
         present(alert)

@@ -1054,32 +1054,61 @@ check "adopting a bundle whose identity is already registered fails" "$STATUS" "
 print -r -- ""
 print -r -- "a payload that reads differently than it runs is refused"
 # The CLI parses these configs; the engine inside each bundle still sources its
-# own. Any line the parser skips is a line the engine would still run, so a
-# payload could show adopt a harmless URL scheme and hand the launcher the
-# primary's. Taking the last assignment would close the first of these and not
-# the second, which is why the shape itself is what gets refused.
+# own. Anything the parser treats as inert text is something source would run or
+# read differently, so a payload could show adopt a harmless URL scheme and hand
+# the launcher the primary's. What gets refused is therefore the shape — line
+# and token both — rather than any particular value.
+# Two shapes can diverge, and each is invisible to the check that catches the
+# other: an extra line the parser skips, and a single line whose value is more
+# than one token. The canary proves the difference is not academic — `source`,
+# which is still what the engine does to its own copy, runs these.
+readonly DIVERGENT_CANARY="$SCRATCH/divergent-canary"
 divergent_payload() {
+    local extra_line="${2:-}"
     {
         print -r -- "DOPPEL_DISPLAY_NAME=Doppel\\ Adopt"
         print -r -- "DOPPEL_BUNDLE_ID=com.example.doppel-adopt"
         print -r -- "DOPPEL_URL_SCHEME=codex-adopt"
         printf 'DOPPEL_PROFILE_ROOT=%q\n' "$ADOPT_HOME/Library/Doppel Adopt"
-        printf 'DOPPEL_CODEX_HOME=%q\n' "$ADOPT_HOME/.codex-adopt"
+        print -r -- "DOPPEL_CODEX_HOME=$1"
         print -r -- "DOPPEL_TINT=3B82F6"
-        print -r -- "$1"
+        [[ -z "$extra_line" ]] || print -r -- "$extra_line"
     } > "$ADOPT_PAYLOAD/instance-config.zsh"
     /bin/rm -rf "$ADOPT_STATE/instances"
+    /bin/rm -f "$DIVERGENT_CANARY"
     run_adopt adopt "$ADOPT_APP"
 }
-divergent_payload 'DOPPEL_URL_SCHEME=codex'
-check "a field declared twice is refused" "$STATUS" "1"
-[[ "$OUT" == *"not a plain list of settings"* ]] \
-    && pass "and the refusal is about the shape, not the value" \
-    || fail "and the refusal is about the shape, not the value" "got: $OUT"
-divergent_payload 'if true; then DOPPEL_URL_SCHEME=codex; fi'
-check "an assignment the parser would skip is refused too" "$STATUS" "1"
-divergent_payload 'DOPPEL_URL_SCHEME=codex-adopt'
-check "and a duplicate that agrees with itself is still refused" "$STATUS" "1"
+divergent_refused() {
+    local label="$1"
+    if (( STATUS != 0 )) && [[ "$OUT" == *"not a plain list of settings"* ]]; then
+        pass "$label"
+    else
+        fail "$label" "status $STATUS, got: $OUT"
+    fi
+    [[ ! -e "$DIVERGENT_CANARY" ]] || fail "  and it did not run" "the payload executed"
+}
+readonly PLAIN_CODEX_HOME="$(printf '%q' "$ADOPT_HOME/.codex-adopt")"
+
+divergent_payload "$PLAIN_CODEX_HOME" 'DOPPEL_URL_SCHEME=codex'
+divergent_refused "a field declared twice is refused"
+divergent_payload "$PLAIN_CODEX_HOME" 'if true; then DOPPEL_URL_SCHEME=codex; fi'
+divergent_refused "so is an assignment the parser would skip entirely"
+divergent_payload "$PLAIN_CODEX_HOME" 'DOPPEL_URL_SCHEME=codex-adopt'
+divergent_refused "and a duplicate that agrees with itself"
+# A valid key and one line, but the value is not one token: text to the parser,
+# code to source. The absolute-path rule these two fields carry is satisfied by
+# every one of them.
+divergent_payload "$PLAIN_CODEX_HOME; /usr/bin/touch $(printf '%q' "$DIVERGENT_CANARY")"
+divergent_refused "a value carrying a second command is refused"
+divergent_payload "$PLAIN_CODEX_HOME\$(/usr/bin/touch $(printf '%q' "$DIVERGENT_CANARY"))"
+divergent_refused "so is one carrying a command substitution"
+divergent_payload "\`/usr/bin/touch $(printf '%q' "$DIVERGENT_CANARY")\`"
+divergent_refused "and one carrying backticks"
+divergent_payload "$PLAIN_CODEX_HOME DOPPEL_URL_SCHEME=codex DOPPEL_BUNDLE_ID=com.openai.codex"
+divergent_refused "a value that smuggles the next two assignments is refused"
+divergent_payload "$PLAIN_CODEX_HOME #trailing"
+divergent_refused "and one with a comment source would drop"
+
 fabricate_adoptable_bundle
 run_adopt adopt "$ADOPT_APP"
 check "while the shape write_config produces is adopted" "$STATUS" "0"
@@ -1142,6 +1171,14 @@ check "but the readable one was adopted anyway" \
 # The message that would have saved the session this came from: an apply with
 # nothing registered used to stop at "no managed instances" and leave the two
 # installed clones unmentioned.
+#
+# This reaches the reconcile branch's refusal. The other one, after the instance
+# loop, carries the identical string and stays uncovered: reaching it needs a
+# named build newer than the installed primary that has already been downloaded
+# and passes the vendor signature check, so the only way to test it is to point
+# the suite at a real prepared build in someone's own update root. That makes
+# the case machine-dependent and puts a 1.4GB download in reach of a failure
+# path, for a message that is already asserted here.
 fabricate_adoptable_bundle
 OUT="$(HOME="$ADOPT_HOME" DOPPEL_HOME="$ADOPT_STATE" \
     DOPPEL_ADOPT_SCAN_ROOTS="$ADOPT_APPS" \

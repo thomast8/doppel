@@ -467,19 +467,26 @@ config_value() {
     return 0
 }
 
-# True when a config is nothing but comments and one assignment per field —
-# the shape write_config produces, and the only shape that means the same thing
-# whether it is parsed or sourced.
+# True when a config is exactly what write_config produces: comments, and one
+# assignment per field whose value is a single %q-quoted token.
 #
-# That equivalence is now load-bearing. The CLI parses these files; the engine
-# inside each bundle still sources its own. Any line the parser skips is a line
-# the engine would still run, so a payload could declare a harmless URL scheme
-# on the line adopt validates and the primary's own scheme on a second line, or
-# behind an `if`, and launch as something other than what was approved. Refusing
-# the shapes that can differ is what keeps the two readers agreeing; taking the
-# last assignment instead would close only the first of those two tricks.
+# That equivalence is load-bearing. The CLI parses these files; the engine
+# inside each bundle still sources its own. Anything the parser treats as inert
+# text is something the engine would still run or read differently, so a payload
+# could show adopt a harmless URL scheme and hand the launcher the primary's.
+# Both halves of the check are needed, and each misses what the other catches:
+#
+#   DOPPEL_URL_SCHEME=codex-safe        the line check: a second assignment, or
+#   if true; then DOPPEL_URL_SCHEME=codex; fi     one the parser skips entirely
+#
+#   DOPPEL_CODEX_HOME=/p; touch x       the token check: one line, valid key,
+#   DOPPEL_CODEX_HOME=/p$(touch x)      and text to a parser but code to source
+#
+# Requiring the value to re-quote to itself is what makes "a single token"
+# checkable: %q is what wrote it, so anything %q would have escaped and did not
+# is something the two readers can disagree about.
 config_is_plain() {
-    local file="$1" line lines=0 key
+    local file="$1" line lines=0 key value
     local -A seen
     while IFS= read -r line || [[ -n "$line" ]]; do
         (( ++lines <= CONFIG_MAX_LINES )) || return 1
@@ -488,6 +495,8 @@ config_is_plain() {
         [[ "$line" == *=* && "$key" == DOPPEL_[A-Z]* && "$key" != *[^A-Z_]* ]] || return 1
         [[ -z "${seen[$key]:-}" ]] || return 1
         seen[$key]=1
+        value="${line#*=}"
+        [[ "${(q)${(Q)value}}" == "$value" ]] || return 1
     done 2>/dev/null < "$file" || return 1
     return 0
 }
