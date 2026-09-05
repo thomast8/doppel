@@ -299,6 +299,92 @@ SURVIVORS=0
 check "but the detached updater and the node server are left alone" "$SURVIVORS" "2"
 /bin/kill -9 "$CRASHPAD_PID" "$MONITOR_PID" "$SPARKLE_PID" "$CUA_PID" 2>/dev/null || true
 
+print -r -- ""
+print -r -- "quit_instance recognises its own quit-confirmation dialog"
+# The stock ChatGPT app answers our AppleEvent quit with -128 in well under a
+# second and then raises its own "Quit ChatGPT?" confirmation asynchronously.
+# quit_instance used to read -128 as an unrelated modal, wait 40 seconds total
+# across two silent attempts, and die blaming a keychain prompt — by which
+# time the user had not even seen the app's own dialog yet, let alone answered
+# it. It now has to: recognise -128 as most likely the app's own confirmation,
+# bring the app forward once so that dialog is actually visible, wait much
+# longer without resending the quit event (a second one only earns another
+# -128, since the app already has its dialog up and dedupes repeats), and
+# blame the right thing if it still gives up.
+#
+# quit_instance is driven here in isolation, with send_quit_event,
+# bundle_app_is_running, activate_instance, reap_bundle_processes and die all
+# replaced by logging stand-ins, and QUIT_DIALOG_WAIT_SECONDS overridden to a
+# couple of seconds instead of two minutes. bundle_app_is_running's stand-in
+# answers "running" a fixed number of times before switching to "gone", so
+# the real while-loop and its real /bin/sleep 1 cadence still execute — this
+# proves the wait genuinely happens rather than being skipped — just for a
+# handful of seconds rather than two minutes.
+QUIT_LOG="$SCRATCH/quit-log"
+quit_replay() {
+    QUIT_CLI="$CLI" QUIT_SEND_RESULT="$1" QUIT_RUNNING_CALLS="$2" \
+    QUIT_WAIT_BUDGET="$3" QUIT_LOG="$QUIT_LOG" /bin/zsh -c '
+        body="$(/usr/bin/sed -n "/^quit_instance() {/,/^}/p" "$QUIT_CLI")"
+        [[ -n "$body" ]] || { print -r -- "quit_instance not found in $QUIT_CLI"; exit 1 }
+        eval "$body"
+
+        QUIT_DIALOG_WAIT_SECONDS="$QUIT_WAIT_BUDGET"
+        typeset -i remaining="$QUIT_RUNNING_CALLS"
+        bundle_app_is_running() {
+            (( remaining > 0 )) || return 1
+            remaining=$(( remaining - 1 ))
+            return 0
+        }
+        send_quit_event() {
+            print -r -- "quit" >> "$QUIT_LOG"
+            print -r -- "$QUIT_SEND_RESULT"
+        }
+        activate_instance() { print -r -- "activate:$1" >> "$QUIT_LOG" }
+        reap_bundle_processes() { print -r -- "reap:$1" >> "$QUIT_LOG" }
+        die() { print -r -- "die:$*" >> "$QUIT_LOG"; exit 1 }
+
+        quit_instance "/fake/Quit Target.app" com.example.quit-target "Quit Target"
+    '
+}
+
+: > "$QUIT_LOG"
+quit_replay "" 1 5
+STATUS=$?
+check "a normal quit sends exactly one quit event" \
+    "$(/usr/bin/grep -c '^quit$' "$QUIT_LOG")" "1"
+check "and never brings the app forward" \
+    "$(/usr/bin/grep -c '^activate:' "$QUIT_LOG")" "0"
+check "and reaps its helpers instead of dying" \
+    "$(/usr/bin/grep -c '^reap:' "$QUIT_LOG")" "1"
+check "a normal quit exits cleanly" "$STATUS" "0"
+
+: > "$QUIT_LOG"
+QUIT_START=$SECONDS
+quit_replay "31:1: execution error: ChatGPT got an error: (-128)" 4 10
+STATUS=$?
+QUIT_ELAPSED=$(( SECONDS - QUIT_START ))
+check "a -128 sends only the one quit event that triggered it" \
+    "$(/usr/bin/grep -c '^quit$' "$QUIT_LOG")" "1"
+check "and brings the app forward exactly once" \
+    "$(/usr/bin/grep -c '^activate:' "$QUIT_LOG")" "1"
+check "it waits rather than dying the instant it sees -128" \
+    "$([[ "$QUIT_ELAPSED" -ge 2 ]] && print waited || print instant)" "waited"
+check "and once the app actually goes away it reaps instead of dying" \
+    "$(/usr/bin/grep -c '^reap:' "$QUIT_LOG")" "1"
+check "a -128 that resolves in time exits cleanly" "$STATUS" "0"
+
+: > "$QUIT_LOG"
+quit_replay "31:1: execution error: ChatGPT got an error: (-128)" 999 2
+STATUS=$?
+check "a -128 the app never answers still sends only the one quit event" \
+    "$(/usr/bin/grep -c '^quit$' "$QUIT_LOG")" "1"
+check "it gives up rather than waiting forever" "$STATUS" "1"
+check "the new message blames the app's own dialog, in order, and offers the keychain fallback" \
+    "$([[ "$(/usr/bin/grep '^die:' "$QUIT_LOG")" == *"confirm quitting"*"click Quit"*"keychain prompt"* ]] \
+        && print yes || print no)" "yes"
+check "and it never reaches the reap step" \
+    "$(/usr/bin/grep -c '^reap:' "$QUIT_LOG")" "0"
+
 # A bundle path that is empty or not an app would turn the prefix match into
 # "/", which is every process on the machine. The sweep has to refuse rather
 # than signal anything at all.

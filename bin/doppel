@@ -65,6 +65,14 @@ readonly IAB_RUNTIME_FILE="$DOPPEL_HOME/state/iab-engine-runtime"
 readonly IAB_OPERATION_LOCK="$DOPPEL_HOME/state/IABCoordinator.lock"
 readonly CLONE_LAUNCH_ROOT="$DOPPEL_HOME/state/clone-launch"
 readonly IAB_ROUTER_ENGINE_MIN="24"
+# How long quit_instance waits, in total, once the app being quit has answered
+# with AppleEvent error -128 (see the comment inside quit_instance for why that
+# reads as the app's own quit confirmation rather than an unrelated modal). A
+# human has to notice a dialog and click a button inside that window, so it is
+# deliberately generous. Not environment-overridable: nothing needs to shrink
+# it at runtime, and the qa suite drives quit_instance in isolation where it
+# sets this as a plain variable.
+readonly QUIT_DIALOG_WAIT_SECONDS=120
 
 # Both values are interpolated into a code-signing requirement, so they are
 # checked once here rather than at every use. A value carrying a quote can
@@ -339,28 +347,78 @@ reap_bundle_processes() {
     return 0
 }
 
+# A named wrapper around the AppleEvent quit, so a test can stub the event
+# itself instead of the app it is sent to: /usr/bin/osascript is an absolute
+# path, and a shell function cannot shadow that the way it can shadow a bare
+# command name.
+send_quit_event() {
+    /usr/bin/osascript -e "tell application id \"$1\" to quit" 2>&1
+}
+
+# Brings the app forward without touching Accessibility or System Events:
+# `open -a` needs no special permission. This exists only so that whatever
+# dialog the app is about to raise is actually visible on screen instead of
+# sitting behind whatever else has focus.
+activate_instance() {
+    /usr/bin/open -a "$1" >/dev/null 2>&1 || true
+}
+
 quit_instance() {
     local app="$1" bundle_id="$2" label="$3"
     # The app may already be gone while its helpers are not, which is exactly
     # the state that used to strand them, so the sweep below runs either way.
     if bundle_app_is_running "$app"; then
-        local quit_error waited attempt
+        local quit_error="" waited=0 attempt confirmed=0 phase phase_waited=0
+
         for attempt in 1 2; do
-            quit_error="$(/usr/bin/osascript -e "tell application id \"$bundle_id\" to quit" 2>&1)" || true
-            waited=0
-            while (( waited < 20 )) && bundle_app_is_running "$app"; do
+            if (( ! confirmed )); then
+                quit_error="$(send_quit_event "$bundle_id")" || true
+                if [[ "$quit_error" == *-128* ]]; then
+                    # -128 is AppleEvent-speak for "the app cancelled this
+                    # request". Measured on this machine, the stock ChatGPT
+                    # app answers with it in well under a second, nowhere near
+                    # long enough for a human to have clicked anything. What
+                    # is actually happening is the app raising its own "Quit
+                    # ChatGPT?" confirmation and cancelling our AppleEvent
+                    # while it does, not some unrelated dialog blocking us.
+                    # The two cannot be told apart without Accessibility
+                    # permission, which this install deliberately does not
+                    # have, so bring the app forward so whichever dialog it is
+                    # is actually on screen, then give a human real time to
+                    # notice it and click Quit. Sending another quit event now
+                    # would only be answered with another -128, since the app
+                    # already has its own dialog up and dedupes repeats.
+                    confirmed=1
+                    activate_instance "$app"
+                fi
+            fi
+
+            phase=20
+            (( confirmed )) && phase="$QUIT_DIALOG_WAIT_SECONDS"
+            phase_waited=0
+            while (( phase_waited < phase )) && bundle_app_is_running "$app"; do
+                # A silent two-minute hang reads as a stuck command to both
+                # the CLI user and the menu bar app, so say what is happening
+                # while it is happening. This is safe: resultFields() on the
+                # Swift side only reads the last line of output, so a note
+                # printed ahead of the final result cannot be mistaken for it.
+                if (( confirmed )) && (( phase_waited > 0 )) && (( phase_waited % 20 == 0 )); then
+                    print -r -- "doppel: still waiting for '$label' to confirm quitting."
+                fi
                 /bin/sleep 1
+                phase_waited=$(( phase_waited + 1 ))
                 waited=$(( waited + 1 ))
             done
+
             bundle_app_is_running "$app" || break
+            (( confirmed )) && break
         done
+
         if bundle_app_is_running "$app"; then
-            # -128 is "user cancelled": the app refused, which normally means a
-            # dialog is waiting for an answer.
-            if [[ "$quit_error" == *-128* ]]; then
-                die "'$label' would not quit — it has a dialog open (a keychain prompt, for example). Answer or dismiss it, then try again."
+            if (( confirmed )); then
+                die "'$label' would not quit. It is most likely asking you to confirm quitting itself, so click Quit in its dialog. If a different dialog is open instead (a keychain prompt, for example), answer that one first, then try again."
             fi
-            die "'$label' would not quit after 40 seconds. Quit it yourself, then try again."
+            die "'$label' would not quit after ${waited} seconds. Quit it yourself, then try again."
         fi
     fi
     reap_bundle_processes "$app"
