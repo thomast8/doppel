@@ -6,6 +6,20 @@
         <description>Signed Doppel releases</description>
         <language>en</language>
         <item>
+            <title>1.1.7</title>
+            <pubDate>Sat, 05 Sep 2026 11:31:34 +0100</pubDate>
+            <link>https://github.com/thomast8/doppel</link>
+            <sparkle:version>19</sparkle:version>
+            <sparkle:shortVersionString>1.1.7</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Doppel 1.1.7
+
+- Removing or rebuilding an instance now stops its background helpers too. ChatGPT's crash reporter and modifier monitor used to keep running after the app had gone, pointing at a bundle that no longer existed, and they built up quietly over time. Sparkle's own updater and the Computer Use helpers are deliberately left alone.
+- `remove --purge-data` now also moves the instance's cache to the Trash, alongside its profile and `CODEX_HOME`. That cache was never cleaned up before, so it accumulated for every instance ever removed. The stock ChatGPT app's own cache is protected the same way its profile already was.
+]]></description>
+            <enclosure url="https://github.com/thomast8/doppel/releases/download/v1.1.7/Doppel-1.1.7-macOS.zip" length="3025128" type="application/octet-stream" sparkle:edSignature="ty78b/EWB2ZC/2gVb3tPf4PMtByeq0dJPoczn/l3/u2Cx8XTJ5IrWg75JSaa2wutuu661Uus3r2MDqgnLaDWCg=="/>
+        </item>
+        <item>
             <title>1.1.6</title>
             <pubDate>Sat, 05 Sep 2026 10:55:23 +0100</pubDate>
             <link>https://github.com/thomast8/doppel</link>
@@ -30,20 +44,6 @@
 - Names the app that is holding the built-in browser engine. When ChatGPT is running on its own, outside Doppel, the Native Tools section said a profile called "701" was running, which was the process ID rather than a name.
 ]]></description>
             <enclosure url="https://github.com/thomast8/doppel/releases/download/v1.1.5/Doppel-1.1.5-macOS.zip" length="3021056" type="application/octet-stream" sparkle:edSignature="D5bjQGagZupwzyKUCSxbQdJGZt+7gDuUVaqlBGeQg6kNXlMAWqsJnA0md2FzwhWJ79hdzd5UIFq0nmKu+5iiBA=="/>
-        </item>
-        <item>
-            <title>1.1.4</title>
-            <pubDate>Sun, 23 Aug 2026 10:26:42 +0100</pubDate>
-            <link>https://github.com/thomast8/doppel</link>
-            <sparkle:version>16</sparkle:version>
-            <sparkle:shortVersionString>1.1.4</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[# Doppel 1.1.4
-
-- Rebuilds instances again on ChatGPT 26.818 and later. The previous version could not patch the newest ChatGPT layout, so instances failed with "Patching the instance OAuth callback routing failed" and would not start.
-- Recognises the reworked deep-link handling in current ChatGPT builds without pinning to one release, so a routine ChatGPT update no longer strands your instances.
-]]></description>
-            <enclosure url="https://github.com/thomast8/doppel/releases/download/v1.1.4/Doppel-1.1.4-macOS.zip" length="3020381" type="application/octet-stream" sparkle:edSignature="eYIMxXk10g2SP0SnMK4MHjb3gyJZwSNKAaAEdbGW+d4j5l9yQCFAZOdzNRkm2B5S8GlFLT0a2DsNvsLtjoSsAQ=="/>
         </item>
     </channel>
 </rss>
