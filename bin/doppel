@@ -65,6 +65,14 @@ readonly IAB_RUNTIME_FILE="$DOPPEL_HOME/state/iab-engine-runtime"
 readonly IAB_OPERATION_LOCK="$DOPPEL_HOME/state/IABCoordinator.lock"
 readonly CLONE_LAUNCH_ROOT="$DOPPEL_HOME/state/clone-launch"
 readonly IAB_ROUTER_ENGINE_MIN="24"
+# How long quit_instance waits, in total, once the app being quit has answered
+# with AppleEvent error -128 (see the comment inside quit_instance for why that
+# reads as the app's own quit confirmation rather than an unrelated modal). A
+# human has to notice a dialog and click a button inside that window, so it is
+# deliberately generous. Not environment-overridable: nothing needs to shrink
+# it at runtime, and the qa suite drives quit_instance in isolation where it
+# sets this as a plain variable.
+readonly QUIT_DIALOG_WAIT_SECONDS=120
 
 # Both values are interpolated into a code-signing requirement, so they are
 # checked once here rather than at every use. A value carrying a quote can
@@ -339,28 +347,78 @@ reap_bundle_processes() {
     return 0
 }
 
+# A named wrapper around the AppleEvent quit, so a test can stub the event
+# itself instead of the app it is sent to: /usr/bin/osascript is an absolute
+# path, and a shell function cannot shadow that the way it can shadow a bare
+# command name.
+send_quit_event() {
+    /usr/bin/osascript -e "tell application id \"$1\" to quit" 2>&1
+}
+
+# Brings the app forward without touching Accessibility or System Events:
+# `open -a` needs no special permission. This exists only so that whatever
+# dialog the app is about to raise is actually visible on screen instead of
+# sitting behind whatever else has focus.
+activate_instance() {
+    /usr/bin/open -a "$1" >/dev/null 2>&1 || true
+}
+
 quit_instance() {
     local app="$1" bundle_id="$2" label="$3"
     # The app may already be gone while its helpers are not, which is exactly
     # the state that used to strand them, so the sweep below runs either way.
     if bundle_app_is_running "$app"; then
-        local quit_error waited attempt
+        local quit_error="" waited=0 attempt confirmed=0 phase phase_waited=0
+
         for attempt in 1 2; do
-            quit_error="$(/usr/bin/osascript -e "tell application id \"$bundle_id\" to quit" 2>&1)" || true
-            waited=0
-            while (( waited < 20 )) && bundle_app_is_running "$app"; do
+            if (( ! confirmed )); then
+                quit_error="$(send_quit_event "$bundle_id")" || true
+                if [[ "$quit_error" == *-128* ]]; then
+                    # -128 is AppleEvent-speak for "the app cancelled this
+                    # request". Measured on this machine, the stock ChatGPT
+                    # app answers with it in well under a second, nowhere near
+                    # long enough for a human to have clicked anything. What
+                    # is actually happening is the app raising its own "Quit
+                    # ChatGPT?" confirmation and cancelling our AppleEvent
+                    # while it does, not some unrelated dialog blocking us.
+                    # The two cannot be told apart without Accessibility
+                    # permission, which this install deliberately does not
+                    # have, so bring the app forward so whichever dialog it is
+                    # is actually on screen, then give a human real time to
+                    # notice it and click Quit. Sending another quit event now
+                    # would only be answered with another -128, since the app
+                    # already has its own dialog up and dedupes repeats.
+                    confirmed=1
+                    activate_instance "$app"
+                fi
+            fi
+
+            phase=20
+            (( confirmed )) && phase="$QUIT_DIALOG_WAIT_SECONDS"
+            phase_waited=0
+            while (( phase_waited < phase )) && bundle_app_is_running "$app"; do
+                # A silent two-minute hang reads as a stuck command to both
+                # the CLI user and the menu bar app, so say what is happening
+                # while it is happening. This is safe: resultFields() on the
+                # Swift side only reads the last line of output, so a note
+                # printed ahead of the final result cannot be mistaken for it.
+                if (( confirmed )) && (( phase_waited > 0 )) && (( phase_waited % 20 == 0 )); then
+                    print -r -- "doppel: still waiting for '$label' to confirm quitting."
+                fi
                 /bin/sleep 1
+                phase_waited=$(( phase_waited + 1 ))
                 waited=$(( waited + 1 ))
             done
+
             bundle_app_is_running "$app" || break
+            (( confirmed )) && break
         done
+
         if bundle_app_is_running "$app"; then
-            # -128 is "user cancelled": the app refused, which normally means a
-            # dialog is waiting for an answer.
-            if [[ "$quit_error" == *-128* ]]; then
-                die "'$label' would not quit — it has a dialog open (a keychain prompt, for example). Answer or dismiss it, then try again."
+            if (( confirmed )); then
+                die "'$label' would not quit. It is most likely asking you to confirm quitting itself, so click Quit in its dialog. If a different dialog is open instead (a keychain prompt, for example), answer that one first, then try again."
             fi
-            die "'$label' would not quit after 40 seconds. Quit it yourself, then try again."
+            die "'$label' would not quit after ${waited} seconds. Quit it yourself, then try again."
         fi
     fi
     reap_bundle_processes "$app"
@@ -2010,11 +2068,92 @@ release_update_lock() {
     /bin/rmdir "$UPDATE_ROOT/Coordinator.lock" 2>/dev/null || true
 }
 
+# How `update apply` has to treat the official ChatGPT app. Doppel can always
+# quit that app; what it could not do was put it back. The restart manifest
+# knew two shapes — the bare primary and a Doppel clone — and an official
+# process hosting an assigned managed profile is neither, so the whole update
+# used to refuse rather than reopen it against the wrong profile root. This
+# picks the shape, and still refuses whenever the official engine is somewhere
+# Doppel cannot return it to exactly as it found it.
+#
+# Pure: the assignment and the runtime both arrive as arguments, so every
+# branch is reachable in QA without a live official process.
+#
+#   $1  built-in-browser slot slug, empty when nothing is assigned
+#   $2  one `vendor_runtime_snapshot` row
+#
+# Output is one tab-separated row:
+#   none                       nothing official is running
+#   bare                       quit it, reopen /Applications/ChatGPT.app as itself
+#   vendor-profile<TAB>slug    quit it, reopen that profile's official engine
+#   refuse<TAB>reason          stop before fetching, locking or touching an app
+plan_vendor_update_restart() {
+    local slot="$1" name reason
+    local runtime_kind runtime_slug runtime_name runtime_pid
+    parse_vendor_runtime_snapshot "$2"
+    [[ "$runtime_kind" != "none" ]] || { print -r -- "none"; return 0 }
+    # With no assignment the official app is only ever itself, which is the one
+    # shape the manifest has always been able to reopen.
+    if [[ -z "$slot" ]]; then
+        print -r -- "bare"
+        return 0
+    fi
+    if [[ "$runtime_kind" == "managed" && "$runtime_slug" == "$slot" ]]; then
+        printf 'vendor-profile\t%s\n' "$slot"
+        return 0
+    fi
+    name="$(config_value "$INSTANCES_ROOT/$slot" DOPPEL_DISPLAY_NAME)"
+    [[ -n "$name" ]] || name="$slot"
+    case "$runtime_kind" in
+        managed)
+            reason="the built-in browser is assigned to '$name', but the official ChatGPT window that is open belongs to '$runtime_name'. Quit that window"
+            ;;
+        ambiguous)
+            reason="the built-in browser is assigned to '$name', and more than one official ChatGPT process is open ($runtime_name). Quit those windows"
+            ;;
+        *)
+            reason="the built-in browser is assigned to '$name', and an official ChatGPT window is open on a profile Doppel does not manage. Quit that window"
+            ;;
+    esac
+    printf 'refuse\t%s before installing the update; no apps were changed.\n' "$reason"
+}
+
+# Takes a fresh decision and hands it to the caller as `vendor_kind` plus, for
+# the vendor-profile shape, the instance directory to reopen. The caller
+# declares both. Refusing is terminal, so it happens here rather than being
+# handed back for every call site to re-check.
+decide_vendor_update_restart() {
+    local plan
+    plan="$(plan_vendor_update_restart "$(iab_slot_slug)" "$(vendor_runtime_snapshot)")"
+    vendor_kind="${plan%%$'\t'*}"
+    [[ "$vendor_kind" != "refuse" ]] || die "${plan#*$'\t'}"
+    vendor_dir=""
+    [[ "$vendor_kind" != "vendor-profile" ]] || vendor_dir="$INSTANCES_ROOT/${plan#*$'\t'}"
+}
+
 typeset -g UPDATE_ABORT_MANIFEST=""
 abort_update_cleanup() {
-    local app dir
+    local line app dir slug
     if [[ -n "$UPDATE_ABORT_MANIFEST" && -f "$UPDATE_ABORT_MANIFEST" ]]; then
-        while IFS= read -r app; do
+        while IFS= read -r line; do
+            # The official engine hosting an assigned profile goes back the way
+            # it was started, not as the bare primary: a bare reopen would drop
+            # CODEX_HOME and re-enable the vendor's own Sparkle updater.
+            if [[ "$line" == "vendor-profile"$'\t'* ]]; then
+                slug="${line#*$'\t'}"
+                # Same charset check the engine slot gets, for the same reason:
+                # this slug becomes a path, and the first thing
+                # launch_vendor_instance does with that path is source the
+                # config inside it. A slug that climbs out of the instances
+                # root would source a file Doppel never wrote.
+                [[ -n "$slug" && "$slug" != *[^a-z0-9-]* ]] || continue
+                dir="$INSTANCES_ROOT/$slug"
+                is_instance_dir "$dir" || continue
+                [[ -z "$(vendor_main_pids)" ]] || continue
+                ( launch_vendor_instance "$dir" >/dev/null 2>&1 ) || true
+                continue
+            fi
+            app="$line"
             [[ -d "$app" ]] || continue
             /usr/bin/pgrep -f "${app}/Contents/MacOS/" >/dev/null 2>&1 && continue
             if [[ "$app" == "$PRIMARY_APP" ]]; then
@@ -2259,17 +2398,7 @@ rebuild_instance_for_update() {
 cmd_update_apply() {
     local version="${1:-}"
     [[ $# -le 1 ]] || die "usage: doppel update apply [build]"
-    # A profile opened through the official engine is outside the managed-clone
-    # quit/reopen manifest. Refuse before fetching, locking, compiling, or
-    # touching any app so an update can never silently close it or reopen it
-    # against the wrong profile root.
-    local assigned_slug assigned_dir assigned_name
-    assigned_slug="$(iab_slot_slug)"
-    if [[ -n "$assigned_slug" && -n "$(vendor_main_pids)" ]]; then
-        assigned_dir="$INSTANCES_ROOT/$assigned_slug"
-        assigned_name="$(config_value "$assigned_dir" DOPPEL_DISPLAY_NAME)"
-        die "the built-in browser is assigned to '$assigned_name' and an official ChatGPT window is open. Quit that window before installing the update; no apps were changed."
-    fi
+    local vendor_kind="none" vendor_dir=""
     local from_feed=0
     if [[ -z "$version" ]]; then
         local latest latest_short latest_url
@@ -2323,10 +2452,19 @@ cmd_update_apply() {
         fi
     fi
 
+    # An official window hosting an assigned profile is not the bare primary,
+    # and reopening it as one would drop CODEX_HOME, hand the profile back to
+    # the vendor's own Sparkle updater and leave no runtime receipt. Refuse a
+    # shape the manifest cannot rebuild here, before the lock, the helpers or
+    # any app is touched. A reconcile never closes the official window, so it
+    # has no business asking. The decision is taken again below, immediately
+    # before anything is quit.
+    (( reconcile_only )) || decide_vendor_update_restart
+
     acquire_update_lock
     trap 'release_update_lock' EXIT INT TERM
     compile_helpers
-    local dir name app bundle_id primary_was_running=0
+    local dir name app bundle_id
     local -a dirs names apps running_apps failures verified_apps
     for dir in "$INSTANCES_ROOT"/*(N/); do
         is_instance_dir "$dir" || continue
@@ -2348,15 +2486,17 @@ cmd_update_apply() {
         fi
     done
     (( ${#dirs} > 0 )) || die "there are no installed managed instances to update"
-    # A reconcile leaves /Applications/ChatGPT.app alone, so there is no reason
-    # to close the official window the user may be working in.
-    if (( reconcile_only == 0 )) && [[ -n "$(vendor_main_pids)" ]]; then
-        primary_was_running=1
-    fi
+    # Decide again. Verifying the vendor signature of a 1 GB bundle, taking the
+    # lock and installing the engine assets all happen between here and the
+    # check above, and the user can quit or open ChatGPT throughout.
+    (( reconcile_only )) || decide_vendor_update_restart
 
     restart_manifest="$UPDATE_ROOT/restart-after-update"
     : > "$restart_manifest"
-    (( primary_was_running )) && print -r -- "$PRIMARY_APP" >> "$restart_manifest"
+    case "$vendor_kind" in
+        bare) print -r -- "$PRIMARY_APP" >> "$restart_manifest" ;;
+        vendor-profile) printf 'vendor-profile\t%s\n' "${vendor_dir:t}" >> "$restart_manifest" ;;
+    esac
     for app in $running_apps; do print -r -- "$app" >> "$restart_manifest"; done
     UPDATE_ABORT_MANIFEST="$restart_manifest"
     trap 'abort_update_cleanup' EXIT INT TERM
@@ -2364,7 +2504,7 @@ cmd_update_apply() {
     # All destructive work starts only after the download, vendor signature,
     # instance inventory, helper compilation, and restart manifest are ready.
     local index
-    if (( primary_was_running )); then
+    if [[ "$vendor_kind" != "none" ]]; then
         quit_instance "$PRIMARY_APP" "$PRIMARY_BUNDLE_ID" "ChatGPT"
     fi
     for (( index = 1; index <= ${#dirs}; index++ )); do
@@ -2431,11 +2571,38 @@ cmd_update_apply() {
         fi
     done
 
-    if (( primary_was_running )); then
-        if ! /usr/bin/open -na "$PRIMARY_APP" >/dev/null 2>&1 || ! wait_for_instance "$PRIMARY_APP"; then
-            failures+=("the primary ChatGPT app was updated but did not reopen")
-        fi
-    fi
+    # Last, after the clones: launch_vendor_instance refuses while the target's
+    # own clone is up, and by now every clone that is coming back is back.
+    local vendor_label vendor_error vendor_app
+    case "$vendor_kind" in
+        bare)
+            if ! /usr/bin/open -na "$PRIMARY_APP" >/dev/null 2>&1 || ! wait_for_instance "$PRIMARY_APP"; then
+                failures+=("the primary ChatGPT app was updated but did not reopen")
+            fi
+            ;;
+        vendor-profile)
+            # Reopened the way it was running, which also writes the runtime
+            # receipt for the new process. The stale receipt is bound to the old
+            # PID and start time, so it cannot be read as this launch.
+            #
+            # Gated on the same verification the clones are: an instance whose
+            # rebuild failed has already been reported, and reopening it anyway
+            # would put a profile back on an engine Doppel just refused to
+            # vouch for.
+            vendor_label="$(config_value "$vendor_dir" DOPPEL_DISPLAY_NAME)"
+            vendor_app="$(app_path_for "$vendor_dir")"
+            verified=0
+            for app in $verified_apps; do [[ "$app" == "$vendor_app" ]] && verified=1; done
+            if (( verified )); then
+                if ! vendor_error="$( launch_vendor_instance "$vendor_dir" 2>&1 >/dev/null )"; then
+                    # `die` writes through the CLI's own prefix; keeping it
+                    # would read as "doppel: ... : doppel: ..." in the summary.
+                    vendor_error="${vendor_error#doppel: }"
+                    failures+=("$vendor_label was updated but its built-in-browser engine did not reopen${vendor_error:+: $vendor_error}")
+                fi
+            fi
+            ;;
+    esac
 
     local outcome="updated" summary="ChatGPT updated to $target_short"
     if (( reconcile_only )); then
@@ -2498,6 +2665,18 @@ cmd_update() {
         prepare) cmd_update_prepare "$@" ;;
         apply) with_iab_operation_lock cmd_update_apply "$@" ;;
         verify) cmd_update_verify "$@" ;;
+        # Development only. Evaluates the restart decision for a hypothetical
+        # assignment and runtime snapshot; reaching those branches for real
+        # needs a live official process sitting on a managed profile.
+        __restart-plan)
+            [[ "${DOPPEL_DEV:-0}" == "1" && ( $# -eq 0 || $# -eq 2 ) ]] || \
+                die "usage: doppel update {check|prepare|apply|verify} ..."
+            if (( $# == 2 )); then
+                plan_vendor_update_restart "$1" "$2"
+            else
+                plan_vendor_update_restart "$(iab_slot_slug)" "$(vendor_runtime_snapshot)"
+            fi
+            ;;
         *) die "usage: doppel update {check|prepare|apply|verify} ..." ;;
     esac
 }
