@@ -912,5 +912,151 @@ check "the readable one still moved" \
 set_codex_home "$CLAIM_DIR" "$CLAIM_SAVED_HOME"
 
 print -r -- ""
+print -r -- "an installed instance whose registry directory is gone is still adoptable"
+# The registry is a record of an instance, not the only copy of one: the bundle
+# carries the config and icon its own engine reads at launch. Losing the
+# directory used to make every inventory-driven command report an empty Mac,
+# including the update the menu app had just offered.
+# :a because that is what the CLI records: adopt normalises the path it is
+# given so install-root is something app_path_for can rebuild from, and TMPDIR
+# on macOS ends in a slash.
+readonly ADOPT_HOME="${SCRATCH:a}/adopt-user"
+readonly ADOPT_STATE="$SCRATCH/adopt-state"
+readonly ADOPT_APPS="$ADOPT_HOME/Applications"
+readonly ADOPT_APP="$ADOPT_APPS/Doppel Adopt.app"
+readonly ADOPT_PAYLOAD="$ADOPT_APP/Contents/Resources/Doppel"
+fabricate_adoptable_bundle() {
+    local name="${1:-Doppel Adopt}" id="${2:-com.example.doppel-adopt}" scheme="${3:-codex-adopt}"
+    local app="$ADOPT_APPS/$name.app" payload
+    payload="$app/Contents/Resources/Doppel"
+    /bin/mkdir -p "$payload/assets" "$app/Contents/MacOS"
+    write_config_file "$payload" "$name" "$id" "$scheme" \
+        "$ADOPT_HOME/Library/Application Support/$name" "$ADOPT_HOME/.codex-adopt" "3B82F6"
+    print -r -- "icns" > "$payload/assets/icon.icns"
+    print -r -- "png" > "$payload/assets/icon.png"
+}
+run_adopt() {
+    OUT="$(HOME="$ADOPT_HOME" DOPPEL_HOME="$ADOPT_STATE" "$CLI" "$@" 2>&1)"
+    STATUS=$?
+    return 0
+}
+/bin/mkdir -p "$ADOPT_APPS"
+fabricate_adoptable_bundle
+
+run_adopt list
+[[ "$OUT" == *"no instances"* && "$OUT" == *"not registered with Doppel"* && "$OUT" == *"$ADOPT_APP"* ]] \
+    && pass "an empty registry names the managed app it cannot see" \
+    || fail "an empty registry names the managed app it cannot see" "got: $OUT"
+
+run_adopt list --porcelain
+check "and --porcelain stays a table of instances only" "$OUT" ""
+
+run_adopt adopt --all
+check "adoption succeeds" "$STATUS" "0"
+[[ "$OUT" == *"adopted: Doppel Adopt"* ]] && pass "and says what it adopted" \
+    || fail "and says what it adopted" "got: $OUT"
+check "the instance is registered under the slug of its current name" \
+    "$(config_field "$ADOPT_STATE/instances/doppel-adopt" DOPPEL_BUNDLE_ID)" \
+    "com.example.doppel-adopt"
+check "the recorded install root is where the bundle actually is" \
+    "$(cat "$ADOPT_STATE/instances/doppel-adopt/install-root" 2>/dev/null)" "$ADOPT_APPS"
+run_adopt list --porcelain
+check "and the instance resolves back to its installed app" \
+    "$(print -r -- "$OUT" | /usr/bin/awk -F'\t' '{print $3 FS $4}')" \
+    "$ADOPT_APP"$'\t'"installed"
+# Copied out of the bundle rather than regenerated: --icon and --original-icon
+# leave no tint to regenerate from, and a tinted icon would be re-derived from
+# whatever artwork the primary carries today.
+check "the icon comes from the bundle" \
+    "$(cat "$ADOPT_STATE/instances/doppel-adopt/assets/icon.icns" 2>/dev/null)" "icns"
+
+run_adopt adopt --all
+[[ "$OUT" == *"no unregistered managed apps found"* ]] \
+    && pass "a second sweep finds nothing left to adopt" \
+    || fail "a second sweep finds nothing left to adopt" "got: $OUT"
+
+run_adopt list
+[[ "$OUT" != *"not registered with Doppel"* ]] \
+    && pass "and the warning is gone once the app is managed" \
+    || fail "and the warning is gone once the app is managed" "got: $OUT"
+
+# A copy of a managed bundle is not a second instance: both would claim one
+# bundle id, which is what Launch Services and the launcher's own slug lookup
+# resolve by. The same check keeps a bundle that was moved from being adopted
+# alongside the entry that already describes it.
+fabricate_adoptable_bundle "Doppel Adopt Copy" "com.example.doppel-adopt" "codex-adopt-copy"
+run_adopt adopt "$ADOPT_APPS/Doppel Adopt Copy.app"
+check "adopting a bundle whose identity is already registered fails" "$STATUS" "1"
+[[ "$OUT" == *"bundle id 'com.example.doppel-adopt' is already used by instance"* ]] \
+    && pass "and it names the instance that already claims it" \
+    || fail "and it names the instance that already claims it" "got: $OUT"
+[[ ! -d "$ADOPT_STATE/instances/doppel-adopt-copy" ]] \
+    && pass "and no second entry was left behind" \
+    || fail "and no second entry was left behind" "a directory was created"
+/bin/rm -rf "$ADOPT_APPS/Doppel Adopt Copy.app"
+
+print -r -- ""
+print -r -- "adoption re-validates a payload it did not just write"
+# The payload sits in a user-writable bundle. Trusting it because Doppel wrote
+# it once would trust whatever edited it since.
+adopt_reject() {
+    local label="$1" name="$2" expect="$3"
+    /bin/rm -rf "$ADOPT_STATE/instances"
+    run_adopt adopt "$ADOPT_APPS/$name.app"
+    if (( STATUS != 0 )) && [[ "$OUT" == *"$expect"* ]]; then
+        pass "$label"
+    else
+        fail "$label" "status $STATUS, got: $OUT"
+    fi
+    [[ ! -d "$ADOPT_STATE/instances/$(print -r -- "$name" | /usr/bin/tr '[:upper:]' '[:lower:]' | /usr/bin/sed -E 's/[^a-z0-9]+/-/g')" ]] \
+        && pass "  and nothing was registered" \
+        || fail "  and nothing was registered" "a directory was left behind"
+}
+fabricate_adoptable_bundle "Doppel Adopt Primary" "com.example.doppel-primary" "codex"
+adopt_reject "a payload claiming the primary URL scheme is refused" \
+    "Doppel Adopt Primary" "records the primary app's URL scheme"
+
+fabricate_adoptable_bundle "Doppel Adopt Bad Id" "not a bundle id" "codex-badid"
+adopt_reject "a payload with an unusable bundle id is refused" \
+    "Doppel Adopt Bad Id" "bundle id that is not valid"
+
+fabricate_adoptable_bundle "Doppel Adopt Renamed" "com.example.doppel-renamed" "codex-renamed"
+/bin/mv "$ADOPT_APPS/Doppel Adopt Renamed.app" "$ADOPT_APPS/Doppel Adopt Moved.app"
+adopt_reject "a bundle renamed in Finder is refused rather than registered as missing" \
+    "Doppel Adopt Moved" "rename the bundle to"
+
+/bin/rm -rf "$ADOPT_STATE/instances"
+/bin/rm -rf "$ADOPT_PAYLOAD/assets"
+run_adopt adopt "$ADOPT_APP"
+check "a payload with no icon to copy is refused" "$STATUS" "1"
+[[ "$OUT" == *"no icon assets to adopt"* ]] && pass "and it says what is missing" \
+    || fail "and it says what is missing" "got: $OUT"
+
+# A sweep exists to recover what can be recovered. The rejected bundles above
+# are all still on disk, so this is the mixed Mac rather than a contrived one.
+fabricate_adoptable_bundle
+run_adopt adopt --all
+check "a sweep over a mixed set still fails overall" "$STATUS" "1"
+[[ "$OUT" == *"could not be adopted"* ]] && pass "and says how many it could not take" \
+    || fail "and says how many it could not take" "got: $OUT"
+check "but the readable one was adopted anyway" \
+    "$(config_field "$ADOPT_STATE/instances/doppel-adopt" DOPPEL_BUNDLE_ID)" \
+    "com.example.doppel-adopt"
+/bin/rm -rf "$ADOPT_APPS/Doppel Adopt Primary.app" "$ADOPT_APPS/Doppel Adopt Bad Id.app" \
+    "$ADOPT_APPS/Doppel Adopt Moved.app"
+/bin/rm -rf "$ADOPT_STATE/instances"
+
+# The message that would have saved the session this came from: an apply with
+# nothing registered used to stop at "no managed instances" and leave the two
+# installed clones unmentioned.
+fabricate_adoptable_bundle
+OUT="$(HOME="$ADOPT_HOME" DOPPEL_HOME="$ADOPT_STATE" \
+    DOPPEL_APPCAST_URL="file://${SCRATCH// /%20}/appcast.xml" \
+    "$CLI" update apply "$DRIFT_BUILD" 2>&1)"
+[[ "$OUT" == *"no installed managed instances"* && "$OUT" == *"doppel adopt --all"* ]] \
+    && pass "an apply with an empty registry points at the apps it cannot see" \
+    || fail "an apply with an empty registry points at the apps it cannot see" "got: $OUT"
+
+print -r -- ""
 print -r -- "$PASSED passed, $FAILED failed"
 (( FAILED == 0 ))

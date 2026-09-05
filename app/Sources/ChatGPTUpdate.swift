@@ -57,6 +57,30 @@ struct ChatGPTUpdate: Equatable {
     }
 }
 
+/// Managed app bundles installed on disk that Doppel's registry does not
+/// account for, read from the same porcelain line.
+///
+/// An instance keeps a full copy of its own definition inside its bundle, so a
+/// registry directory can go missing without the app going anywhere. Every
+/// inventory-driven command then reports an empty Mac — including `update
+/// apply`, which refuses the update this app had just offered. The count is
+/// what tells those two emptinesses apart.
+struct UnregisteredInstances: Equatable {
+    let count: Int
+
+    static func parse(_ output: String) -> UnregisteredInstances? {
+        let fields = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: "\t", omittingEmptySubsequences: false)
+        // Column nine, so a CLI older than this app reports nothing rather
+        // than having its drift counts read as an orphan count.
+        guard fields.count >= 9,
+              ["current", "available", "ready", "stale-instances"].contains(String(fields[0])),
+              let count = Int(fields[8])
+        else { return nil }
+        return UnregisteredInstances(count: count)
+    }
+}
+
 /// The vendor build Doppel currently sees installed, read from the same
 /// porcelain line as the update decision.
 ///

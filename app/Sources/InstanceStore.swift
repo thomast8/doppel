@@ -30,6 +30,8 @@ final class InstanceStore: ObservableObject {
     @Published var chatGPTUpdate: ChatGPTUpdate?
     /// The installed vendor build, shown in the menu even when it is current.
     @Published var installedChatGPT: InstalledChatGPT?
+    /// Managed apps installed on this Mac that Doppel's registry has lost.
+    @Published var unregisteredInstanceCount = 0
     @Published var checkingForUpdates = false
     @Published var permissionStatuses: [PermissionIssue] = []
     @Published var checkingPermissions = false
@@ -376,6 +378,12 @@ final class InstanceStore: ObservableObject {
                     // Recorded whether or not there is an update to offer, so
                     // the menu can show the installed build either way.
                     self.installedChatGPT = InstalledChatGPT.parse(output)
+                    // A CLI too old to report the column says nothing about
+                    // orphans; absent is not the same as none, so the last
+                    // known count is left alone rather than zeroed.
+                    if let unregistered = UnregisteredInstances.parse(output) {
+                        self.unregisteredInstanceCount = unregistered.count
+                    }
                     guard let update = ChatGPTUpdate.parse(output) else {
                         self.chatGPTUpdate = nil
                         // Only the CLI saying "current" means current. A line
@@ -421,6 +429,13 @@ final class InstanceStore: ObservableObject {
     }
 
     private func promptForUpdate(_ update: ChatGPTUpdate, force: Bool = false) {
+        // An update has to land somewhere. With nothing registered and managed
+        // apps installed, every apply the CLI could run would refuse itself, so
+        // the reconnection is offered instead of an update that cannot finish.
+        if instances.isEmpty && unregisteredInstanceCount > 0 {
+            promptToAdopt(force: force)
+            return
+        }
         switch update.state {
         case .ready:
             promptToRestart(update, force: force)
@@ -434,10 +449,21 @@ final class InstanceStore: ObservableObject {
         guard shouldPrompt(update, force: force) else { return }
         let alert = updateAlert()
         alert.messageText = "A new version of ChatGPT is available!"
+        let installed = instances.filter(\.installed).count
+        // Said in the singular or not at all: "all 0 managed instances" is a
+        // promise about an inventory that is empty for a reason worth its own
+        // sentence, and "all 1" reads as a bug.
+        let scope: String
+        switch installed {
+        case 0: scope = "Doppel will apply this update to the primary app."
+        case 1: scope = "Doppel will apply this update to the primary app and its managed instance together."
+        default:
+            scope = "Doppel will apply this update to the primary app and all \(installed) managed instances together."
+        }
         alert.informativeText = """
             ChatGPT \(update.targetVersion) is now available—you have \(update.currentVersion). Would you like to download it now?
 
-            Doppel will apply this update to the primary app and all \(instances.filter(\.installed).count) managed instances together.
+            \(scope)
             """
         alert.addButton(withTitle: "Install Update")
         alert.addButton(withTitle: "Remind Me Later")
@@ -492,6 +518,40 @@ final class InstanceStore: ObservableObject {
         let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let last = trimmed.split(separator: "\n").last else { return [] }
         return last.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+    }
+
+    /// Offered when managed apps are installed that Doppel has no record of.
+    /// Nothing about them is rebuilt: their definitions are read back out of the
+    /// bundles that carry them, so an adopted instance keeps its identity, its
+    /// icon and its account data.
+    func promptToAdopt(force: Bool = false) {
+        let count = unregisteredInstanceCount
+        guard count > 0 else { return }
+        let noun = count == 1 ? "app" : "apps"
+        guard force || !promptedUpdates.contains("adopt-\(count)") else { return }
+        promptedUpdates.insert("adopt-\(count)")
+        let alert = updateAlert()
+        alert.messageText = "Managed Instances Are Not Registered"
+        alert.informativeText = """
+            \(count) managed \(noun) \(count == 1 ? "is" : "are") installed on this Mac, but Doppel has no record of \(count == 1 ? "it" : "them"), so updates and permissions cannot reach \(count == 1 ? "it" : "them").
+
+            Doppel can read each app's own definition back out of the app itself. Nothing is rebuilt, no app is closed, and account data is not touched.
+            """
+        alert.addButton(withTitle: "Reconnect \(count == 1 ? "Instance" : "Instances")")
+        alert.addButton(withTitle: "Later")
+        guard present(alert) == .alertFirstButtonReturn else { return }
+        adoptUnregisteredInstances()
+    }
+
+    func adoptUnregisteredInstances() {
+        runCLI(["adopt", "--all"], busyKey: "adopt") { [weak self] failure in
+            guard let self, failure == nil else { return }
+            self.reload()
+            // The inventory it refused to act on is what changed, so the offer
+            // that was blocked is re-derived rather than replayed from cache.
+            self.chatGPTUpdate = nil
+            self.checkForUpdates(userInitiated: true)
+        }
     }
 
     /// Offered when ChatGPT's own updater moved the primary on its own: the

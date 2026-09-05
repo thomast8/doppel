@@ -6,6 +6,7 @@
 #       --scheme codex-secondary --profile-root "$HOME/Library/Application Support/ChatGPT Secondary" \
 #       --codex-home "$HOME/.codex-secondary" --tint F28C28 [--install-to "$HOME/Applications"]
 #   doppel list
+#   doppel adopt --all           # re-register installed instances Doppel lost
 #   doppel launch  <name>
 #   doppel rebuild <name>
 
@@ -505,6 +506,75 @@ instance_dir_for_app_path() {
         [[ "$(app_path_for "$dir")" == "$wanted" ]] && { print -r -- "$dir"; return 0; }
     done
     return 1
+}
+
+# MARK: - Unregistered managed bundles
+#
+# An installed instance keeps a full copy of its own definition — config, icon
+# and engine assets — inside the bundle, because the engine that launches it
+# runs from there. The instance directory is therefore a record of an instance
+# rather than the only copy of one, and a directory that goes missing costs
+# nothing but the record. Losing it is not hypothetical: every command that
+# iterates the registry then reports an empty inventory, including `update
+# apply`, which refuses the update the menu app just offered.
+bundle_payload_dir() {
+    print -r -- "$1/Contents/Resources/Doppel"
+}
+
+# Deliberately the same test is_instance_dir applies to a registry directory:
+# the payload a managed bundle carries is that directory's own layout.
+is_managed_bundle() {
+    is_instance_dir "$(bundle_payload_dir "$1")"
+}
+
+# Where an orphan scan looks. `create --install-to` accepts any path, so this
+# can never be exhaustive by construction; it covers the default root and the
+# system one, which is where an instance someone did not place by hand lives.
+typeset -ga ADOPT_SCAN_ROOTS=()
+adopt_scan_roots() {
+    ADOPT_SCAN_ROOTS=("$HOME/Applications" /Applications)
+    ADOPT_SCAN_ROOTS=(${(u)ADOPT_SCAN_ROOTS})
+}
+
+# True when some registered instance already accounts for this bundle, by path
+# or by identity. Identity as well as path because a bundle that was moved is
+# a registered instance in the wrong place, not an unregistered one, and
+# adopting it would create a second entry claiming the same bundle id.
+registry_claims_bundle() {
+    local app="$1" dir bundle_id
+    bundle_id="$(config_value "$(bundle_payload_dir "$app")" DOPPEL_BUNDLE_ID)"
+    for dir in "$INSTANCES_ROOT"/*(N/); do
+        is_instance_dir "$dir" || continue
+        [[ "$(app_path_for "$dir")" != "$app" ]] || return 0
+        [[ -z "$bundle_id" || "$(config_value "$dir" DOPPEL_BUNDLE_ID)" != "$bundle_id" ]] || return 0
+    done
+    return 1
+}
+
+typeset -ga ORPHAN_BUNDLES=()
+collect_orphan_bundles() {
+    local root app
+    ORPHAN_BUNDLES=()
+    adopt_scan_roots
+    for root in $ADOPT_SCAN_ROOTS; do
+        [[ -d "$root" ]] || continue
+        for app in "$root"/*.app(N/); do
+            # Cheapest test first: this runs on the menu app's update-check
+            # timer, and all but a handful of bundles fail it outright.
+            is_managed_bundle "$app" || continue
+            registry_claims_bundle "$app" && continue
+            ORPHAN_BUNDLES+=("$app")
+        done
+    done
+}
+
+# The one-line tail every "nothing to update" message wants: what the inventory
+# was actually missing, said where the emptiness is reported rather than left
+# for someone to discover.
+orphan_hint() {
+    collect_orphan_bundles
+    (( ${#ORPHAN_BUNDLES} > 0 )) || return 0
+    print -rn -- "; ${#ORPHAN_BUNDLES} managed app(s) are installed but not registered with Doppel — run 'doppel adopt --all' first"
 }
 
 # MARK: - Movable vendor engine slot
@@ -1193,6 +1263,130 @@ remove_partial_instance() {
     print -u2 -r -- "doppel: cleaned up the partly created instance at $PARTIAL_INSTANCE_DIR"
 }
 
+# Re-registers one managed bundle whose instance directory is gone. The bundle
+# is read, never written: its config and icon are copied back out, the engine
+# assets come from this CLI the way they do for any other command, and the
+# account data was never in the instance directory to begin with. An adopted
+# instance is therefore the same instance, not a new one built to look like it.
+#
+# Every field is re-validated on the way in with the rules create applies. The
+# payload lives in a user-writable bundle, so trusting it because Doppel wrote
+# it once would trust whatever edited it since.
+adopt_bundle() {
+    local app="$1" payload name bundle_id scheme profile_root codex_home tint slug dir
+    [[ -d "$app" ]] || die "no app bundle at $app"
+    is_managed_bundle "$app" || \
+        die "$app is not a Doppel-managed app: it carries no instance config"
+    payload="$(bundle_payload_dir "$app")"
+    name="$(config_value "$payload" DOPPEL_DISPLAY_NAME)"
+    bundle_id="$(config_value "$payload" DOPPEL_BUNDLE_ID)"
+    scheme="$(config_value "$payload" DOPPEL_URL_SCHEME)"
+    profile_root="$(config_value "$payload" DOPPEL_PROFILE_ROOT)"
+    codex_home="$(config_value "$payload" DOPPEL_CODEX_HOME)"
+    tint="$(config_value "$payload" DOPPEL_TINT)"
+
+    [[ -n "$name" && -n "$bundle_id" && -n "$scheme" && -n "$profile_root" && -n "$codex_home" ]] || \
+        die "$app carries an incomplete instance config; it cannot be adopted"
+    validate_name "$name"
+    # Instances are resolved back to their app by name and install root, so a
+    # bundle filename that disagrees with the recorded name would register an
+    # instance whose app `list` immediately reports as missing.
+    [[ "${app:t:r}" == "$name" ]] || \
+        die "$app is named '${app:t:r}' but its config says '$name'; rename the bundle to '$name.app' first"
+    [[ "$bundle_id" == [A-Za-z0-9]*([A-Za-z0-9.-]) && "$bundle_id" != *[^A-Za-z0-9.-]* ]] || \
+        die "$app records a bundle id that is not valid: '$bundle_id'"
+    [[ "$scheme" == [A-Za-z]* && "$scheme" != *[^A-Za-z0-9.+-]* ]] || \
+        die "$app records a URL scheme that is not valid: '$scheme'"
+    [[ "${scheme:l}" != "${PRIMARY_SCHEME:l}" ]] || \
+        die "$app records the primary app's URL scheme '$scheme'; it cannot be adopted"
+    [[ "$profile_root" == /* && "$codex_home" == /* ]] || \
+        die "$app records a relative profile or Codex home path; it cannot be adopted"
+    [[ -z "$tint" || "$tint" == "original" || \
+       ( ${#tint} -eq 6 && "$tint" != *[^0-9A-Fa-f]* ) ]] || \
+        die "$app records a tint that is not valid: '$tint'"
+
+    slug="$(slugify "$name")"
+    [[ -n "$slug" ]] || die "'$name' produces an empty identifier; it cannot be adopted"
+    # The slug is only ever a directory name: the launcher resolves its own
+    # instance by bundle id at runtime, so an adopted instance renamed since
+    # creation lands under the slug of its current name without anything
+    # noticing. A collision is still fatal — two instances cannot share one
+    # directory, and both would become unreachable by name.
+    [[ ! -d "$INSTANCES_ROOT/$slug" ]] || \
+        die "an instance directory already exists at $INSTANCES_ROOT/$slug; remove it first"
+    local existing existing_scheme
+    for existing in "$INSTANCES_ROOT"/*(N/); do
+        [[ "$(config_value "$existing" DOPPEL_BUNDLE_ID)" != "$bundle_id" ]] || \
+            die "bundle id '$bundle_id' is already used by instance '${existing:t}'"
+        existing_scheme="$(config_value "$existing" DOPPEL_URL_SCHEME)"
+        [[ "${existing_scheme:l}" != "${scheme:l}" ]] || \
+            die "URL scheme '$scheme' is already used by instance '${existing:t}'"
+        [[ "$(config_value "$existing" DOPPEL_PROFILE_ROOT)" != "$profile_root" ]] || \
+            die "profile root '$profile_root' is already used by instance '${existing:t}'"
+    done
+
+    # Taken from the bundle rather than regenerated from the tint: --icon and
+    # --original-icon leave no tint to regenerate from, and even a tinted icon
+    # would be re-derived from whatever artwork the primary carries today.
+    [[ -r "$payload/assets/icon.icns" && -r "$payload/assets/icon.png" ]] || \
+        die "$app carries no icon assets to adopt; rebuild it with 'doppel create' instead"
+
+    compile_helpers
+    dir="$INSTANCES_ROOT/$slug"
+    PARTIAL_INSTANCE_DIR="$dir"
+    trap 'remove_partial_instance' EXIT INT TERM
+    install_engine_assets "$dir"
+    /bin/cp "$payload/assets/icon.icns" "$payload/assets/icon.png" "$dir/assets/" || \
+        die "copying the instance icon out of $app failed"
+    write_config "$dir" "$name" "$bundle_id" "$scheme" "$profile_root" "$codex_home" "$tint"
+    print -r -- "${app:h}" > "$dir/install-root"
+    PARTIAL_INSTANCE_DIR=""
+    print -r -- "adopted: $name -> $app (instance assets: $dir)"
+}
+
+cmd_adopt() {
+    local all=0
+    local -a targets
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --all) all=1; shift ;;
+            -*) die "unknown option: $1" ;;
+            *) targets+=("$1"); shift ;;
+        esac
+    done
+    if (( all )); then
+        (( ${#targets} == 0 )) || die "usage: doppel adopt --all | doppel adopt <app path>..."
+        collect_orphan_bundles
+        targets=($ORPHAN_BUNDLES)
+        (( ${#targets} > 0 )) || {
+            print -r -- "no unregistered managed apps found"
+            return 0
+        }
+    fi
+    (( ${#targets} > 0 )) || die "usage: doppel adopt --all | doppel adopt <app path>..."
+    # Not `status`: zsh reserves it as an alias for $?, and assigning to it
+    # aborts the command with "read-only variable".
+    local app failed=0 adopt_status
+    for app in $targets; do
+        # :a, not :A — absolute so install-root is a path app_path_for can
+        # rebuild from, but symlinks left alone so the recorded root is spelled
+        # the way `create --install-to` would have spelled it.
+        if (( all )); then
+            # A sweep exists to recover what can be recovered. One bundle whose
+            # payload no longer reads must not strand the others, so each is
+            # adopted in its own shell and the failures are counted rather than
+            # taken as the end of the run. A named app still fails outright:
+            # there the caller said which one they meant.
+            adopt_status=0
+            ( adopt_bundle "${app:a}" ) || adopt_status=$?
+            (( adopt_status == 0 )) || failed=$(( failed + 1 ))
+        else
+            adopt_bundle "${app:a}"
+        fi
+    done
+    (( failed == 0 )) || die "$failed managed app(s) could not be adopted"
+}
+
 cmd_list() {
     # --porcelain: stable machine-readable output, one instance per line:
     # slug<TAB>name<TAB>app-path<TAB>installed|missing<TAB>tint<TAB>clone|vendor
@@ -1201,11 +1395,11 @@ cmd_list() {
     # of parsing config files itself, so the CLI stays the single source of truth.
     local porcelain=0
     [[ "${1:-}" == "--porcelain" ]] && porcelain=1
-    [[ -d "$INSTANCES_ROOT" ]] || { (( porcelain )) || print "no instances"; return 0 }
-    local dir name app state engine
+    local dir name app state engine listed=0
     for dir in "$INSTANCES_ROOT"/*(N/); do
         name="$(config_value "$dir" DOPPEL_DISPLAY_NAME)"
         [[ -n "$name" ]] || continue
+        listed=1
         app="$(app_path_for "$dir")"
         [[ -d "$app" ]] && state="installed" || state="missing"
         engine="clone"
@@ -1223,6 +1417,22 @@ cmd_list() {
             print -r -- "$name  ->  (not installed)"
         fi
     done
+    (( porcelain )) && return 0
+    (( listed )) || print "no instances"
+    # Printed after the inventory rather than folded into it: these are apps
+    # Doppel is not managing, and the fix is one command rather than a state to
+    # read. Left out of --porcelain, whose columns describe instances.
+    report_orphan_bundles
+}
+
+report_orphan_bundles() {
+    collect_orphan_bundles
+    (( ${#ORPHAN_BUNDLES} > 0 )) || return 0
+    local app
+    print -r -- ""
+    print -r -- "${#ORPHAN_BUNDLES} managed app(s) are installed but not registered with Doppel:"
+    for app in $ORPHAN_BUNDLES; do print -r -- "  $app"; done
+    print -r -- "Run 'doppel adopt --all' to manage them again."
 }
 
 cmd_launch() {
@@ -1930,7 +2140,7 @@ cmd_update_check() {
     [[ -z "${1:-}" || "$porcelain" == "1" ]] || die "usage: doppel update check [--porcelain]"
     validate_vendor_app "$PRIMARY_APP" || die "the primary ChatGPT app is missing or is not valid vendor-signed code"
     local current current_short latest latest_version latest_short latest_url prepared update_state
-    local drift stale ahead
+    local drift stale ahead orphans
     current="$(primary_version)"
     current_short="$(primary_short_version)"
     latest="$(fetch_latest_update)"
@@ -1938,6 +2148,8 @@ cmd_update_check() {
     update_state="current"
     stale=0
     ahead=0
+    collect_orphan_bundles
+    orphans=${#ORPHAN_BUNDLES}
     if (( latest_version > current )); then
         update_state="available"
         prepared="$(prepared_update_app "$latest_version")"
@@ -1958,10 +2170,12 @@ cmd_update_check() {
     if (( porcelain )); then
         # The drift counts are appended so the six columns every earlier reader
         # expects keep their meaning: current is what is installed, latest is
-        # what the feed offers. A reconcile targets the installed build.
-        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        # what the feed offers. A reconcile targets the installed build. The
+        # unregistered count is appended for the same reason: it says whether an
+        # empty inventory means "nothing to update" or "nothing Doppel can see".
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
             "$update_state" "$current" "$current_short" "$latest_version" "$latest_short" "$latest_url" \
-            "$stale" "$ahead"
+            "$stale" "$ahead" "$orphans"
         return 0
     fi
     if [[ "$update_state" == "stale-instances" ]]; then
@@ -1978,6 +2192,11 @@ cmd_update_check() {
     # stays a decision someone makes per instance.
     if (( ahead > 0 )); then
         print -r -- "$ahead managed instance(s) were built from a newer build than the installed app; 'doppel update apply' leaves those alone. Use 'doppel rebuild <name>' to move one back to $current."
+    fi
+    # An update that has nowhere to land is worth saying before it is accepted,
+    # not after it is refused.
+    if (( orphans > 0 )); then
+        print -r -- "$orphans managed app(s) are installed but not registered with Doppel, so no update reaches them; run 'doppel adopt --all' to manage them again."
     fi
 }
 
@@ -2315,7 +2534,7 @@ cmd_update_apply() {
     if (( reconcile_only )); then
         collect_reconcile_targets "$current"
         total_instances=$RECONCILE_INSTANCE_COUNT
-        (( total_instances > 0 )) || die "there are no installed managed instances to update"
+        (( total_instances > 0 )) || die "there are no installed managed instances to update$(orphan_hint)"
         stale_instances=${#RECONCILE_STALE_DIRS}
         if (( stale_instances == 0 )); then
             printf 'current\t%s\t%s\t%s\t0\n' "$current" "$version" "$total_instances"
@@ -2347,7 +2566,7 @@ cmd_update_apply() {
             running_apps+=("$app")
         fi
     done
-    (( ${#dirs} > 0 )) || die "there are no installed managed instances to update"
+    (( ${#dirs} > 0 )) || die "there are no installed managed instances to update$(orphan_hint)"
     # A reconcile leaves /Applications/ChatGPT.app alone, so there is no reason
     # to close the official window the user may be working in.
     if (( reconcile_only == 0 )) && [[ -n "$(vendor_main_pids)" ]]; then
@@ -3088,7 +3307,7 @@ if [[ "${1:-}" == "__iab-worker" ]]; then
     readonly IAB_WORKER_OPERATION="$3"
     shift 3
     case "$IAB_WORKER_OPERATION" in
-        cmd_create|cmd_launch|cmd_route_launch|cmd_rebuild|cmd_edit|cmd_remove|cmd_browser_assign|cmd_browser_release|cmd_update_apply)
+        cmd_create|cmd_adopt|cmd_launch|cmd_route_launch|cmd_rebuild|cmd_edit|cmd_remove|cmd_browser_assign|cmd_browser_release|cmd_update_apply)
             "$IAB_WORKER_OPERATION" "$@"
             exit $?
             ;;
@@ -3099,6 +3318,7 @@ fi
 case "${1:-}" in
     __route-launch) [[ $# -ge 2 ]] || die "invalid internal routed launch"; shift; with_iab_operation_lock cmd_route_launch "$@" ;;
     create) shift; with_iab_operation_lock cmd_create "$@" ;;
+    adopt) shift; with_iab_operation_lock cmd_adopt "$@" ;;
     list) shift; cmd_list "$@" ;;
     launch) [[ $# -eq 2 ]] || die "usage: doppel launch <name>"; with_iab_operation_lock cmd_launch "$2" ;;
     rebuild) [[ $# -eq 2 ]] || die "usage: doppel rebuild <name>"; with_iab_operation_lock cmd_rebuild "$2" ;;
@@ -3109,5 +3329,5 @@ case "${1:-}" in
     browser) shift; cmd_browser "$@" ;;
     native-tools) shift; cmd_native_tools "$@" ;;
     prune) shift; [[ $# -le 1 ]] || die "usage: doppel prune [<name>]"; cmd_prune "${1:-}" ;;
-    *) die "usage: doppel {create|list|launch|rebuild|edit|remove|update|permissions|browser|native-tools|prune} ..." ;;
+    *) die "usage: doppel {create|adopt|list|launch|rebuild|edit|remove|update|permissions|browser|native-tools|prune} ..." ;;
 esac
