@@ -7,6 +7,7 @@ test:
 qa:
     ./qa/e2e.zsh
     ./qa/edge.zsh
+    ./qa/engine-launch.zsh
     ./qa/update-reconcile.zsh
 
 # A local build is ad hoc and carries no Sparkle public key, so build-app.zsh

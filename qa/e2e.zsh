@@ -106,7 +106,7 @@ check "registered OAuth callback scheme remains eligible" \
     "$(plist "$APP" CFBundleURLTypes.0.CFBundleURLSchemes.1)" "codex"
 check "deep-link patch recorded" "$(plist "$APP" DoppelDeepLinkScheme)" "codex-$SLUG"
 ROUTER_HASH="$(/usr/bin/shasum -a 256 "$CLI" | /usr/bin/awk '{print $1}')"
-check "transparent engine router version" "$(plist "$APP" DoppelEngineVersion)" "26"
+check "transparent engine router version" "$(plist "$APP" DoppelEngineVersion)" "27"
 check "transparent engine router hash recorded" "$(plist "$APP" DoppelRouterSHA256)" "$ROUTER_HASH"
 if [[ -x "$APP/Contents/Resources/Doppel/bin/doppel" && \
       -x "$APP/Contents/Resources/Doppel/engine/doppel-engine.zsh" && \
