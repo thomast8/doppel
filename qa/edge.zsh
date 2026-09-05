@@ -155,6 +155,37 @@ run_isolated broken remove "Anything"
     || fail "remove says what is wrong" "got status $STATUS, output: '$OUT'"
 
 print -r -- ""
+print -r -- "an empty field in a runtime snapshot does not shift the ones after it"
+# The unmanaged and ambiguous rows carry no slug. `read` used to lose that
+# empty field, because tab is an IFS whitespace character in zsh and runs of
+# them collapse, so the process ID slid into the name and the menu offered to
+# assign a built-in browser profile called "701". Only the parsing is driven
+# here; which row gets built needs live ChatGPT processes.
+snapshot_fields() {
+    SNAPSHOT_CLI="$CLI" SNAPSHOT_ROW="$1" /bin/zsh -c '
+        body="$(/usr/bin/sed -n "/^parse_vendor_runtime_snapshot() {/,/^}/p" "$SNAPSHOT_CLI")"
+        # Without this the extraction failing reads as four mismatched fields
+        # rather than as a renamed or reindented function.
+        [[ -n "$body" ]] || {
+            print -r -- "parse_vendor_runtime_snapshot not found in $SNAPSHOT_CLI"
+            exit 0
+        }
+        eval "$body"
+        local runtime_kind runtime_slug runtime_name runtime_pid
+        parse_vendor_runtime_snapshot "$SNAPSHOT_ROW"
+        print -r -- "$runtime_kind|$runtime_slug|$runtime_name|$runtime_pid"
+    '
+}
+check "an unmanaged row names the app rather than its PID" \
+    "$(snapshot_fields "$(printf 'unmanaged\t\tChatGPT\t701')")" "unmanaged||ChatGPT|701"
+check "an ambiguous row keeps its names apart from its PIDs" \
+    "$(snapshot_fields "$(printf 'ambiguous\t\tOne, Two\t12 34')")" "ambiguous||One, Two|12 34"
+check "a managed row still carries its slug" \
+    "$(snapshot_fields "$(printf 'managed\tslug-a\tName A\t99')")" "managed|slug-a|Name A|99"
+check "no official process at all reads as none" \
+    "$(snapshot_fields none)" "none|||"
+
+print -r -- ""
 print -r -- "a name resolves to the instance that carries it, not to the one whose"
 print -r -- "directory happens to be spelled the same way"
 # Two definitions whose names differ but whose identifiers would match. The

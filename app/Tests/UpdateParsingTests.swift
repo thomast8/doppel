@@ -246,6 +246,24 @@ final class UpdateParsingTests: XCTestCase {
                "a managed official profile launched outside Doppel should remain visible")
         expect(outsideIAB?.inAppBrowserRuntimeInstanceID == "veridue",
                "the outside runtime should retain its stable profile id")
+        // The stock app has no profile, so the slug column is empty. The menu
+        // showed the process id here while the CLI was collapsing that field.
+        let unmanagedIAB = NativeToolsStatus.parse(
+            "in-app-browser\tunassigned\tunmanaged\t\tChatGPT\n")
+        expect(unmanagedIAB?.inAppBrowserRuntimeInstanceName == "ChatGPT",
+               "an unmanaged runtime should be named, not numbered")
+        expect(unmanagedIAB?.inAppBrowserRuntimeInstanceID.isEmpty == true,
+               "an unmanaged runtime has no profile id to report")
+        expect(unmanagedIAB?.inAppBrowserRunningOutsideDoppel == true,
+               "the stock app running on its own should still be visible")
+        // An assigned profile alongside the stock app: the empty slug now sits
+        // inside a nine-field row, so the name after it must not slide forward.
+        let stockAgainstAssigned = NativeToolsStatus.parse(
+            "in-app-browser\tassigned\tpersonal\tChatGPT Personal\tstopped\tvalid\tunmanaged\t\tChatGPT\n")
+        expect(stockAgainstAssigned?.inAppBrowserRuntimeInstanceName == "ChatGPT",
+               "an assigned row should still name the unmanaged runtime")
+        expect(stockAgainstAssigned?.inAppBrowserAssignmentConflicted == true,
+               "the stock app running against an assigned profile is a conflict")
 
         expect(InstanceStore.browserAssignmentNeedsQuit(
             "doppel: the Browser assignment needs running ChatGPT apps to quit: 'ChatGPT Test' is running."),

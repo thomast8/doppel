@@ -757,6 +757,21 @@ vendor_runtime_snapshot() {
     fi
 }
 
+# Splits one snapshot row into the caller's runtime_* variables, which it must
+# declare. `read` cannot do this: tab is an IFS whitespace character in zsh, so
+# consecutive tabs collapse into one. The unmanaged and ambiguous rows carry an
+# empty slug, and that field simply vanished, shifting every later field left
+# until the process ID landed in the name and the menu offered to assign a
+# profile called "701". Explicit splitting keeps empty fields.
+parse_vendor_runtime_snapshot() {
+    local -a fields
+    fields=("${(@ps:\t:)1}")
+    runtime_kind="${fields[1]:-none}"
+    runtime_slug="${fields[2]:-}"
+    runtime_name="${fields[3]:-}"
+    runtime_pid="${fields[4]:-}"
+}
+
 process_start_fingerprint() {
     local pid="$1" started
     # `ps` pads lstart to the current output width. The same process therefore
@@ -1292,8 +1307,7 @@ cmd_browser_status() {
         porcelain=1; shift
     fi
     [[ $# -eq 0 ]] || die "usage: doppel browser status [--porcelain]"
-    IFS=$'\t' read -r runtime_kind runtime_slug runtime_name runtime_pid \
-        <<< "$(vendor_runtime_snapshot)"
+    parse_vendor_runtime_snapshot "$(vendor_runtime_snapshot)"
     slug="$(iab_slot_slug)"
     if [[ -z "$slug" ]]; then
         if (( porcelain )); then
@@ -2781,8 +2795,7 @@ native_tools_status() {
 
     local iab_slug iab_dir="" iab_name="" iab_state="stopped" iab_signature="invalid"
     local runtime_kind runtime_slug runtime_name runtime_pid
-    IFS=$'\t' read -r runtime_kind runtime_slug runtime_name runtime_pid \
-        <<< "$(vendor_runtime_snapshot)"
+    parse_vendor_runtime_snapshot "$(vendor_runtime_snapshot)"
     iab_slug="$(iab_slot_slug)"
     if [[ -n "$iab_slug" ]]; then
         iab_dir="$INSTANCES_ROOT/$iab_slug"
