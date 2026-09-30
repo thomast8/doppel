@@ -122,14 +122,16 @@ fi
 # which is the real signal but only ever covers one build at a time. These
 # shapes are the ones that actually shipped: 6321 and 6662 differ only in names
 # the minifier chooses and in an argument the vendor added, and 6971 folded the
-# whole open-url path into one shared handler plus a startup drain. Pinning any
-# one of them is what broke clone builds three times running. A machine on one
-# build still has to notice a patcher that has been re-pinned to another.
-SHAPES_OUT="$(/usr/bin/python3 - "$PATCHER" <<'PY'
+# whole open-url path into one shared handler plus a startup drain. Build 12246
+# defers registration to a guarded startup function and adds universal links.
+# A machine on one build still has to recognize the other supported shapes.
+SHAPES_OUT="$(/usr/bin/python3 - "$PATCHER" "$SCRATCH" <<'PY'
 import importlib.util, sys
+from pathlib import Path
 
 spec = importlib.util.spec_from_file_location("patcher", sys.argv[1])
 patcher = importlib.util.module_from_spec(spec)
+sys.dont_write_bytecode = True
 # Registered before execution: the module defines dataclasses, and resolving
 # their annotations looks the module up by name in sys.modules.
 sys.modules["patcher"] = patcher
@@ -146,6 +148,9 @@ queued = {
 drained = {
     "6971": b'if(i){let n=(e,t)=>{let n=PW(e);if(n){h(n),u?.(BW(n,e)),t?.preventDefault();return}let r=$W(e);r&&(g(r),t?.preventDefault())};e.on(`open-url`,(e,t)=>{n(t,e)});for(let e of t.a())n(e)}',
 }
+started = {
+    "12246": b'function T(){if(!t)return;let n=(e,t)=>{let n=n9(e);if(n){g(n),u?.(a9(n,e)),t?.preventDefault();return}let r=d9(e);r&&(_(r),t?.preventDefault())};e.on(`open-url`,(e,t)=>{n(t,e)}),d.l(e,(e,t)=>(g(t),u?.(void 0),!0));for(let e of d.s())n(e)}',
+}
 missed = []
 for build, sample in oauth.items():
     if len(patcher.OAUTH_CALLBACK_HANDLER.findall(sample)) != 1:
@@ -156,13 +161,52 @@ for build, sample in queued.items():
 for build, sample in drained.items():
     if len(patcher.DRAINED_OPEN_URL_HANDLER.findall(sample)) != 1:
         missed.append(f"open-url {build}")
+for build, sample in started.items():
+    if len(patcher.STARTED_OPEN_URL_HANDLER.findall(sample)) != 1:
+        missed.append(f"open-url {build}")
+
+# Exercise selection and replacement as well as recognition. A raw one-member
+# Archive is sufficient here; the vendor ASAR checks above cover its packing.
+sample = started["12246"]
+fixture = Path(sys.argv[2]) / "started-handler.js"
+def locate(data):
+    fixture.write_bytes(data)
+    archive = patcher.Archive(fixture, {"files": {
+        "bootstrap.js": {"offset": "0", "size": len(data)}
+    }}, b"", 0, len(data))
+    return patcher.locate_restore_member(archive)
+
+member, replacement, already = locate(sample)
+assert not already and member.path == "bootstrap.js"
+match = patcher.STARTED_OPEN_URL_HANDLER.fullmatch(sample)
+assert match is not None
+assert replacement.startswith(match.group("prefix") + b";if(")
+assert replacement.endswith(match.group("suffix"))
+assert replacement.count(patcher.RESTORE_PATCH_MARKER) == 2
+assert replacement.count(patcher.RESTORE_SPAWN_MARKER) == 1
+assert b'n.kind===`connectorOAuthCallback`' in replacement
+assert locate(replacement)[1:] == (replacement, True)
+
+for unsupported in (
+    sample + sample,
+    sample.replace(b".on(`open-url`", b".on(`unknown-event`"),
+    sample.replace(b"d.l(e,(e,t)=>(g(t),u?.(void 0),!0))", b"d.l(e,unknown)"),
+):
+    try:
+        locate(unsupported)
+    except patcher.PatchError:
+        pass
+    else:
+        raise AssertionError("ambiguous or unsupported startup handler accepted")
 print(",".join(missed))
 PY
 )"
-if [[ -z "$SHAPES_OUT" ]]; then
-    pass "all shipped minified shapes still match"
+SHAPES_STATUS=$?
+if [[ "$SHAPES_STATUS" -eq 0 && -z "$SHAPES_OUT" ]]; then
+    pass "all supported shapes match and startup restoration remains fail-closed"
 else
-    fail "all shipped minified shapes still match" "no match for: $SHAPES_OUT"
+    fail "all supported shapes match and startup restoration remains fail-closed" \
+        "shape regression exited $SHAPES_STATUS; unmatched: $SHAPES_OUT"
 fi
 
 print -r -- "$PASSED passed, $FAILED failed"

@@ -156,6 +156,38 @@ DRAINED_OPEN_URL_HANDLER = re.compile(
 )
 
 
+# Build 12246 defers URL intake to a named startup function and also registers
+# universal links. Preserve both registrations and the startup queue drain.
+STARTED_OPEN_URL_HANDLER = re.compile(
+    rb"(?P<prefix>function (?P<start>[A-Za-z_$][A-Za-z0-9_$]*)"
+    rb"\(\)\{if\(!(?P<enabled>[A-Za-z_$][A-Za-z0-9_$]*)\)return;let "
+    rb"(?P<handler>[A-Za-z_$][A-Za-z0-9_$]*)=\("
+    rb"(?P<url>[A-Za-z_$][A-Za-z0-9_$]*),(?P<event>[A-Za-z_$][A-Za-z0-9_$]*)"
+    rb"\)=>\{let (?P<route>[A-Za-z_$][A-Za-z0-9_$]*)="
+    rb"(?P<parse>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=url)\);if\((?P=route)\)\{"
+    rb"(?P<queue>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=route)\),"
+    rb"(?P<callback>[A-Za-z_$][A-Za-z0-9_$]*)\?\.\("
+    rb"(?P<source>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=route)(?:,(?P=url))?\)\)),"
+    rb"(?P<suffix>(?P=event)\?\.preventDefault\(\);return\}let "
+    rb"(?P<http>[A-Za-z_$][A-Za-z0-9_$]*)="
+    rb"(?P<parse_http>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=url)\);"
+    rb"(?P=http)&&\((?P<queue_http>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=http)\),"
+    rb"(?P=event)\?\.preventDefault\(\)\)\};"
+    rb"(?P<app>[A-Za-z_$][A-Za-z0-9_$]*)\.on\(`open-url`,\("
+    rb"(?P<listener_event>[A-Za-z_$][A-Za-z0-9_$]*),"
+    rb"(?P<listener_url>[A-Za-z_$][A-Za-z0-9_$]*)\)=>\{"
+    rb"(?P=handler)\((?P=listener_url),(?P=listener_event)\)\}\),"
+    rb"(?P<queue_module>[A-Za-z_$][A-Za-z0-9_$]*)\."
+    rb"(?P<register>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=app),\("
+    rb"(?P<universal_url>[A-Za-z_$][A-Za-z0-9_$]*),"
+    rb"(?P<universal_route>[A-Za-z_$][A-Za-z0-9_$]*)\)=>\("
+    rb"(?P=queue)\((?P=universal_route)\),(?P=callback)\?\.\(void 0\),!0\)\);"
+    rb"for\(let (?P<drained>[A-Za-z_$][A-Za-z0-9_$]*) of "
+    rb"(?P=queue_module)\.(?P<flush>[A-Za-z_$][A-Za-z0-9_$]*)\(\)\)"
+    rb"(?P=handler)\((?P=drained)\)\})"
+)
+
+
 class PatchError(RuntimeError):
     pass
 
@@ -439,6 +471,8 @@ def locate_restore_member(archive: Archive) -> tuple[Member, bytes, bool]:
             ("queued", match) for match in QUEUED_OPEN_URL_HANDLER.finditer(data)
         ] + [
             ("drained", match) for match in DRAINED_OPEN_URL_HANDLER.finditer(data)
+        ] + [
+            ("started", match) for match in STARTED_OPEN_URL_HANDLER.finditer(data)
         ]
         if not handler_matches:
             continue
