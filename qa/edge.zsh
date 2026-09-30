@@ -255,7 +255,8 @@ SIBLING_PROBE_APP="$SCRATCH/Sibling Probe.app"
 #include <unistd.h>
 int main(int argc, char **argv) {
     raise(SIGSTOP);
-    if (argc == 2 && strcmp(argv[1], "--doppel-permission-status") == 0) { sleep(1); return 0; }
+    // The notification API can consume five seconds, followed by exit overhead.
+    if (argc == 2 && strcmp(argv[1], "--doppel-permission-status") == 0) { sleep(6); return 0; }
     for (;;) pause();
 }
 CPROBE
@@ -275,8 +276,11 @@ PROBE_CLI="$CLI" PROBE_APP="$PROBE_APP" PROBE_PID="$PROBE_PID" PROBE_QUIT_LOG="$
     bundle_app_is_running() { /bin/kill -0 "$PROBE_PID" 2>/dev/null }
     send_quit_event() { print quit >> "$PROBE_QUIT_LOG" }
     reap_bundle_processes() { return 0 }
+    die() { print -u2 -r -- "$*"; exit 1 }
     quit_instance "$PROBE_APP" com.example.probe Probe
 '
+PROBE_QUIT_STATUS=$?
+check "quit allows the notification timeout plus exit overhead" "$PROBE_QUIT_STATUS" "0"
 /bin/sleep 1
 check "the read-only probe resumes and exits" "$(/bin/ps -p "$PROBE_PID" -o stat=)" ""
 check "the checker is never sent an app quit event" "$(/bin/cat "$PROBE_QUIT_LOG")" ""
