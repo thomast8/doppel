@@ -145,6 +145,7 @@ queued = {
 }
 drained = {
     "6971": b'if(i){let n=(e,t)=>{let n=PW(e);if(n){h(n),u?.(BW(n,e)),t?.preventDefault();return}let r=$W(e);r&&(g(r),t?.preventDefault())};e.on(`open-url`,(e,t)=>{n(t,e)});for(let e of t.a())n(e)}',
+    "12404": b'function T(){if(!t)return;let n=(e,t)=>{let n=n9(e);if(n){g(n),u?.(a9(n,e)),t?.preventDefault();return}let r=d9(e);r&&(_(r),t?.preventDefault())};e.on(`open-url`,(e,t)=>{n(t,e)}),d.l(e,(e,t)=>(g(t),u?.(void 0),!0));for(let e of d.s())n(e)}',
 }
 missed = []
 for build, sample in oauth.items():
