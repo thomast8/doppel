@@ -35,6 +35,8 @@ final class InstanceStore: ObservableObject {
     @Published var checkingPermissions = false
     @Published var nativeToolsStatus: NativeToolsStatus?
     @Published var checkingNativeTools = false
+    @Published var remodexStatus: RemodexStatus?
+    @Published var checkingRemodex = false
 
     var permissionIssues: [PermissionIssue] { permissionStatuses.filter(\.needsAttention) }
 
@@ -52,6 +54,7 @@ final class InstanceStore: ObservableObject {
     private var requestedPermissionIDs: Set<String> = []
     private var updateTimer: Timer?
     private var permissionTimer: Timer?
+    private var remodexCheckGeneration = 0
 
     static let primaryAppPath = "/Applications/ChatGPT.app"
     static let primaryDownloadURL = URL(string: "https://chatgpt.com/features/desktop/")!
@@ -148,6 +151,7 @@ final class InstanceStore: ObservableObject {
                     self.instances = Self.parsePorcelain(stdout).sorted { $0.name < $1.name }
                     self.checkPermissions()
                     self.checkNativeTools()
+                    self.checkRemodex()
                 }
             }
         }
@@ -214,6 +218,42 @@ final class InstanceStore: ObservableObject {
         }
     }
 
+    // MARK: - Remodex bridge
+
+    func checkRemodex() {
+        guard let cli = discoveredCLI else { return }
+        remodexCheckGeneration += 1
+        let generation = remodexCheckGeneration
+        checkingRemodex = true
+        Task.detached { [weak self] in
+            let result = Self.runProcess(
+                cli: cli, arguments: ["remodex", "status", "--porcelain"])
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                guard generation == self.remodexCheckGeneration else { return }
+                self.checkingRemodex = false
+                switch result {
+                case .failure:
+                    self.remodexStatus = RemodexStatus.parse("unavailable\t\t\t\t\t\t")
+                case .success(let output):
+                    self.remodexStatus = RemodexStatus.parse(output)
+                }
+            }
+        }
+    }
+
+    func useWithRemodex(_ instance: Instance) {
+        runCLI(["remodex", "use", instance.name], busyKey: "remodex") { [weak self] _ in
+            self?.checkRemodex()
+        }
+    }
+
+    func releaseRemodex() {
+        runCLI(["remodex", "release"], busyKey: "remodex") { [weak self] _ in
+            self?.checkRemodex()
+        }
+    }
+
     func rebuild(_ instance: Instance) {
         runCLI(["rebuild", instance.name], busyKey: instance.id) { [weak self] failure in
             if failure == nil {
@@ -226,7 +266,8 @@ final class InstanceStore: ObservableObject {
     /// Mirrors the CLI's global engine-operation lock so the menu avoids
     /// offering operations that would only be refused as concurrent work.
     var engineOperationBusy: Bool {
-        busy.contains("iab-slot") || busy.contains("update") || busy.contains("signing") ||
+        busy.contains("iab-slot") || busy.contains("remodex") ||
+            busy.contains("update") || busy.contains("signing") ||
             busy.contains("create") || instances.contains { busy.contains($0.id) }
     }
 

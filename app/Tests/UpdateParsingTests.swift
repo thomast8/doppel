@@ -18,6 +18,19 @@ final class UpdateParsingTests: XCTestCase {
     }
 
     func testUpdateAndPermissionParsing() {
+        let remodex = RemodexStatus.parse(
+            "active\tpersonal\tChatGPT Personal\t/Users/me/.codex-secondary\tcom.openai.codex.secondary\t/Users/me/Applications/ChatGPT Personal.app\tcodex-personal\n")
+        expect(remodex?.state == .active, "an active Remodex target should parse")
+        expect(remodex?.instanceID == "personal", "the target instance ID should parse")
+        expect(remodex?.isActive(for: Instance(
+            id: "personal", name: "ChatGPT Personal", appPath: "", installed: true,
+            tint: "", engine: .clone)) == true,
+            "the active indicator should match the stable instance ID")
+        expect(RemodexStatus.parse("unsupported\t\t\t\t\t\t")?.state == .unsupported,
+               "an old Remodex should be reported as unsupported")
+        expect(RemodexStatus.parse("active\tbroken") == nil,
+               "a malformed target row should be rejected")
+
         let installPrompt = DoppelUpdatePromptModel(
             currentVersion: "1.0.9", availableVersion: "1.1.0",
             informationOnly: false, critical: false)
