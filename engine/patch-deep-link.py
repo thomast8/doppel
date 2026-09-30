@@ -131,8 +131,12 @@ QUEUED_OPEN_URL_HANDLER = re.compile(
 # (this build names both the handler and the route ``n``, and both the url
 # parameter and the app ``e``), so every backreference below stays within a
 # single scope and same-looking names still get distinct groups.
+# Build 12404 wraps the same handler in a guarded function and registers a
+# universal-link listener before draining. Preserve both shipped layouts.
 DRAINED_OPEN_URL_HANDLER = re.compile(
-    rb"(?P<prefix>if\((?P<enabled>[A-Za-z_$][A-Za-z0-9_$]*)\)\{let "
+    rb"(?P<prefix>(?:if\([A-Za-z_$][A-Za-z0-9_$]*\)\{|"
+    rb"function [A-Za-z_$][A-Za-z0-9_$]*\(\)\{if\(!"
+    rb"[A-Za-z_$][A-Za-z0-9_$]*\)return;)let "
     rb"(?P<handler>[A-Za-z_$][A-Za-z0-9_$]*)=\("
     rb"(?P<url>[A-Za-z_$][A-Za-z0-9_$]*),(?P<event>[A-Za-z_$][A-Za-z0-9_$]*)"
     rb"\)=>\{let (?P<route>[A-Za-z_$][A-Za-z0-9_$]*)="
@@ -148,7 +152,11 @@ DRAINED_OPEN_URL_HANDLER = re.compile(
     rb"(?P<app>[A-Za-z_$][A-Za-z0-9_$]*)\.on\(`open-url`,\("
     rb"(?P<listener_event>[A-Za-z_$][A-Za-z0-9_$]*),"
     rb"(?P<listener_url>[A-Za-z_$][A-Za-z0-9_$]*)\)=>\{"
-    rb"(?P=handler)\((?P=listener_url),(?P=listener_event)\)\}\);"
+    rb"(?P=handler)\((?P=listener_url),(?P=listener_event)\)\}\)"
+    rb"(?:,[A-Za-z_$][A-Za-z0-9_$]*\.[A-Za-z_$][A-Za-z0-9_$]*\("
+    rb"(?P=app),\([A-Za-z_$][A-Za-z0-9_$]*,"
+    rb"(?P<universal_route>[A-Za-z_$][A-Za-z0-9_$]*)\)=>\("
+    rb"(?P=queue)\((?P=universal_route)\),(?P=callback)\?\.\(void 0\),!0\)\))?;"
     rb"for\(let (?P<drained>[A-Za-z_$][A-Za-z0-9_$]*) of "
     rb"(?P<queue_module>[A-Za-z_$][A-Za-z0-9_$]*)\."
     rb"(?P<flush>[A-Za-z_$][A-Za-z0-9_$]*)\(\)\)"

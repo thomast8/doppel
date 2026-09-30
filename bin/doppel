@@ -365,6 +365,22 @@ activate_instance() {
 
 quit_instance() {
     local app="$1" bundle_id="$2" label="$3"
+    # A suspended read-only permission probe cannot answer an app quit event.
+    # Let it finish before waiting for the actual app to quit.
+    local probe_pid probe_state probe_command probe_waited
+    while read -r probe_pid probe_state probe_command; do
+        [[ "$probe_pid" == <1-> && "$probe_state" == T* && \
+           "$probe_command" == "$app/Contents/MacOS/ChatGPT --doppel-permission-status" ]] || continue
+        /bin/kill -CONT "$probe_pid" 2>/dev/null || true
+        probe_waited=0
+        while /bin/kill -0 "$probe_pid" 2>/dev/null && (( probe_waited < 5 )); do
+            /bin/sleep 1
+            probe_waited=$(( probe_waited + 1 ))
+        done
+        if /bin/kill -0 "$probe_pid" 2>/dev/null; then
+            die "'$label''s suspended permission checker did not finish. Try again after it exits."
+        fi
+    done < <(/bin/ps -ww -axo pid=,stat=,command= 2>/dev/null)
     # The app may already be gone while its helpers are not, which is exactly
     # the state that used to strand them, so the sweep below runs either way.
     if bundle_app_is_running "$app"; then

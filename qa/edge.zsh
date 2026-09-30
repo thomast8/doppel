@@ -245,6 +245,46 @@ check "and a slug that climbs out of the instances root is refused" \
     "$(/bin/cat "$ABORT_LOG")" ""
 
 print -r -- ""
+print -r -- "a stopped permission probe does not block quitting its instance"
+PROBE_APP="$SCRATCH/Probe.app"
+SIBLING_PROBE_APP="$SCRATCH/Sibling Probe.app"
+/bin/mkdir -p "$PROBE_APP/Contents/MacOS" "$SIBLING_PROBE_APP/Contents/MacOS"
+/usr/bin/clang -x c -o "$PROBE_APP/Contents/MacOS/ChatGPT" - <<'CPROBE'
+#include <signal.h>
+#include <string.h>
+#include <unistd.h>
+int main(int argc, char **argv) {
+    raise(SIGSTOP);
+    if (argc == 2 && strcmp(argv[1], "--doppel-permission-status") == 0) { sleep(1); return 0; }
+    for (;;) pause();
+}
+CPROBE
+/bin/cp "$PROBE_APP/Contents/MacOS/ChatGPT" "$SIBLING_PROBE_APP/Contents/MacOS/ChatGPT"
+"$PROBE_APP/Contents/MacOS/ChatGPT" --doppel-permission-status &
+PROBE_PID=$!
+"$PROBE_APP/Contents/MacOS/ChatGPT" &
+NORMAL_PID=$!
+"$SIBLING_PROBE_APP/Contents/MacOS/ChatGPT" --doppel-permission-status &
+SIBLING_PROBE_PID=$!
+/bin/sleep 1
+check "the probe starts suspended" "$(/bin/ps -p "$PROBE_PID" -o stat= | /usr/bin/tr -d ' ' | /usr/bin/cut -c1)" "T"
+PROBE_QUIT_LOG="$SCRATCH/probe-quit.log"
+: > "$PROBE_QUIT_LOG"
+PROBE_CLI="$CLI" PROBE_APP="$PROBE_APP" PROBE_PID="$PROBE_PID" PROBE_QUIT_LOG="$PROBE_QUIT_LOG" /bin/zsh -c '
+    eval "$(/usr/bin/sed -n "/^quit_instance() {/,/^}/p" "$PROBE_CLI")"
+    bundle_app_is_running() { /bin/kill -0 "$PROBE_PID" 2>/dev/null }
+    send_quit_event() { print quit >> "$PROBE_QUIT_LOG" }
+    reap_bundle_processes() { return 0 }
+    quit_instance "$PROBE_APP" com.example.probe Probe
+'
+/bin/sleep 1
+check "the read-only probe resumes and exits" "$(/bin/ps -p "$PROBE_PID" -o stat=)" ""
+check "the checker is never sent an app quit event" "$(/bin/cat "$PROBE_QUIT_LOG")" ""
+check "a stopped app is left alone" "$(/bin/ps -p "$NORMAL_PID" -o stat= | /usr/bin/tr -d ' ' | /usr/bin/cut -c1)" "T"
+check "another instance's probe is left alone" "$(/bin/ps -p "$SIBLING_PROBE_PID" -o stat= | /usr/bin/tr -d ' ' | /usr/bin/cut -c1)" "T"
+/bin/kill -9 "$NORMAL_PID" "$SIBLING_PROBE_PID" 2>/dev/null || true
+
+print -r -- ""
 print -r -- "quitting an instance takes its helper processes with it"
 # Electron's crashpad handlers and the modifier monitor live under Frameworks
 # and Resources, not Contents/MacOS, so the graceful quit never covered them.
