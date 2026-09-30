@@ -96,12 +96,12 @@ if [[ "$UNIVERSAL" == "1" ]]; then
 else
     arch_flags=()
 fi
-/usr/bin/clang -fobjc-arc -O2 $arch_flags -framework Cocoa -framework ApplicationServices \
+/usr/bin/clang -fobjc-arc -O2 -mmacosx-version-min=14.0 $arch_flags -framework Cocoa -framework ApplicationServices \
     -framework AVFoundation -framework UserNotifications -framework Security \
     -o "$PAYLOAD/prebuilt/doppel-launcher" "$REPO_ROOT/engine/launcher/main.m"
-/usr/bin/clang -fobjc-arc -O2 $arch_flags -framework Cocoa \
+/usr/bin/clang -fobjc-arc -O2 -mmacosx-version-min=14.0 $arch_flags -framework Cocoa \
     -o "$PAYLOAD/prebuilt/doppel-alert" "$REPO_ROOT/engine/alert/main.m"
-/usr/bin/clang -fobjc-arc -O2 $arch_flags -framework Cocoa \
+/usr/bin/clang -fobjc-arc -O2 -mmacosx-version-min=14.0 $arch_flags -framework Cocoa \
     -o "$PAYLOAD/prebuilt/doppel-url-handler" "$REPO_ROOT/engine/url-handler/main.m"
 if [[ "$UNIVERSAL" == "1" ]]; then
     /usr/bin/swiftc -O -target arm64-apple-macos14.0 "$REPO_ROOT/engine/icon/main.swift" \
