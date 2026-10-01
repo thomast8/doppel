@@ -9,6 +9,9 @@ struct NativeToolsStatus: Equatable {
 
     enum ChronicleState: String {
         case running
+        /// A recorder owns Chronicle machine-wide but has not started
+        /// capturing, so no app on this Mac has screen history.
+        case held
         case stopped
         case unknown
     }

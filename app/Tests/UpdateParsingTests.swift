@@ -215,6 +215,24 @@ final class UpdateParsingTests: XCTestCase {
         expect(nativeTools?.browserOwnerNames == ["ChatGPT Personal"],
                "the owner column should resolve to an instance name")
 
+        // A recorder can own Chronicle machine-wide and still capture nothing,
+        // which is not the same as nothing running: the owner is the app whose
+        // Screen & System Audio Recording permission has to be fixed.
+        let heldChronicle = NativeToolsStatus.parse(
+            "chronicle\theld\tChatGPT Personal\t/Users/me/Applications/ChatGPT Personal.app\t-1\n")
+        expect(heldChronicle?.chronicle == .held,
+               "a recorder that owns Chronicle without capturing should parse as held")
+        expect(heldChronicle?.chronicleHost == "ChatGPT Personal",
+               "the app holding an idle recorder should still be named")
+        expect(heldChronicle?.chronicleIsFresh == false,
+               "a held recorder has no fresh frame to report")
+        // The next state a newer CLI adds has to read as "no idea", never as
+        // one of the two that claim the recorder is fine.
+        let futureChronicle = NativeToolsStatus.parse(
+            "chronicle\tsome-future-state\tChatGPT Personal\t/Users/me/Applications/ChatGPT Personal.app\t-1\n")
+        expect(futureChronicle?.chronicle == .unknown,
+               "an unrecognized Chronicle state should fall back to unknown")
+
         let assignedIAB = NativeToolsStatus.parse(
             "in-app-browser\tassigned\tpersonal\tChatGPT Personal\trunning\tvalid\n")
         expect(assignedIAB?.inAppBrowserInstanceID == "personal",
