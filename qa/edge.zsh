@@ -901,7 +901,10 @@ VENDOR_BACKUP="$SCRATCH/native-tools/updates/Backups/ChatGPT.app"
 LEGACY="$SCRATCH/native-tools/state/com.example.native/Backups/Legacy.app.rollback"
 /bin/mkdir -p "$LEGACY/Contents"
 /usr/bin/plutil -create xml1 "$LEGACY/Contents/Info.plist.doppel-rollback"
+/usr/bin/touch -t 202601020304.05 "$LEGACY"
 run_isolated native-tools native-tools repair
+check "repair keeps the rollback's mtime for prune ordering" \
+    "$(/usr/bin/stat -f '%m' "$LEGACY")" "$(/bin/date -j -f '%Y%m%d%H%M.%S' 202601020304.05 '+%s')"
 [[ -f "$DISCOVERABLE/Contents.doppel-rollback/Info.plist" && ! -e "$DISCOVERABLE/Contents" ]] \
     && pass "the stored directory is no longer an application bundle" \
     || fail "the stored directory is no longer an application bundle" "Contents is still in bundle position"

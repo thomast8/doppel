@@ -158,7 +158,7 @@ record_pinned_requirement() {
 readonly ROLLBACK_CONTENTS_NAME="Contents.doppel-rollback"
 
 mask_rollback_app() {
-    local app="$1" contents hidden
+    local app="$1" contents hidden stamp
     contents="$app/Contents"
     hidden="$app/$ROLLBACK_CONTENTS_NAME"
     [[ -d "$app" ]] || return 1
@@ -169,7 +169,11 @@ mask_rollback_app() {
         /bin/mv "$contents/$ROLLBACK_INFO_NAME" "$contents/Info.plist" || return 1
     fi
     "$LSREGISTER" -u "$app" >/dev/null 2>&1 || true
-    /bin/mv "$contents" "$hidden"
+    # Prune keeps the newest rollbacks by mtime, and the rename below bumps the
+    # outer directory's, so put the original back.
+    stamp="$(/bin/date -r "$(/usr/bin/stat -f '%m' "$app")" '+%Y%m%d%H%M.%S')" || return 1
+    /bin/mv "$contents" "$hidden" || return 1
+    /usr/bin/touch -t "$stamp" "$app"
 }
 
 unmask_rollback_app() {
