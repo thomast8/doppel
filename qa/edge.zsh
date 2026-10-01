@@ -876,6 +876,26 @@ run_real permissions check --porcelain "$NAME"
     || fail "an in-step instance reports live permission statuses" "got: $OUT"
 
 print -r -- ""
+print -r -- "an unanswered failure alert does not hold the engine lock"
+# Releasing the engine-operation lock waits for the owner's whole process
+# group, and fail_closed backgrounds the alert from inside it. The helper has
+# to start its own session, or a dialog nobody dismissed blocks every launch.
+ALERT_BIN="$SCRATCH/doppel-alert"
+/usr/bin/clang -fobjc-arc -O2 -framework Cocoa -o "$ALERT_BIN" \
+    "$REPO_ROOT/engine/alert/main.m" 2>/dev/null
+"$ALERT_BIN" "QA" "edge suite probe" >/dev/null 2>&1 &
+ALERT_PID=$!
+ALERT_PGID=""
+for _ in {1..100}; do
+    ALERT_PGID="$(/bin/ps -o pgid= -p "$ALERT_PID" 2>/dev/null | /usr/bin/tr -d ' ')"
+    [[ "$ALERT_PGID" == "$ALERT_PID" ]] && break
+    /bin/sleep 0.01
+done
+/bin/kill "$ALERT_PID" 2>/dev/null || true
+wait "$ALERT_PID" 2>/dev/null || true
+check "the alert leads its own process group" "$ALERT_PGID" "$ALERT_PID"
+
+print -r -- ""
 print -r -- "rollback copies do not pile up"
 BACKUPS="$DOPPEL_DIR/state/com.openai.codex.doppel-$SLUG/Backups"
 /bin/mkdir -p "$BACKUPS/older.app.rollback" "$BACKUPS/oldest.app.rollback"
