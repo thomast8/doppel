@@ -6,6 +6,22 @@
         <description>Signed Doppel releases</description>
         <language>en</language>
         <item>
+            <title>1.1.11</title>
+            <pubDate>Thu, 01 Oct 2026 17:10:32 +0100</pubDate>
+            <link>https://github.com/thomast8/doppel</link>
+            <sparkle:version>23</sparkle:version>
+            <sparkle:shortVersionString>1.1.11</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Doppel 1.1.11
+
+- macOS no longer shows "You can't open the application ….app.rollback because it may be damaged or incomplete". Doppel now hides the backup it keeps from each rebuild as a plain folder, so macOS no longer treats it as a broken app. Existing backups are converted the next time Doppel repairs them (`native-tools repair`).
+- An error dialog left open after a failed rebuild no longer blocks Doppel. Before, every later launch or rebuild failed with "another Doppel engine operation is already in progress" until the dialog was closed. Each instance picks up the fix on its next rebuild.
+- `native-tools status` now shows whether the in-app browser works inside each running instance. Current ChatGPT builds allow it in instances. If a future build blocks it again, the status says so, and you can give that profile the built-in browser instead.
+- Installing ChatGPT updates no longer stalls on a suspended permission check, and instances build again from ChatGPT build 12404.
+]]></description>
+            <enclosure url="https://github.com/thomast8/doppel/releases/download/v1.1.11/Doppel-1.1.11-macOS.zip" length="3031078" type="application/octet-stream" sparkle:edSignature="Ylt9y3P+RELeIwy14JeY/bj4z1Ssc7oSpCjgehXheqS1EoMfBxmKSxTeCML/C0zTdNd317cJRrlgzFvDKhpWAw=="/>
+        </item>
+        <item>
             <title>1.1.10</title>
             <pubDate>Tue, 29 Sep 2026 14:56:14 +0200</pubDate>
             <link>https://github.com/thomast8/doppel</link>
@@ -30,20 +46,6 @@
 - Installing a ChatGPT update no longer stops when the update ships a read-only file. ChatGPT 26.924 did, and Doppel could not clear the copied file metadata from it, so it refused to build every clone and left them on the old build, which then would not start. Doppel now makes its private working copy writable first. Your installed ChatGPT is never touched.
 ]]></description>
             <enclosure url="https://github.com/thomast8/doppel/releases/download/v1.1.9/Doppel-1.1.9-macOS.zip" length="3027817" type="application/octet-stream" sparkle:edSignature="H2p3UNjheu9sYh3AG7DV84GMBmEBm78DPazuLNykO3UHgCEiyth4UPO2OIi76K+MFxTGV4VMlCCg1RNPxmEkCg=="/>
-        </item>
-        <item>
-            <title>1.1.8</title>
-            <pubDate>Sat, 05 Sep 2026 16:14:28 +0100</pubDate>
-            <link>https://github.com/thomast8/doppel</link>
-            <sparkle:version>20</sparkle:version>
-            <sparkle:shortVersionString>1.1.8</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[# Doppel 1.1.8
-
-- Installing a ChatGPT update no longer stops when a profile is using the built-in browser. That profile runs through the untouched official app rather than through its own clone, and Doppel previously had no way to put such a window back, so it refused the whole update and asked you to quit the window yourself. It now closes that window along with everything else and reopens it on the same profile, with the same account data and the vendor's own updater still disabled. It still stops before touching anything when the official window belongs to a different profile, to a profile Doppel does not manage, or when more than one is open, and it names the window to quit.
-- When ChatGPT asks you to confirm quitting, Doppel now brings that dialog to the front and gives you two minutes to answer it. ChatGPT refuses the quit request instantly and only then puts its "Quit ChatGPT?" dialog on screen, often behind another window, so Doppel used to give up after forty seconds and tell you to dismiss a keychain prompt that was never there. If it does still give up, it now tells you to click Quit in ChatGPT's own dialog.
-]]></description>
-            <enclosure url="https://github.com/thomast8/doppel/releases/download/v1.1.8/Doppel-1.1.8-macOS.zip" length="3028161" type="application/octet-stream" sparkle:edSignature="a6+aiDkjuS+ayYVkDEwoh6pdYwQ/olNj5CwlV0v3ixsZt5G2+8v17OgKA/8glFJf8cPA8DZzdeBhLZm6cMnMDA=="/>
         </item>
     </channel>
 </rss>
