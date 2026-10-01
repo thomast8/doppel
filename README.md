@@ -480,25 +480,28 @@ genuinely weaker than the app it was copied from is in
   launched most recently. Doppel refuses a rebuild if a vendor release changes
   either interception point and repairs stale shared-handler ownership from old
   builds.
-- **The in-app browser cannot work inside a locally re-signed clone, and this
-  one is permanent.**
+- **The in-app browser works inside a locally re-signed clone only by accident
+  of the vendor's process layout.**
   ChatGPT gates its browser socket with a native peer check that requires the
-  connecting process, its parent *and* its grandparent to each carry OpenAI's
-  Team ID and an allow-listed signing identifier. In an instance the first two
-  are the vendor's own `node_repl` and `codex`, but the grandparent is the
-  instance's main executable, which had to be re-signed locally to carry its own
-  bundle identifier and so has no Team ID at all. Requesting it fails with
-  `Browser is not available: iab`, and the app records
+  connecting process, its parent *and* its grandparent to carry OpenAI's Team ID
+  and an allow-listed signing identifier, and (since build 12553) to descend from
+  the app hosting the socket. An instance's main executable had to be re-signed
+  locally to carry its own bundle identifier, so it has no Team ID. Until late
+  September it was the browser client's grandparent and every request failed with
+  `Browser is not available: iab`, logged as
   `rejected socket peer reason=missing-code-signing-identity` in
-  `~/Library/Logs/com.openai.codex/`. Nothing short of OpenAI's signing key
-  satisfies that check, so a local identity from `doppel-signing` does not help
-  either. A normal clone therefore uses the browser extension: its check stops
-  at the parent process, so browser control works normally and several instances
-  can share one browser. Doppel's one movable built-in-browser slot instead
-  launches the selected profile through the untouched official app. It remains
-  the same Doppel account profile, but macOS shows the official ChatGPT identity
-  while it runs. Doppel reports the assigned and active engine in
-  `native-tools status` rather than leaving the distinction implicit.
+  `~/Library/Logs/com.openai.codex/`. Current builds run the client a few vendor
+  processes further down, which puts the clone outside the window, so iab works.
+  Nothing short of OpenAI's signing key satisfies the check itself, so a local
+  identity from `doppel-signing` would not help if that layout changes back.
+  `native-tools status` therefore reports, for each running clone, whether its
+  latest in-app browser use was served or refused, read from that clone's own
+  vendor log. A refusal means the layout changed and the profile needs the
+  built-in-browser slot again. That slot launches the selected profile through
+  the untouched official app. It remains the same Doppel account profile, but
+  macOS shows the official ChatGPT identity while it runs. The browser extension
+  is unaffected either way: its check stops at the parent process, so browser
+  control works in every instance and several instances can share one browser.
 - Instances are unsigned by Apple standards (ad hoc or self-signed), so Gatekeeper
   assessment (`spctl`) rejects them. They launch fine because they are built
   locally and never quarantined.
