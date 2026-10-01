@@ -917,6 +917,51 @@ check "the original identifier is byte-for-byte restorable" \
     "com.example.native"
 
 print -r -- ""
+print -r -- "status reports whether the in-app browser works inside a running clone"
+# The vendor logs one file set per process; the first names the app's path.
+# A stand-in process at the clone's executable path makes it "running".
+IAB_HOME="$SCRATCH/clone-iab"
+IAB_INST="$IAB_HOME/instances/qa-iab"
+IAB_APP="$SCRATCH/iab-apps/QA IAB.app"
+/bin/mkdir -p "$IAB_INST" "$IAB_APP/Contents/MacOS"
+write_config_file "$IAB_INST" "QA IAB" "com.example.qa-iab" "codex-qa-iab" \
+    "$SCRATCH/qa-iab-profile" "$SCRATCH/qa-iab-codex" "3B82F6"
+print -r -- "$SCRATCH/iab-apps" > "$IAB_INST/install-root"
+/bin/ln -sf /bin/sleep "$IAB_APP/Contents/MacOS/ChatGPT"
+"$IAB_APP/Contents/MacOS/ChatGPT" 300 &
+IAB_PID=$!
+/bin/sleep 1
+export DOPPEL_VENDOR_LOG_ROOT="$SCRATCH/vendor-logs"
+IAB_LOGS="$DOPPEL_VENDOR_LOG_ROOT/2026/10/01"
+/bin/mkdir -p "$IAB_LOGS"
+IAB_T0="$IAB_LOGS/codex-desktop-qa-session-$IAB_PID-t0-i1-000000-0.log"
+print -r -- "2026-10-01T10:00:00.000Z info spawned executablePath=\"$IAB_APP/Contents/Resources/codex\"" > "$IAB_T0"
+# A same-pid log from another app must not be read.
+print -r -- "2026-10-01T09:00:00.000Z info spawned executablePath=\"/Applications/Other.app/Contents/Resources/codex\"
+2026-10-01T23:00:00.000Z warning [browser-use-native-pipe-server] browser-use native pipe rejected socket peer reason=missing-code-signing-identity" \
+    > "$IAB_LOGS/codex-desktop-other-session-$IAB_PID-t0-i1-000000-0.log"
+iab_row() {
+    run_isolated clone-iab native-tools status --porcelain
+    print -r -- "$OUT" | /usr/bin/awk -F '\t' '$1 == "clone-iab" && $2 == "qa-iab" { print $4 "\t" $5 }'
+}
+check "a clone that has not used the browser is reported unused" "$(iab_row)" $'unused\t'
+print -r -- "2026-10-01T10:01:00.000Z info [browser-use-pip] Received Browser Use PiP metadata backend=iab browserID=2 tabID=2 threadID=x
+2026-10-01T10:02:00.000Z warning [browser-use-native-pipe-server] browser-use native pipe rejected socket peer reason=untrusted-process-ancestry" >> "$IAB_T0"
+check "a served tab reports the browser as working, ignoring cross-app probes" \
+    "$(iab_row)" $'served\t2026-10-01T10:01:00.000Z'
+print -r -- "2026-10-01T10:03:00.000Z warning [browser-use-native-pipe-server] browser-use native pipe rejected socket peer reason=missing-code-signing-identity" >> "$IAB_T0"
+check "the vendor's signing refusal is reported when it is the latest event" \
+    "$(iab_row)" $'refused\t2026-10-01T10:03:00.000Z'
+print -r -- "2026-10-01T10:04:00.000Z info [browser-use-pip] Received Browser Use PiP metadata backend=iab browserID=3 tabID=1 threadID=y" \
+    > "$IAB_LOGS/codex-desktop-qa-session-$IAB_PID-t1-i1-000100-0.log"
+check "a later served tab in a sibling log file wins" \
+    "$(iab_row)" $'served\t2026-10-01T10:04:00.000Z'
+/bin/kill -9 "$IAB_PID" 2>/dev/null || true
+/bin/sleep 0.5
+check "a clone that is not running gets no row" "$(iab_row)" ""
+unset DOPPEL_VENDOR_LOG_ROOT
+
+print -r -- ""
 print -r -- "data the instance does not own is never purged"
 ORIGINAL_PROFILE="$(config_field "$DIR" DOPPEL_PROFILE_ROOT)"
 for guarded in "$HOME" "$HOME/Documents" "$HOME/.codex" "$HOME/Library/Application Support/Codex"; do

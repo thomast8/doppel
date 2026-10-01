@@ -60,6 +60,7 @@ readonly PRIMARY_TEAM_ID="${DOPPEL_PRIMARY_TEAM_ID:-2DC432GLL2}"
 # Codex publishes the same production appcast its Sparkle integration uses.
 readonly APPCAST_URL="${DOPPEL_APPCAST_URL:-https://persistent.oaistatic.com/codex-app-prod/appcast.xml}"
 readonly UPDATE_ROOT="${DOPPEL_UPDATE_ROOT:-$DOPPEL_HOME/updates}"
+readonly VENDOR_LOG_ROOT="${DOPPEL_VENDOR_LOG_ROOT:-$HOME/Library/Logs/com.openai.codex}"
 readonly IAB_SLOT_FILE="$DOPPEL_HOME/state/iab-engine-slot"
 readonly IAB_RUNTIME_FILE="$DOPPEL_HOME/state/iab-engine-runtime"
 readonly IAB_OPERATION_LOCK="$DOPPEL_HOME/state/IABCoordinator.lock"
@@ -3037,6 +3038,46 @@ cmd_native_tools_claim_browser() {
 
 # MARK: - Native-tool health
 
+# Whether the in-app browser actually works inside a locally signed clone, as
+# the vendor itself recorded it. The vendor's peer check inspects the client,
+# its parent and its grandparent, and a clone's re-signed app has no OpenAI
+# team. Since build 12553 an extra vendor process sits between them, which puts
+# the clone outside that window, so iab works in clones by accident of process
+# layout. If that layer goes away the app logs this exact refusal again. The
+# check reads the running clone's own log (one file set per pid, the first
+# naming the app's path) and reports the latest iab event: "served", "refused",
+# or "unused" when nothing has touched the browser since launch.
+clone_iab_health() {
+    local app="$1" candidates pid command first session line latest="" found=0
+    local -a firsts files
+    candidates="$(chatgpt_process_candidates)"
+    for pid in ${(f)candidates}; do
+        [[ "$pid" == <1-> ]] || continue
+        command="$(/bin/ps -p "$pid" -o command= 2>/dev/null || true)"
+        [[ "$command" == "$app/Contents/MacOS/"* ]] || continue
+        found=1
+        firsts=("$VENDOR_LOG_ROOT"/*/*/*/codex-desktop-*-"$pid"-t0-*.log(N.om))
+        for first in "${firsts[@]}"; do
+            /usr/bin/head -c 8192 "$first" 2>/dev/null | /usr/bin/grep -qF -- "$app/" || continue
+            session="${${first:t}%%-$pid-t0-*}"
+            files=("$VENDOR_LOG_ROOT"/*/*/*/"$session-$pid"-t*.log(N.))
+            line="$(/usr/bin/grep -ahE \
+                'rejected socket peer reason=missing-code-signing-identity|backend=iab browserID=[0-9]+ tabID=[0-9]' \
+                "${files[@]}" 2>/dev/null | /usr/bin/sort | /usr/bin/tail -1)"
+            [[ -n "$line" && "$line" > "$latest" ]] && latest="$line"
+            break
+        done
+    done
+    (( found )) || return 1
+    if [[ -z "$latest" ]]; then
+        printf 'unused\t\n'
+    elif [[ "$latest" == *"rejected socket peer"* ]]; then
+        printf 'refused\t%s\n' "${latest%% *}"
+    else
+        printf 'served\t%s\n' "${latest%% *}"
+    fi
+}
+
 native_tools_status() {
     local porcelain="${1:-0}" computer_state="idle" socket
     socket="$HOME/Library/Group Containers/$PRIMARY_TEAM_ID.com.openai.sky.CUAService/IPC/computeruse.sock"
@@ -3115,6 +3156,22 @@ native_tools_status() {
         browser_lines+=("Browser extension host: $browser belongs to $owner_prose")
     done
 
+    local clone_dir clone_name clone_health
+    local -a clone_rows clone_lines
+    for clone_dir in "$INSTANCES_ROOT"/*(N/); do
+        is_instance_dir "$clone_dir" || continue
+        instance_uses_vendor_engine "$clone_dir" && continue
+        clone_instance_is_running "$clone_dir" || continue
+        clone_health="$(clone_iab_health "$(app_path_for "$clone_dir")")" || continue
+        clone_name="$(config_value "$clone_dir" DOPPEL_DISPLAY_NAME)"
+        clone_rows+=("${clone_dir:t}	$clone_name	$clone_health")
+        case "${clone_health%%	*}" in
+            served) clone_lines+=("In-app browser in $clone_name: working (last used ${clone_health#*	})") ;;
+            refused) clone_lines+=("In-app browser in $clone_name: refused by the vendor's signing check at ${clone_health#*	}; assign it the built-in browser") ;;
+            *) clone_lines+=("In-app browser in $clone_name: not used since launch") ;;
+        esac
+    done
+
     if (( porcelain )); then
         printf 'computer-use\t%s\n' "$computer_state"
         printf 'chronicle\t%s\t%s\t%s\t%s\n' \
@@ -3131,6 +3188,9 @@ native_tools_status() {
         local row
         for row in "${browser_rows[@]}"; do
             printf 'browser-host\t%s\n' "$row"
+        done
+        for row in "${clone_rows[@]}"; do
+            printf 'clone-iab\t%s\n' "$row"
         done
         # The trailing field says whether this instance has a browser extension
         # host of its own yet, which is what decides whether it can be handed
@@ -3169,6 +3229,7 @@ native_tools_status() {
     else
         print -r -- "In-app browser: not assigned (locally signed engines use the browser extension)"
     fi
+    (( ${#clone_lines} )) && print -rl -- "${clone_lines[@]}"
     if (( ${#browser_lines} == 0 )); then
         print -r -- "Browser extension host: no ChatGPT registration found in any Chromium browser"
     else
