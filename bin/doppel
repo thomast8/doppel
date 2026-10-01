@@ -87,27 +87,36 @@ readonly QUIT_DIALOG_WAIT_SECONDS=120
 
 die() { print -u2 -r -- "doppel: $1"; exit 1 }
 
-# A rollback must remain byte-for-byte restorable, but leaving its signed
-# Contents/Info.plist in the normal bundle location makes macOS and Computer
-# Use discover it as another installed copy of the live app. Move only that
-# plist out of the bundle layout while it is stored. Moving the same bytes back
-# restores the original code seal; no identifier or signature is rewritten.
+# A rollback must remain byte-for-byte restorable, but any stored directory
+# that still has Contents/ is an app bundle to Launch Services and Computer
+# Use: with Info.plist it is a duplicate install, without it (the old mask) a
+# "damaged" app that macOS refuses to open. Kept in step with the engine:
+# move the whole Contents directory aside, which leaves a plain folder.
 readonly ROLLBACK_INFO_NAME="Info.plist.doppel-rollback"
+readonly ROLLBACK_CONTENTS_NAME="Contents.doppel-rollback"
 
 mask_rollback_app() {
-    local app="$1" info hidden
-    info="$app/Contents/Info.plist"
-    hidden="$app/Contents/$ROLLBACK_INFO_NAME"
+    local app="$1" contents hidden
+    contents="$app/Contents"
+    hidden="$app/$ROLLBACK_CONTENTS_NAME"
     [[ -d "$app" ]] || return 1
-    [[ -f "$hidden" && ! -e "$info" ]] && return 0
-    [[ -f "$info" && ! -e "$hidden" ]] || return 1
+    [[ -d "$hidden" && ! -e "$contents" ]] && return 0
+    [[ -d "$contents" && ! -e "$hidden" ]] || return 1
+    if [[ -f "$contents/$ROLLBACK_INFO_NAME" ]]; then
+        [[ ! -e "$contents/Info.plist" ]] || return 1
+        /bin/mv "$contents/$ROLLBACK_INFO_NAME" "$contents/Info.plist" || return 1
+    fi
     "$LSREGISTER" -u "$app" >/dev/null 2>&1 || true
-    /bin/mv "$info" "$hidden"
+    /bin/mv "$contents" "$hidden"
 }
 
 discoverable_rollback_count() {
     local count=0 backup
-    for backup in "$DOPPEL_HOME/state"/*/Backups/*(N/) "$UPDATE_ROOT/Backups"/*(N/); do
+    for backup in "$DOPPEL_HOME/state"/*/Backups/*(N/); do
+        [[ -d "$backup/Contents" ]] || continue
+        count=$(( count + 1 ))
+    done
+    for backup in "$UPDATE_ROOT/Backups"/*(N/); do
         [[ -f "$backup/Contents/Info.plist" ]] || continue
         count=$(( count + 1 ))
     done
@@ -117,7 +126,7 @@ discoverable_rollback_count() {
 repair_rollback_discovery() {
     local repaired=0 backup
     for backup in "$DOPPEL_HOME/state"/*/Backups/*(N/); do
-        [[ -f "$backup/Contents/Info.plist" ]] || continue
+        [[ -d "$backup/Contents" ]] || continue
         mask_rollback_app "$backup" || die "could not hide stored rollback from app discovery: $backup"
         repaired=$(( repaired + 1 ))
     done
@@ -3242,6 +3251,7 @@ cmd_prune() {
         [[ "${instance_state:t}" != "Removed" ]] || continue
         rollbacks=("$instance_state/Backups"/*.rollback(N/om))
         for (( index = keep + 1; index <= ${#rollbacks}; index++ )); do
+            "$LSREGISTER" -u "${rollbacks[$index]}" >/dev/null 2>&1 || true
             /bin/rm -rf "${rollbacks[$index]}"
         done
         # Staging only ever holds a build in flight; anything left is debris

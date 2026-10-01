@@ -896,13 +896,18 @@ VENDOR_BACKUP="$SCRATCH/native-tools/updates/Backups/ChatGPT.app"
 /usr/bin/plutil -create xml1 "$VENDOR_BACKUP/Contents/Info.plist"
 /usr/bin/plutil -insert CFBundleIdentifier -string com.openai.codex \
     "$VENDOR_BACKUP/Contents/Info.plist"
+# Older Doppel only moved the plist aside, which Launch Services still
+# registered as a damaged app.
+LEGACY="$SCRATCH/native-tools/state/com.example.native/Backups/Legacy.app.rollback"
+/bin/mkdir -p "$LEGACY/Contents"
+/usr/bin/plutil -create xml1 "$LEGACY/Contents/Info.plist.doppel-rollback"
 run_isolated native-tools native-tools repair
-[[ -f "$DISCOVERABLE/Contents/Info.plist.doppel-rollback" ]] \
-    && pass "repair hides the signed plist from app discovery" \
-    || fail "repair hides the signed plist from app discovery" "the plist stayed in bundle position"
-[[ ! -e "$DISCOVERABLE/Contents/Info.plist" ]] \
+[[ -f "$DISCOVERABLE/Contents.doppel-rollback/Info.plist" && ! -e "$DISCOVERABLE/Contents" ]] \
     && pass "the stored directory is no longer an application bundle" \
-    || fail "the stored directory is no longer an application bundle" "Info.plist is still discoverable"
+    || fail "the stored directory is no longer an application bundle" "Contents is still in bundle position"
+[[ -f "$LEGACY/Contents.doppel-rollback/Info.plist" && ! -e "$LEGACY/Contents" ]] \
+    && pass "repair migrates the old plist-only mask" \
+    || fail "repair migrates the old plist-only mask" "legacy rollback still looks like a damaged app"
 [[ -f "$SCRATCH/native-tools/updates/.Backups/ChatGPT.app/Contents/Info.plist" ]] \
     && pass "the protected primary rollback moves whole into hidden storage" \
     || fail "the protected primary rollback moves whole into hidden storage" "the vendor bundle did not move intact"
@@ -910,8 +915,7 @@ run_isolated native-tools native-tools status --porcelain
 [[ "$OUT" == *$'rollbacks\t0'* ]] \
     && pass "native-tool status confirms app discovery is clean" \
     || fail "native-tool status confirms app discovery is clean" "got: $OUT"
-/bin/mv "$DISCOVERABLE/Contents/Info.plist.doppel-rollback" \
-    "$DISCOVERABLE/Contents/Info.plist"
+/bin/mv "$DISCOVERABLE/Contents.doppel-rollback" "$DISCOVERABLE/Contents"
 check "the original identifier is byte-for-byte restorable" \
     "$(/usr/bin/plutil -extract CFBundleIdentifier raw "$DISCOVERABLE/Contents/Info.plist")" \
     "com.example.native"
