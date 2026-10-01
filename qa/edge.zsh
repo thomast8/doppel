@@ -920,7 +920,8 @@ print -r -- ""
 print -r -- "status reports whether the in-app browser works inside a running clone"
 # The vendor logs one file set per process; the first names the app's path.
 # A stand-in process at the clone's executable path makes it "running".
-IAB_HOME="$SCRATCH/clone-iab"
+IAB_USER="$SCRATCH/iab-user"
+IAB_HOME="$IAB_USER/Library/Application Support/Doppel"
 IAB_INST="$IAB_HOME/instances/qa-iab"
 IAB_APP="$SCRATCH/iab-apps/QA IAB.app"
 /bin/mkdir -p "$IAB_INST" "$IAB_APP/Contents/MacOS"
@@ -934,6 +935,13 @@ IAB_PID=$!
 export DOPPEL_VENDOR_LOG_ROOT="$SCRATCH/vendor-logs"
 IAB_LOGS="$DOPPEL_VENDOR_LOG_ROOT/2026/10/01"
 /bin/mkdir -p "$IAB_LOGS"
+# A previous launch that had the same pid left this log; it predates the
+# running process, so its refusal must not be reported.
+IAB_STALE="$IAB_LOGS/codex-desktop-stale-session-$IAB_PID-t0-i1-000000-0.log"
+print -r -- "2026-10-01T08:00:00.000Z info spawned executablePath=\"$IAB_APP/Contents/Resources/codex\"
+2026-10-01T08:01:00.000Z warning [browser-use-native-pipe-server] browser-use native pipe rejected socket peer reason=missing-code-signing-identity" \
+    > "$IAB_STALE"
+/usr/bin/touch -t 202001010000 "$IAB_STALE"
 IAB_T0="$IAB_LOGS/codex-desktop-qa-session-$IAB_PID-t0-i1-000000-0.log"
 print -r -- "2026-10-01T10:00:00.000Z info spawned executablePath=\"$IAB_APP/Contents/Resources/codex\"" > "$IAB_T0"
 # A same-pid log from another app must not be read.
@@ -941,9 +949,10 @@ print -r -- "2026-10-01T09:00:00.000Z info spawned executablePath=\"/Application
 2026-10-01T23:00:00.000Z warning [browser-use-native-pipe-server] browser-use native pipe rejected socket peer reason=missing-code-signing-identity" \
     > "$IAB_LOGS/codex-desktop-other-session-$IAB_PID-t0-i1-000000-0.log"
 iab_row() {
-    run_isolated clone-iab native-tools status --porcelain
+    OUT="$(DOPPEL_HOME="$IAB_HOME" "${IAB_CLI:-$CLI}" native-tools status --porcelain 2>&1)"
     print -r -- "$OUT" | /usr/bin/awk -F '\t' '$1 == "clone-iab" && $2 == "qa-iab" { print $4 "\t" $5 }'
 }
+check "a log left by an earlier launch with the same pid is ignored" "$(iab_row)" $'unused\t'
 check "a clone that has not used the browser is reported unused" "$(iab_row)" $'unused\t'
 print -r -- "2026-10-01T10:01:00.000Z info [browser-use-pip] Received Browser Use PiP metadata backend=iab browserID=2 tabID=2 threadID=x
 2026-10-01T10:02:00.000Z warning [browser-use-native-pipe-server] browser-use native pipe rejected socket peer reason=untrusted-process-ancestry" >> "$IAB_T0"
@@ -956,6 +965,9 @@ print -r -- "2026-10-01T10:04:00.000Z info [browser-use-pip] Received Browser Us
     > "$IAB_LOGS/codex-desktop-qa-session-$IAB_PID-t1-i1-000100-0.log"
 check "a later served tab in a sibling log file wins" \
     "$(iab_row)" $'served\t2026-10-01T10:04:00.000Z'
+# An installed copy must read the real vendor log root, not an inherited one.
+check "an installed copy ignores DOPPEL_VENDOR_LOG_ROOT" \
+    "$(HOME="$IAB_USER" IAB_CLI="$GUARD_FIXTURE/doppel" iab_row)" $'unused\t'
 /bin/kill -9 "$IAB_PID" 2>/dev/null || true
 /bin/sleep 0.5
 check "a clone that is not running gets no row" "$(iab_row)" ""
