@@ -174,8 +174,9 @@ that) and clears any staging left by a build that died. Rebuilds prune as they
 go, so this is only needed to reclaim what earlier versions left behind.
 
 Stored rollbacks are deliberately kept out of normal macOS app discovery. For
-locally signed instances, Doppel moves the signed `Contents/Info.plist` aside
-without editing it; restoration moves the exact file back before verification.
+locally signed instances, Doppel moves the whole `Contents` directory aside
+without editing it, so macOS sees a plain folder rather than a damaged app;
+restoration moves it back before verification.
 The untouched vendor-primary rollback stays whole under a hidden `.Backups`
 directory because macOS App Management can prohibit changes inside vendor code.
 `native-tools repair` applies those reversible migrations to rollbacks created

@@ -150,29 +150,46 @@ record_pinned_requirement() {
     /bin/chmod 600 "$pin"
 }
 
-# A stored rollback with Contents/Info.plist still looks like an installed app
-# to Launch Services and Computer Use. Move that signed file aside without
-# editing it; moving the exact bytes back before restoration recovers the
-# original bundle layout and code seal.
+# A stored rollback that still has a Contents directory is an app bundle to
+# Launch Services. Moving only Info.plist aside (the old layout) left it
+# registered as a damaged app, so anything that opened it got "may be damaged
+# or incomplete". Moving the whole Contents directory aside leaves a plain
+# folder; moving it back restores the exact bundle and its code seal.
+readonly ROLLBACK_CONTENTS_NAME="Contents.doppel-rollback"
+
 mask_rollback_app() {
-    local app="$1" info hidden
-    info="$app/Contents/Info.plist"
-    hidden="$app/Contents/$ROLLBACK_INFO_NAME"
+    local app="$1" contents hidden stamp
+    contents="$app/Contents"
+    hidden="$app/$ROLLBACK_CONTENTS_NAME"
     [[ -d "$app" ]] || return 1
-    [[ -f "$hidden" && ! -e "$info" ]] && return 0
-    [[ -f "$info" && ! -e "$hidden" ]] || return 1
+    [[ -d "$hidden" && ! -e "$contents" ]] && return 0
+    [[ -d "$contents" && ! -e "$hidden" ]] || return 1
+    if [[ -f "$contents/$ROLLBACK_INFO_NAME" ]]; then
+        [[ ! -e "$contents/Info.plist" ]] || return 1
+        /bin/mv "$contents/$ROLLBACK_INFO_NAME" "$contents/Info.plist" || return 1
+    fi
     "$LSREGISTER" -u "$app" >/dev/null 2>&1 || true
-    /bin/mv "$info" "$hidden"
+    # Prune keeps the newest rollbacks by mtime, and the rename below bumps the
+    # outer directory's, so put the original back.
+    stamp="$(/bin/date -r "$(/usr/bin/stat -f '%m' "$app")" '+%Y%m%d%H%M.%S')" || return 1
+    /bin/mv "$contents" "$hidden" || return 1
+    /usr/bin/touch -t "$stamp" "$app"
 }
 
 unmask_rollback_app() {
-    local app="$1" info hidden
-    info="$app/Contents/Info.plist"
-    hidden="$app/Contents/$ROLLBACK_INFO_NAME"
+    local app="$1" contents hidden
+    contents="$app/Contents"
+    hidden="$app/$ROLLBACK_CONTENTS_NAME"
     [[ -d "$app" ]] || return 1
-    [[ -f "$info" && ! -e "$hidden" ]] && return 0
-    [[ -f "$hidden" && ! -e "$info" ]] || return 1
-    /bin/mv "$hidden" "$info"
+    if [[ -d "$hidden" && ! -e "$contents" ]]; then
+        /bin/mv "$hidden" "$contents" || return 1
+    fi
+    [[ -d "$contents" && ! -e "$hidden" ]] || return 1
+    # Rollbacks stored by older versions only had their plist moved aside.
+    if [[ -f "$contents/$ROLLBACK_INFO_NAME" && ! -e "$contents/Info.plist" ]]; then
+        /bin/mv "$contents/$ROLLBACK_INFO_NAME" "$contents/Info.plist" || return 1
+    fi
+    [[ -f "$contents/Info.plist" ]]
 }
 
 # A rollback is a whole copy of the app. One is kept every time an instance is
@@ -183,6 +200,7 @@ prune_state() {
     local -a rollbacks
     rollbacks=("$STATE_ROOT/Backups"/*.rollback(N/om))
     for (( index = keep + 1; index <= ${#rollbacks}; index++ )); do
+        "$LSREGISTER" -u "${rollbacks[$index]}" >/dev/null 2>&1 || true
         /bin/rm -rf "${rollbacks[$index]}" 2>/dev/null || true
     done
     # Nothing else can be building: this runs while the rebuild lock is held,
