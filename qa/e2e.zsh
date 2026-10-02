@@ -281,6 +281,10 @@ if /usr/bin/pgrep -f "${RENAMED_APP}/Contents/MacOS/ChatGPT.real" >/dev/null 2>&
     pass "direct branded-app launch adopts the fallback profile"
 else
     fail "direct branded-app launch adopts the fallback profile" "ChatGPT.real never appeared"
+    # This check has failed intermittently while the app was demonstrably up.
+    # Record what was actually running so the next failure explains itself.
+    /bin/ps -ww -axo pid=,ppid=,stat=,lstart=,command= | /usr/bin/grep -F "$RENAMED_APP" | \
+        /usr/bin/grep -v grep | /usr/bin/sed 's/^/      ps: /'
 fi
 [[ ! -e "$HOME/Library/Application Support/Doppel/state/clone-launch/$SLUG" ]] && \
     pass "one-shot clone authorization is consumed" || \

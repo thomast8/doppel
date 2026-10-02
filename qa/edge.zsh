@@ -289,6 +289,49 @@ check "another instance's probe is left alone" "$(/bin/ps -p "$SIBLING_PROBE_PID
 /bin/kill -9 "$NORMAL_PID" "$SIBLING_PROBE_PID" 2>/dev/null || true
 
 print -r -- ""
+print -r -- "a permission probe is not a running instance"
+# The menu bar probes every instance every few minutes, and right after one is
+# created or renamed. Counting that probe as the running app made a launch in
+# that window activate the probe and never start ChatGPT.real.
+RUNNING_APP="$SCRATCH/Running Probe.app"
+/bin/mkdir -p "$RUNNING_APP/Contents/MacOS"
+/bin/cp "$PROBE_APP/Contents/MacOS/ChatGPT" "$RUNNING_APP/Contents/MacOS/ChatGPT"
+/bin/cp "$PROBE_APP/Contents/MacOS/ChatGPT" "$RUNNING_APP/Contents/MacOS/ChatGPT.real"
+is_running() {
+    RUNNING_CLI="$CLI" RUNNING_APP="$RUNNING_APP" /bin/zsh -c '
+        eval "$(/usr/bin/sed -n -e "/^chatgpt_process_candidates() {/,/^}/p" \
+            -e "/^clone_instance_is_running() {/,/^}/p" "$RUNNING_CLI")"
+        app_path_for() { print -r -- "$RUNNING_APP" }
+        clone_instance_is_running stand-in && print running || print stopped
+    '
+}
+"$RUNNING_APP/Contents/MacOS/ChatGPT" --doppel-permission-status &
+RUNNING_PROBE_PID=$!
+/bin/sleep 1
+check "an instance with only its permission probe up is not running" "$(is_running)" "stopped"
+"$RUNNING_APP/Contents/MacOS/ChatGPT.real" --user-data-dir=/nonexistent &
+RUNNING_REAL_PID=$!
+/bin/sleep 1
+check "its Electron main process still counts as running" "$(is_running)" "running"
+/bin/kill -9 "$RUNNING_REAL_PID" 2>/dev/null || true
+# The same probe must not look like a launcher still starting, or a launch that
+# never adopts its profile would hold the engine lock for as long as it lives.
+WAIT_STARTED=$SECONDS
+RUNNING_CLI="$CLI" RUNNING_APP="$RUNNING_APP" /bin/zsh -c '
+    eval "$(/usr/bin/sed -n "/^wait_for_locked_clone_adoption() {/,/^}/p" "$RUNNING_CLI")"
+    wait_for_locked_clone_adoption "$RUNNING_APP"
+' &
+WAIT_PID=$!
+for _ in {1..20}; do /bin/kill -0 "$WAIT_PID" 2>/dev/null || break; /bin/sleep 1; done
+if /bin/kill -0 "$WAIT_PID" 2>/dev/null; then
+    /bin/kill -9 "$WAIT_PID" 2>/dev/null || true
+    fail "a lingering probe does not stall the launch wait" "still waiting after 20s"
+else
+    pass "a lingering probe does not stall the launch wait ($(( SECONDS - WAIT_STARTED ))s)"
+fi
+/bin/kill -9 "$RUNNING_PROBE_PID" 2>/dev/null || true
+
+print -r -- ""
 print -r -- "quitting an instance takes its helper processes with it"
 # Electron's crashpad handlers and the modifier monitor live under Frameworks
 # and Resources, not Contents/MacOS, so the graceful quit never covered them.
@@ -955,8 +998,8 @@ IAB_APP="$SCRATCH/iab-apps/QA IAB.app"
 write_config_file "$IAB_INST" "QA IAB" "com.example.qa-iab" "codex-qa-iab" \
     "$SCRATCH/qa-iab-profile" "$SCRATCH/qa-iab-codex" "3B82F6"
 print -r -- "$SCRATCH/iab-apps" > "$IAB_INST/install-root"
-/bin/ln -sf /bin/sleep "$IAB_APP/Contents/MacOS/ChatGPT"
-"$IAB_APP/Contents/MacOS/ChatGPT" 300 &
+/bin/ln -sf /bin/sleep "$IAB_APP/Contents/MacOS/ChatGPT.real"
+"$IAB_APP/Contents/MacOS/ChatGPT.real" 300 &
 IAB_PID=$!
 /bin/sleep 1
 export DOPPEL_VENDOR_LOG_ROOT="$SCRATCH/vendor-logs"
