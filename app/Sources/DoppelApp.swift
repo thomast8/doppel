@@ -231,15 +231,14 @@ struct MenuContent: View {
             let engineBusy = store.engineOperationBusy
             Menu {
                 if instance.usesBuiltInBrowser {
-                    Label("Engine — Official ChatGPT", systemImage: "checkmark.shield.fill")
-                    Text("Built-in browser assigned")
-                    Button("Release Built-in Browser") {
+                    Label("Engine — Official ChatGPT (fallback)", systemImage: "checkmark.shield.fill")
+                    Button("Switch Back to Doppel Engine") {
                         store.releaseBuiltInBrowser()
                     }
                     .disabled(engineBusy)
                 } else {
                     Label("Engine — Doppel", systemImage: "square.stack.3d.up")
-                    Button("Assign Built-in Browser") {
+                    Button("Run on Official ChatGPT Instead") {
                         store.assignBuiltInBrowser(to: instance)
                     }
                     .disabled(engineBusy || !store.primaryInstalled)
@@ -250,7 +249,7 @@ struct MenuContent: View {
                      : "Privacy Permissions") {
                     if instance.usesBuiltInBrowser {
                         Text("Official ChatGPT uses its own macOS permissions.")
-                        Text("These grants apply only after releasing Built-in Browser.")
+                        Text("These grants apply after switching back to the Doppel engine.")
                         Divider()
                     }
                     if permissions.isEmpty {
@@ -281,7 +280,7 @@ struct MenuContent: View {
                 }
                 Divider()
                 Button(instance.usesBuiltInBrowser
-                       ? "Launch with Built-in Browser"
+                       ? "Launch on Official ChatGPT"
                        : "Launch") { store.launch(instance) }
                     .disabled(engineBusy)
                 Button("Rebuild & Reopen") { store.rebuild(instance) }
@@ -347,7 +346,7 @@ struct MenuContent: View {
                           systemImage: "exclamationmark.triangle.fill")
                     Text("Assigned: \(status.inAppBrowserInstanceName)")
                     Text("Actually running: \(status.inAppBrowserRuntimeInstanceName)")
-                    Text("Assign the running profile to reconcile Doppel.")
+                    Text("Quit official ChatGPT, then launch the profile from Doppel.")
                 } else if !status.inAppBrowserInstanceName.isEmpty {
                     Label(status.inAppBrowserRunning
                           ? (status.inAppBrowserRunningOutsideDoppel
@@ -364,14 +363,14 @@ struct MenuContent: View {
                     Label("Built-in browser — Running outside Doppel",
                           systemImage: "exclamationmark.circle")
                     Text(status.inAppBrowserRuntimeInstanceName)
-                    Text("Assign this profile to make future launches deterministic.")
+                    Text("Quit official ChatGPT so this profile launches through Doppel.")
                 } else if status.inAppBrowserUnavailable {
                     Label("In-app browser — Not available in instances",
                           systemImage: "xmark.circle")
                     Text("ChatGPT only opens it for an app signed by OpenAI.")
                 } else {
                     Label("Built-in browser — Not assigned", systemImage: "circle.dotted")
-                    Text("Assign the official engine from an instance menu.")
+                    Text("Every instance runs on its Doppel engine.")
                 }
                 if status.browserHosts.isEmpty {
                     Label("Browser extension — Not installed", systemImage: "circle.dotted")

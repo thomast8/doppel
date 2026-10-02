@@ -47,7 +47,7 @@ if [[ ("${0:A}" == */Doppel.app/Contents/Resources/doppel/* || \
           DOPPEL_PRIMARY_SCHEME DOPPEL_PRIMARY_TEAM_ID \
           DOPPEL_SIGN_IDENTITY DOPPEL_SIGN_IDENTITY_NAME DOPPEL_SIGN_LEAF_SHA1 \
           DOPPEL_ASSET_ROOT DOPPEL_STATE_ROOT DOPPEL_PIN_ROOT \
-          DOPPEL_IAB_DRY_RUN DOPPEL_IAB_DRY_RUN_DELAY
+          DOPPEL_IAB_DRY_RUN DOPPEL_IAB_DRY_RUN_DELAY DOPPEL_VENDOR_LOG_ROOT
 fi
 
 readonly DOPPEL_HOME="${DOPPEL_HOME:-$HOME/Library/Application Support/Doppel}"
@@ -60,7 +60,9 @@ readonly PRIMARY_TEAM_ID="${DOPPEL_PRIMARY_TEAM_ID:-2DC432GLL2}"
 # Codex publishes the same production appcast its Sparkle integration uses.
 readonly APPCAST_URL="${DOPPEL_APPCAST_URL:-https://persistent.oaistatic.com/codex-app-prod/appcast.xml}"
 readonly UPDATE_ROOT="${DOPPEL_UPDATE_ROOT:-$DOPPEL_HOME/updates}"
+readonly VENDOR_LOG_ROOT="${DOPPEL_VENDOR_LOG_ROOT:-$HOME/Library/Logs/com.openai.codex}"
 readonly IAB_SLOT_FILE="$DOPPEL_HOME/state/iab-engine-slot"
+readonly CODEX_MICRO_OWNER_FILE="$DOPPEL_HOME/state/codex-micro-owner"
 readonly IAB_RUNTIME_FILE="$DOPPEL_HOME/state/iab-engine-runtime"
 readonly IAB_OPERATION_LOCK="$DOPPEL_HOME/state/IABCoordinator.lock"
 readonly CLONE_LAUNCH_ROOT="$DOPPEL_HOME/state/clone-launch"
@@ -87,27 +89,40 @@ readonly QUIT_DIALOG_WAIT_SECONDS=120
 
 die() { print -u2 -r -- "doppel: $1"; exit 1 }
 
-# A rollback must remain byte-for-byte restorable, but leaving its signed
-# Contents/Info.plist in the normal bundle location makes macOS and Computer
-# Use discover it as another installed copy of the live app. Move only that
-# plist out of the bundle layout while it is stored. Moving the same bytes back
-# restores the original code seal; no identifier or signature is rewritten.
+# A rollback must remain byte-for-byte restorable, but any stored directory
+# that still has Contents/ is an app bundle to Launch Services and Computer
+# Use: with Info.plist it is a duplicate install, without it (the old mask) a
+# "damaged" app that macOS refuses to open. Kept in step with the engine:
+# move the whole Contents directory aside, which leaves a plain folder.
 readonly ROLLBACK_INFO_NAME="Info.plist.doppel-rollback"
+readonly ROLLBACK_CONTENTS_NAME="Contents.doppel-rollback"
 
 mask_rollback_app() {
-    local app="$1" info hidden
-    info="$app/Contents/Info.plist"
-    hidden="$app/Contents/$ROLLBACK_INFO_NAME"
+    local app="$1" contents hidden stamp
+    contents="$app/Contents"
+    hidden="$app/$ROLLBACK_CONTENTS_NAME"
     [[ -d "$app" ]] || return 1
-    [[ -f "$hidden" && ! -e "$info" ]] && return 0
-    [[ -f "$info" && ! -e "$hidden" ]] || return 1
+    [[ -d "$hidden" && ! -e "$contents" ]] && return 0
+    [[ -d "$contents" && ! -e "$hidden" ]] || return 1
+    if [[ -f "$contents/$ROLLBACK_INFO_NAME" ]]; then
+        [[ ! -e "$contents/Info.plist" ]] || return 1
+        /bin/mv "$contents/$ROLLBACK_INFO_NAME" "$contents/Info.plist" || return 1
+    fi
     "$LSREGISTER" -u "$app" >/dev/null 2>&1 || true
-    /bin/mv "$info" "$hidden"
+    # Prune keeps the newest rollbacks by mtime, and the rename below bumps the
+    # outer directory's, so put the original back.
+    stamp="$(/bin/date -r "$(/usr/bin/stat -f '%m' "$app")" '+%Y%m%d%H%M.%S')" || return 1
+    /bin/mv "$contents" "$hidden" || return 1
+    /usr/bin/touch -t "$stamp" "$app"
 }
 
 discoverable_rollback_count() {
     local count=0 backup
-    for backup in "$DOPPEL_HOME/state"/*/Backups/*(N/) "$UPDATE_ROOT/Backups"/*(N/); do
+    for backup in "$DOPPEL_HOME/state"/*/Backups/*(N/); do
+        [[ -d "$backup/Contents" ]] || continue
+        count=$(( count + 1 ))
+    done
+    for backup in "$UPDATE_ROOT/Backups"/*(N/); do
         [[ -f "$backup/Contents/Info.plist" ]] || continue
         count=$(( count + 1 ))
     done
@@ -117,7 +132,7 @@ discoverable_rollback_count() {
 repair_rollback_discovery() {
     local repaired=0 backup
     for backup in "$DOPPEL_HOME/state"/*/Backups/*(N/); do
-        [[ -f "$backup/Contents/Info.plist" ]] || continue
+        [[ -d "$backup/Contents" ]] || continue
         mask_rollback_app "$backup" || die "could not hide stored rollback from app discovery: $backup"
         repaired=$(( repaired + 1 ))
     done
@@ -584,9 +599,10 @@ instance_dir_for_app_path() {
 
 # MARK: - Movable vendor engine slot
 #
-# A locally re-signed bundle can never pass ChatGPT's in-app-browser peer
-# check. Doppel therefore assigns that capability to a profile, not to its
-# clone: the selected profile is launched through the untouched vendor app
+# A locally re-signed bundle passes ChatGPT's in-app-browser peer check only
+# while the vendor's helper chain keeps it outside the checked ancestry, so the
+# official engine stays available as a per-profile fallback: the selected
+# profile is launched through the untouched vendor app
 # with the same CODEX_HOME and Electron data root. The one-line slot file is
 # global because there is exactly one certified vendor runtime in v1.
 iab_slot_slug() {
@@ -817,6 +833,10 @@ vendor_command_uses_profile() {
     profile_root_is_primary_default "$profile_root"
 }
 
+# Only the Electron main process counts. The bundle's own ChatGPT executable is
+# also launched as a short-lived helper (the menu bar's permission probe runs
+# it every few minutes), and treating that as the app made a launch in that
+# window activate the probe instead of starting ChatGPT.real.
 clone_instance_is_running() {
     local app candidates pid command
     app="$(app_path_for "$1")"
@@ -824,7 +844,7 @@ clone_instance_is_running() {
     for pid in ${(f)candidates}; do
         [[ "$pid" == <1-> ]] || continue
         command="$(/bin/ps -p "$pid" -o command= 2>/dev/null || true)"
-        [[ "$command" == "$app/Contents/MacOS/"* ]] && return 0
+        [[ "$command" == "$app/Contents/MacOS/ChatGPT.real"* ]] && return 0
     done
     return 1
 }
@@ -1517,6 +1537,46 @@ cmd_browser() {
     esac
 }
 
+# Every ChatGPT copy opens the Codex Micro / Creator Micro pad by itself, so one
+# press used to reach them all. Clones are patched to ignore it unless named
+# here; the engine reads this file when a clone starts. Stock ChatGPT cannot be
+# patched and listens whenever it runs.
+cmd_micro() {
+    local action="${1:-status}" dir slug staged
+    (( $# > 0 )) && shift
+    case "$action" in
+        assign)
+            [[ $# -eq 1 ]] || die "usage: doppel micro assign <name>"
+            dir="$(instance_dir_for "$1")"
+            /bin/mkdir -p "${CODEX_MICRO_OWNER_FILE:h}"
+            staged="$(/usr/bin/mktemp "${CODEX_MICRO_OWNER_FILE}.XXXXXXXX")" || \
+                die "could not stage the Creator Micro assignment"
+            if ! print -r -- "${dir:t}" > "$staged" || ! /bin/mv "$staged" "$CODEX_MICRO_OWNER_FILE"; then
+                /bin/rm -f "$staged"
+                die "could not save the Creator Micro assignment"
+            fi
+            print -r -- "Creator Micro assigned to: $(config_value "$dir" DOPPEL_DISPLAY_NAME) (takes effect when it next starts)"
+            ;;
+        release)
+            [[ $# -eq 0 ]] || die "usage: doppel micro release"
+            /bin/rm -f "$CODEX_MICRO_OWNER_FILE" || die "could not clear the Creator Micro assignment"
+            print -r -- "Creator Micro released; only official ChatGPT will use it"
+            ;;
+        status)
+            [[ $# -eq 0 ]] || die "usage: doppel micro status"
+            slug=""
+            [[ -r "$CODEX_MICRO_OWNER_FILE" ]] && { IFS= read -r slug < "$CODEX_MICRO_OWNER_FILE" || true }
+            if [[ -n "$slug" && "$slug" != *[^a-z0-9-]* ]] && is_instance_dir "$INSTANCES_ROOT/$slug"; then
+                print -r -- "Creator Micro: $(config_value "$INSTANCES_ROOT/$slug" DOPPEL_DISPLAY_NAME)"
+            else
+                print -r -- "Creator Micro: no clone assigned"
+            fi
+            print -r -- "Official ChatGPT also uses it whenever it is running."
+            ;;
+        *) die "usage: doppel micro {assign <name>|release|status}" ;;
+    esac
+}
+
 # Removal never deletes: the app bundle goes to the Trash and the instance
 # definition is kept under state/Removed, so a removal can be undone. Account
 # data (profile + CODEX_HOME) is left untouched unless --purge-data is given,
@@ -2109,6 +2169,7 @@ release_update_lock() {
 # Output is one tab-separated row:
 #   none                       nothing official is running
 #   bare                       quit it, reopen /Applications/ChatGPT.app as itself
+#   clone-profile<TAB>slug     quit it, reopen that unassigned profile's clone
 #   vendor-profile<TAB>slug    quit it, reopen that profile's official engine
 #   refuse<TAB>reason          stop before fetching, locking or touching an app
 plan_vendor_update_restart() {
@@ -2116,10 +2177,15 @@ plan_vendor_update_restart() {
     local runtime_kind runtime_slug runtime_name runtime_pid
     parse_vendor_runtime_snapshot "$2"
     [[ "$runtime_kind" != "none" ]] || { print -r -- "none"; return 0 }
-    # With no assignment the official app is only ever itself, which is the one
-    # shape the manifest has always been able to reopen.
+    # Clones are the default engine: an unassigned managed profile that the
+    # official app happened to be holding (a Dock click on the vendor default
+    # root) comes back through its own clone after the update.
     if [[ -z "$slot" ]]; then
-        print -r -- "bare"
+        if [[ "$runtime_kind" == "managed" && -n "$runtime_slug" ]]; then
+            printf 'clone-profile\t%s\n' "$runtime_slug"
+        else
+            print -r -- "bare"
+        fi
         return 0
     fi
     if [[ "$runtime_kind" == "managed" && "$runtime_slug" == "$slot" ]]; then
@@ -2152,7 +2218,7 @@ decide_vendor_update_restart() {
     vendor_kind="${plan%%$'\t'*}"
     [[ "$vendor_kind" != "refuse" ]] || die "${plan#*$'\t'}"
     vendor_dir=""
-    [[ "$vendor_kind" != "vendor-profile" ]] || vendor_dir="$INSTANCES_ROOT/${plan#*$'\t'}"
+    [[ "$vendor_kind" != *-profile ]] || vendor_dir="$INSTANCES_ROOT/${plan#*$'\t'}"
 }
 
 typeset -g UPDATE_ABORT_MANIFEST=""
@@ -2335,7 +2401,10 @@ wait_for_locked_clone_adoption() {
     local app="$1" waited=0 observed_launcher=0
     while true; do
         /usr/bin/pgrep -f "${app}/Contents/MacOS/ChatGPT.real" >/dev/null 2>&1 && return 0
-        if /usr/bin/pgrep -f "${app}/Contents/MacOS/ChatGPT" >/dev/null 2>&1 || \
+        # Match only the launcher started with this launch's marker, not every
+        # process of the bundle: a lingering permission probe would otherwise
+        # keep this loop (and the global engine lock) alive until it exits.
+        if /usr/bin/pgrep -f "${app}/Contents/MacOS/ChatGPT --doppel-authorized-clone=" >/dev/null 2>&1 || \
            /usr/bin/pgrep -f "${app}/Contents/Resources/Doppel/doppel-engine.zsh launch" >/dev/null 2>&1; then
             observed_launcher=1
         elif (( observed_launcher )); then
@@ -2514,6 +2583,18 @@ cmd_update_apply() {
     # lock and installing the engine assets all happen between here and the
     # check above, and the user can quit or open ChatGPT throughout.
     (( reconcile_only )) || decide_vendor_update_restart
+
+    # The clone joins the apps reopened after their rebuild, which gates it on
+    # verification and lets an aborted run reopen it too. Without an installed
+    # clone the profile can only come back the way it was.
+    if [[ "$vendor_kind" == "clone-profile" ]]; then
+        app="$(app_path_for "$vendor_dir")"
+        if (( ${apps[(Ie)$app]} )); then
+            (( ${running_apps[(Ie)$app]} )) || running_apps+=("$app")
+        else
+            vendor_kind="bare"
+        fi
+    fi
 
     restart_manifest="$UPDATE_ROOT/restart-after-update"
     : > "$restart_manifest"
@@ -3044,6 +3125,52 @@ cmd_native_tools_claim_browser() {
 
 # MARK: - Native-tool health
 
+# Whether the in-app browser actually works inside a locally signed clone, as
+# the vendor itself recorded it. The vendor's peer check inspects the client,
+# its parent and its grandparent, and a clone's re-signed app has no OpenAI
+# team. Since build 12553 an extra vendor process sits between them, which puts
+# the clone outside that window, so iab works in clones by accident of process
+# layout. If that layer goes away the app logs this exact refusal again. The
+# check reads the running clone's own log (one file set per pid, the first
+# naming the app's path) and reports the latest iab event: "served", "refused",
+# or "unused" when nothing has touched the browser since launch.
+clone_iab_health() {
+    local app="$1" candidates pid command first session line latest="" found=0 started
+    local -a firsts files
+    candidates="$(chatgpt_process_candidates)"
+    for pid in ${(f)candidates}; do
+        [[ "$pid" == <1-> ]] || continue
+        command="$(/bin/ps -p "$pid" -o command= 2>/dev/null || true)"
+        [[ "$command" == "$app/Contents/MacOS/"* ]] || continue
+        found=1
+        # PIDs are reused, and logs from earlier launches are kept for days. Only
+        # a session whose first log was created after this process started can
+        # be this launch's.
+        started="$(/bin/date -j -f '%a %b %d %T %Y' \
+            "$(/bin/ps -p "$pid" -o lstart= 2>/dev/null)" '+%s' 2>/dev/null)" || continue
+        firsts=("$VENDOR_LOG_ROOT"/*/*/*/codex-desktop-*-"$pid"-t0-*.log(N.om))
+        for first in "${firsts[@]}"; do
+            (( $(/usr/bin/stat -f '%B' "$first" 2>/dev/null || print 0) >= started )) || continue
+            /usr/bin/head -c 8192 "$first" 2>/dev/null | /usr/bin/grep -qF -- "$app/" || continue
+            session="${${first:t}%%-$pid-t0-*}"
+            files=("$VENDOR_LOG_ROOT"/*/*/*/"$session-$pid"-t*.log(N.))
+            line="$(/usr/bin/grep -ahE \
+                'rejected socket peer reason=missing-code-signing-identity|backend=iab browserID=[0-9]+ tabID=[0-9]' \
+                "${files[@]}" 2>/dev/null | /usr/bin/sort | /usr/bin/tail -1)"
+            [[ -n "$line" && "$line" > "$latest" ]] && latest="$line"
+            break
+        done
+    done
+    (( found )) || return 1
+    if [[ -z "$latest" ]]; then
+        printf 'unused\t\n'
+    elif [[ "$latest" == *"rejected socket peer"* ]]; then
+        printf 'refused\t%s\n' "${latest%% *}"
+    else
+        printf 'served\t%s\n' "${latest%% *}"
+    fi
+}
+
 native_tools_status() {
     local porcelain="${1:-0}" computer_state="idle" socket
     socket="$HOME/Library/Group Containers/$PRIMARY_TEAM_ID.com.openai.sky.CUAService/IPC/computeruse.sock"
@@ -3122,6 +3249,22 @@ native_tools_status() {
         browser_lines+=("Browser extension host: $browser belongs to $owner_prose")
     done
 
+    local clone_dir clone_name clone_health
+    local -a clone_rows clone_lines
+    for clone_dir in "$INSTANCES_ROOT"/*(N/); do
+        is_instance_dir "$clone_dir" || continue
+        instance_uses_vendor_engine "$clone_dir" && continue
+        clone_instance_is_running "$clone_dir" || continue
+        clone_health="$(clone_iab_health "$(app_path_for "$clone_dir")")" || continue
+        clone_name="$(config_value "$clone_dir" DOPPEL_DISPLAY_NAME)"
+        clone_rows+=("${clone_dir:t}	$clone_name	$clone_health")
+        case "${clone_health%%	*}" in
+            served) clone_lines+=("In-app browser in $clone_name: working (last used ${clone_health#*	})") ;;
+            refused) clone_lines+=("In-app browser in $clone_name: refused by the vendor's signing check at ${clone_health#*	}; assign it the built-in browser") ;;
+            *) clone_lines+=("In-app browser in $clone_name: not used since launch") ;;
+        esac
+    done
+
     if (( porcelain )); then
         printf 'computer-use\t%s\n' "$computer_state"
         printf 'chronicle\t%s\t%s\t%s\t%s\n' \
@@ -3138,6 +3281,9 @@ native_tools_status() {
         local row
         for row in "${browser_rows[@]}"; do
             printf 'browser-host\t%s\n' "$row"
+        done
+        for row in "${clone_rows[@]}"; do
+            printf 'clone-iab\t%s\n' "$row"
         done
         # The trailing field says whether this instance has a browser extension
         # host of its own yet, which is what decides whether it can be handed
@@ -3174,8 +3320,9 @@ native_tools_status() {
     elif [[ "$runtime_kind" != "none" ]]; then
         print -r -- "In-app browser: not assigned; another official ChatGPT process is running ($runtime_name)"
     else
-        print -r -- "In-app browser: not assigned (locally signed engines use the browser extension)"
+        print -r -- "In-app browser: not assigned (every instance runs on its Doppel engine)"
     fi
+    (( ${#clone_lines} )) && print -rl -- "${clone_lines[@]}"
     if (( ${#browser_lines} == 0 )); then
         print -r -- "Browser extension host: no ChatGPT registration found in any Chromium browser"
     else
@@ -3249,6 +3396,7 @@ cmd_prune() {
         [[ "${instance_state:t}" != "Removed" ]] || continue
         rollbacks=("$instance_state/Backups"/*.rollback(N/om))
         for (( index = keep + 1; index <= ${#rollbacks}; index++ )); do
+            "$LSREGISTER" -u "${rollbacks[$index]}" >/dev/null 2>&1 || true
             /bin/rm -rf "${rollbacks[$index]}"
         done
         # Staging only ever holds a build in flight; anything left is debris
@@ -3427,8 +3575,9 @@ case "${1:-}" in
     update) shift; cmd_update "$@" ;;
     permissions) shift; cmd_permissions "$@" ;;
     browser) shift; cmd_browser "$@" ;;
+    micro) shift; cmd_micro "$@" ;;
     native-tools) shift; cmd_native_tools "$@" ;;
     remote) shift; cmd_remote "$@" ;;
     prune) shift; [[ $# -le 1 ]] || die "usage: doppel prune [<name>]"; cmd_prune "${1:-}" ;;
-    *) die "usage: doppel {create|list|launch|rebuild|edit|remove|update|permissions|browser|native-tools|remote|prune} ..." ;;
+    *) die "usage: doppel {create|list|launch|rebuild|edit|remove|update|permissions|browser|micro|native-tools|remote|prune} ..." ;;
 esac

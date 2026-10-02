@@ -289,6 +289,49 @@ check "another instance's probe is left alone" "$(/bin/ps -p "$SIBLING_PROBE_PID
 /bin/kill -9 "$NORMAL_PID" "$SIBLING_PROBE_PID" 2>/dev/null || true
 
 print -r -- ""
+print -r -- "a permission probe is not a running instance"
+# The menu bar probes every instance every few minutes, and right after one is
+# created or renamed. Counting that probe as the running app made a launch in
+# that window activate the probe and never start ChatGPT.real.
+RUNNING_APP="$SCRATCH/Running Probe.app"
+/bin/mkdir -p "$RUNNING_APP/Contents/MacOS"
+/bin/cp "$PROBE_APP/Contents/MacOS/ChatGPT" "$RUNNING_APP/Contents/MacOS/ChatGPT"
+/bin/cp "$PROBE_APP/Contents/MacOS/ChatGPT" "$RUNNING_APP/Contents/MacOS/ChatGPT.real"
+is_running() {
+    RUNNING_CLI="$CLI" RUNNING_APP="$RUNNING_APP" /bin/zsh -c '
+        eval "$(/usr/bin/sed -n -e "/^chatgpt_process_candidates() {/,/^}/p" \
+            -e "/^clone_instance_is_running() {/,/^}/p" "$RUNNING_CLI")"
+        app_path_for() { print -r -- "$RUNNING_APP" }
+        clone_instance_is_running stand-in && print running || print stopped
+    '
+}
+"$RUNNING_APP/Contents/MacOS/ChatGPT" --doppel-permission-status &
+RUNNING_PROBE_PID=$!
+/bin/sleep 1
+check "an instance with only its permission probe up is not running" "$(is_running)" "stopped"
+"$RUNNING_APP/Contents/MacOS/ChatGPT.real" --user-data-dir=/nonexistent &
+RUNNING_REAL_PID=$!
+/bin/sleep 1
+check "its Electron main process still counts as running" "$(is_running)" "running"
+/bin/kill -9 "$RUNNING_REAL_PID" 2>/dev/null || true
+# The same probe must not look like a launcher still starting, or a launch that
+# never adopts its profile would hold the engine lock for as long as it lives.
+WAIT_STARTED=$SECONDS
+RUNNING_CLI="$CLI" RUNNING_APP="$RUNNING_APP" /bin/zsh -c '
+    eval "$(/usr/bin/sed -n "/^wait_for_locked_clone_adoption() {/,/^}/p" "$RUNNING_CLI")"
+    wait_for_locked_clone_adoption "$RUNNING_APP"
+' &
+WAIT_PID=$!
+for _ in {1..20}; do /bin/kill -0 "$WAIT_PID" 2>/dev/null || break; /bin/sleep 1; done
+if /bin/kill -0 "$WAIT_PID" 2>/dev/null; then
+    /bin/kill -9 "$WAIT_PID" 2>/dev/null || true
+    fail "a lingering probe does not stall the launch wait" "still waiting after 20s"
+else
+    pass "a lingering probe does not stall the launch wait ($(( SECONDS - WAIT_STARTED ))s)"
+fi
+/bin/kill -9 "$RUNNING_PROBE_PID" 2>/dev/null || true
+
+print -r -- ""
 print -r -- "quitting an instance takes its helper processes with it"
 # Electron's crashpad handlers and the modifier monitor live under Frameworks
 # and Resources, not Contents/MacOS, so the graceful quit never covered them.
@@ -876,6 +919,26 @@ run_real permissions check --porcelain "$NAME"
     || fail "an in-step instance reports live permission statuses" "got: $OUT"
 
 print -r -- ""
+print -r -- "an unanswered failure alert does not hold the engine lock"
+# Releasing the engine-operation lock waits for the owner's whole process
+# group, and fail_closed backgrounds the alert from inside it. The helper has
+# to start its own session, or a dialog nobody dismissed blocks every launch.
+ALERT_BIN="$SCRATCH/doppel-alert"
+/usr/bin/clang -fobjc-arc -O2 -framework Cocoa -o "$ALERT_BIN" \
+    "$REPO_ROOT/engine/alert/main.m" 2>/dev/null
+"$ALERT_BIN" "QA" "edge suite probe" >/dev/null 2>&1 &
+ALERT_PID=$!
+ALERT_PGID=""
+for _ in {1..100}; do
+    ALERT_PGID="$(/bin/ps -o pgid= -p "$ALERT_PID" 2>/dev/null | /usr/bin/tr -d ' ')"
+    [[ "$ALERT_PGID" == "$ALERT_PID" ]] && break
+    /bin/sleep 0.01
+done
+/bin/kill "$ALERT_PID" 2>/dev/null || true
+wait "$ALERT_PID" 2>/dev/null || true
+check "the alert leads its own process group" "$ALERT_PGID" "$ALERT_PID"
+
+print -r -- ""
 print -r -- "rollback copies do not pile up"
 BACKUPS="$DOPPEL_DIR/state/com.openai.codex.doppel-$SLUG/Backups"
 /bin/mkdir -p "$BACKUPS/older.app.rollback" "$BACKUPS/oldest.app.rollback"
@@ -896,13 +959,21 @@ VENDOR_BACKUP="$SCRATCH/native-tools/updates/Backups/ChatGPT.app"
 /usr/bin/plutil -create xml1 "$VENDOR_BACKUP/Contents/Info.plist"
 /usr/bin/plutil -insert CFBundleIdentifier -string com.openai.codex \
     "$VENDOR_BACKUP/Contents/Info.plist"
+# Older Doppel only moved the plist aside, which Launch Services still
+# registered as a damaged app.
+LEGACY="$SCRATCH/native-tools/state/com.example.native/Backups/Legacy.app.rollback"
+/bin/mkdir -p "$LEGACY/Contents"
+/usr/bin/plutil -create xml1 "$LEGACY/Contents/Info.plist.doppel-rollback"
+/usr/bin/touch -t 202601020304.05 "$LEGACY"
 run_isolated native-tools native-tools repair
-[[ -f "$DISCOVERABLE/Contents/Info.plist.doppel-rollback" ]] \
-    && pass "repair hides the signed plist from app discovery" \
-    || fail "repair hides the signed plist from app discovery" "the plist stayed in bundle position"
-[[ ! -e "$DISCOVERABLE/Contents/Info.plist" ]] \
+check "repair keeps the rollback's mtime for prune ordering" \
+    "$(/usr/bin/stat -f '%m' "$LEGACY")" "$(/bin/date -j -f '%Y%m%d%H%M.%S' 202601020304.05 '+%s')"
+[[ -f "$DISCOVERABLE/Contents.doppel-rollback/Info.plist" && ! -e "$DISCOVERABLE/Contents" ]] \
     && pass "the stored directory is no longer an application bundle" \
-    || fail "the stored directory is no longer an application bundle" "Info.plist is still discoverable"
+    || fail "the stored directory is no longer an application bundle" "Contents is still in bundle position"
+[[ -f "$LEGACY/Contents.doppel-rollback/Info.plist" && ! -e "$LEGACY/Contents" ]] \
+    && pass "repair migrates the old plist-only mask" \
+    || fail "repair migrates the old plist-only mask" "legacy rollback still looks like a damaged app"
 [[ -f "$SCRATCH/native-tools/updates/.Backups/ChatGPT.app/Contents/Info.plist" ]] \
     && pass "the protected primary rollback moves whole into hidden storage" \
     || fail "the protected primary rollback moves whole into hidden storage" "the vendor bundle did not move intact"
@@ -910,11 +981,67 @@ run_isolated native-tools native-tools status --porcelain
 [[ "$OUT" == *$'rollbacks\t0'* ]] \
     && pass "native-tool status confirms app discovery is clean" \
     || fail "native-tool status confirms app discovery is clean" "got: $OUT"
-/bin/mv "$DISCOVERABLE/Contents/Info.plist.doppel-rollback" \
-    "$DISCOVERABLE/Contents/Info.plist"
+/bin/mv "$DISCOVERABLE/Contents.doppel-rollback" "$DISCOVERABLE/Contents"
 check "the original identifier is byte-for-byte restorable" \
     "$(/usr/bin/plutil -extract CFBundleIdentifier raw "$DISCOVERABLE/Contents/Info.plist")" \
     "com.example.native"
+
+print -r -- ""
+print -r -- "status reports whether the in-app browser works inside a running clone"
+# The vendor logs one file set per process; the first names the app's path.
+# A stand-in process at the clone's executable path makes it "running".
+IAB_USER="$SCRATCH/iab-user"
+IAB_HOME="$IAB_USER/Library/Application Support/Doppel"
+IAB_INST="$IAB_HOME/instances/qa-iab"
+IAB_APP="$SCRATCH/iab-apps/QA IAB.app"
+/bin/mkdir -p "$IAB_INST" "$IAB_APP/Contents/MacOS"
+write_config_file "$IAB_INST" "QA IAB" "com.example.qa-iab" "codex-qa-iab" \
+    "$SCRATCH/qa-iab-profile" "$SCRATCH/qa-iab-codex" "3B82F6"
+print -r -- "$SCRATCH/iab-apps" > "$IAB_INST/install-root"
+/bin/ln -sf /bin/sleep "$IAB_APP/Contents/MacOS/ChatGPT.real"
+"$IAB_APP/Contents/MacOS/ChatGPT.real" 300 &
+IAB_PID=$!
+/bin/sleep 1
+export DOPPEL_VENDOR_LOG_ROOT="$SCRATCH/vendor-logs"
+IAB_LOGS="$DOPPEL_VENDOR_LOG_ROOT/2026/10/01"
+/bin/mkdir -p "$IAB_LOGS"
+# A previous launch that had the same pid left this log; it predates the
+# running process, so its refusal must not be reported.
+IAB_STALE="$IAB_LOGS/codex-desktop-stale-session-$IAB_PID-t0-i1-000000-0.log"
+print -r -- "2026-10-01T08:00:00.000Z info spawned executablePath=\"$IAB_APP/Contents/Resources/codex\"
+2026-10-01T08:01:00.000Z warning [browser-use-native-pipe-server] browser-use native pipe rejected socket peer reason=missing-code-signing-identity" \
+    > "$IAB_STALE"
+/usr/bin/touch -t 202001010000 "$IAB_STALE"
+IAB_T0="$IAB_LOGS/codex-desktop-qa-session-$IAB_PID-t0-i1-000000-0.log"
+print -r -- "2026-10-01T10:00:00.000Z info spawned executablePath=\"$IAB_APP/Contents/Resources/codex\"" > "$IAB_T0"
+# A same-pid log from another app must not be read.
+print -r -- "2026-10-01T09:00:00.000Z info spawned executablePath=\"/Applications/Other.app/Contents/Resources/codex\"
+2026-10-01T23:00:00.000Z warning [browser-use-native-pipe-server] browser-use native pipe rejected socket peer reason=missing-code-signing-identity" \
+    > "$IAB_LOGS/codex-desktop-other-session-$IAB_PID-t0-i1-000000-0.log"
+iab_row() {
+    OUT="$(DOPPEL_HOME="$IAB_HOME" "${IAB_CLI:-$CLI}" native-tools status --porcelain 2>&1)"
+    print -r -- "$OUT" | /usr/bin/awk -F '\t' '$1 == "clone-iab" && $2 == "qa-iab" { print $4 "\t" $5 }'
+}
+check "a log left by an earlier launch with the same pid is ignored" "$(iab_row)" $'unused\t'
+check "a clone that has not used the browser is reported unused" "$(iab_row)" $'unused\t'
+print -r -- "2026-10-01T10:01:00.000Z info [browser-use-pip] Received Browser Use PiP metadata backend=iab browserID=2 tabID=2 threadID=x
+2026-10-01T10:02:00.000Z warning [browser-use-native-pipe-server] browser-use native pipe rejected socket peer reason=untrusted-process-ancestry" >> "$IAB_T0"
+check "a served tab reports the browser as working, ignoring cross-app probes" \
+    "$(iab_row)" $'served\t2026-10-01T10:01:00.000Z'
+print -r -- "2026-10-01T10:03:00.000Z warning [browser-use-native-pipe-server] browser-use native pipe rejected socket peer reason=missing-code-signing-identity" >> "$IAB_T0"
+check "the vendor's signing refusal is reported when it is the latest event" \
+    "$(iab_row)" $'refused\t2026-10-01T10:03:00.000Z'
+print -r -- "2026-10-01T10:04:00.000Z info [browser-use-pip] Received Browser Use PiP metadata backend=iab browserID=3 tabID=1 threadID=y" \
+    > "$IAB_LOGS/codex-desktop-qa-session-$IAB_PID-t1-i1-000100-0.log"
+check "a later served tab in a sibling log file wins" \
+    "$(iab_row)" $'served\t2026-10-01T10:04:00.000Z'
+# An installed copy must read the real vendor log root, not an inherited one.
+check "an installed copy ignores DOPPEL_VENDOR_LOG_ROOT" \
+    "$(HOME="$IAB_USER" IAB_CLI="$GUARD_FIXTURE/doppel" iab_row)" $'unused\t'
+/bin/kill -9 "$IAB_PID" 2>/dev/null || true
+/bin/sleep 0.5
+check "a clone that is not running gets no row" "$(iab_row)" ""
+unset DOPPEL_VENDOR_LOG_ROOT
 
 print -r -- ""
 print -r -- "data the instance does not own is never purged"

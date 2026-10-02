@@ -179,7 +179,7 @@ check "registered OAuth callback scheme remains eligible" \
     "$(plist "$APP" CFBundleURLTypes.0.CFBundleURLSchemes.1)" "codex"
 check "deep-link patch recorded" "$(plist "$APP" DoppelDeepLinkScheme)" "codex-$SLUG"
 ROUTER_HASH="$(/usr/bin/shasum -a 256 "$CLI" | /usr/bin/awk '{print $1}')"
-check "transparent engine router version" "$(plist "$APP" DoppelEngineVersion)" "28"
+check "transparent engine router version" "$(plist "$APP" DoppelEngineVersion)" "30"
 check "transparent engine router hash recorded" "$(plist "$APP" DoppelRouterSHA256)" "$ROUTER_HASH"
 if [[ -x "$APP/Contents/Resources/Doppel/bin/doppel" && \
       -x "$APP/Contents/Resources/Doppel/engine/doppel-engine.zsh" && \
@@ -281,6 +281,10 @@ if /usr/bin/pgrep -f "${RENAMED_APP}/Contents/MacOS/ChatGPT.real" >/dev/null 2>&
     pass "direct branded-app launch adopts the fallback profile"
 else
     fail "direct branded-app launch adopts the fallback profile" "ChatGPT.real never appeared"
+    # This check has failed intermittently while the app was demonstrably up.
+    # Record what was actually running so the next failure explains itself.
+    /bin/ps -ww -axo pid=,ppid=,stat=,lstart=,command= | /usr/bin/grep -F "$RENAMED_APP" | \
+        /usr/bin/grep -v grep | /usr/bin/sed 's/^/      ps: /'
 fi
 [[ ! -e "$HOME/Library/Application Support/Doppel/state/clone-launch/$SLUG" ]] && \
     pass "one-shot clone authorization is consumed" || \

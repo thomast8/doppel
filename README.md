@@ -74,6 +74,9 @@ running. APFS copy-on-write clones avoid copying the unchanged parts of the
 1+ GB vendor bundle once per instance. A failed
 download changes nothing; a failed install restores the previous primary; and a
 partial rebuild keeps the restart manifest and reports the exact instance.
+If official ChatGPT was holding an unassigned managed profile, which happens
+when it is opened on the vendor's default data root, that profile comes back
+through its own clone rather than through official ChatGPT.
 
 The profile assigned the built-in browser is running through the untouched
 official app rather than through a clone, so the restart manifest records it as
@@ -165,6 +168,8 @@ bin/doppel launch "ChatGPT Personal"
 bin/doppel browser assign "ChatGPT Personal"  # give this profile the built-in browser
 bin/doppel browser status
 bin/doppel browser release
+bin/doppel micro assign "ChatGPT Personal"    # this clone answers the Creator Micro pad
+bin/doppel micro status
 bin/doppel rebuild "ChatGPT Personal"
 bin/doppel native-tools status
 bin/doppel native-tools repair
@@ -227,8 +232,9 @@ that) and clears any staging left by a build that died. Rebuilds prune as they
 go, so this is only needed to reclaim what earlier versions left behind.
 
 Stored rollbacks are deliberately kept out of normal macOS app discovery. For
-locally signed instances, Doppel moves the signed `Contents/Info.plist` aside
-without editing it; restoration moves the exact file back before verification.
+locally signed instances, Doppel moves the whole `Contents` directory aside
+without editing it, so macOS sees a plain folder rather than a damaged app;
+restoration moves it back before verification.
 The untouched vendor-primary rollback stays whole under a hidden `.Backups`
 directory because macOS App Management can prohibit changes inside vendor code.
 `native-tools repair` applies those reversible migrations to rollbacks created
@@ -238,12 +244,14 @@ by older Doppel versions; it does not change active apps or account data.
 installs the instance into `~/Applications`, and stores the instance definition in
 `~/Library/Application Support/Doppel/instances/`.
 
-### Assigning the built-in browser
+### Running a profile on official ChatGPT (fallback)
 
 Doppel treats an account profile and the process that opens it as separate
-things. By default a profile uses its own locally signed Doppel app. One profile
-at a time can instead use the untouched `/Applications/ChatGPT.app` as its
-engine, preserving the OpenAI signature chain required by the built-in browser:
+things. By default a profile uses its own locally signed Doppel app, and current
+ChatGPT builds serve the built-in browser there too. That works only because of
+how ChatGPT happens to launch its browser helper today, so one profile at a time
+can still use the untouched `/Applications/ChatGPT.app` as its engine, keeping
+the OpenAI signature chain intact if a vendor update closes that gap again:
 
 ```sh
 bin/doppel browser assign "ChatGPT Personal"
@@ -532,25 +540,28 @@ genuinely weaker than the app it was copied from is in
   launched most recently. Doppel refuses a rebuild if a vendor release changes
   either interception point and repairs stale shared-handler ownership from old
   builds.
-- **The in-app browser cannot work inside a locally re-signed clone, and this
-  one is permanent.**
+- **The in-app browser works inside a locally re-signed clone only by accident
+  of the vendor's process layout.**
   ChatGPT gates its browser socket with a native peer check that requires the
-  connecting process, its parent *and* its grandparent to each carry OpenAI's
-  Team ID and an allow-listed signing identifier. In an instance the first two
-  are the vendor's own `node_repl` and `codex`, but the grandparent is the
-  instance's main executable, which had to be re-signed locally to carry its own
-  bundle identifier and so has no Team ID at all. Requesting it fails with
-  `Browser is not available: iab`, and the app records
+  connecting process, its parent *and* its grandparent to carry OpenAI's Team ID
+  and an allow-listed signing identifier, and (since build 12553) to descend from
+  the app hosting the socket. An instance's main executable had to be re-signed
+  locally to carry its own bundle identifier, so it has no Team ID. Until late
+  September it was the browser client's grandparent and every request failed with
+  `Browser is not available: iab`, logged as
   `rejected socket peer reason=missing-code-signing-identity` in
-  `~/Library/Logs/com.openai.codex/`. Nothing short of OpenAI's signing key
-  satisfies that check, so a local identity from `doppel-signing` does not help
-  either. A normal clone therefore uses the browser extension: its check stops
-  at the parent process, so browser control works normally and several instances
-  can share one browser. Doppel's one movable built-in-browser slot instead
-  launches the selected profile through the untouched official app. It remains
-  the same Doppel account profile, but macOS shows the official ChatGPT identity
-  while it runs. Doppel reports the assigned and active engine in
-  `native-tools status` rather than leaving the distinction implicit.
+  `~/Library/Logs/com.openai.codex/`. Current builds run the client a few vendor
+  processes further down, which puts the clone outside the window, so iab works.
+  Nothing short of OpenAI's signing key satisfies the check itself, so a local
+  identity from `doppel-signing` would not help if that layout changes back.
+  `native-tools status` therefore reports, for each running clone, whether its
+  latest in-app browser use was served or refused, read from that clone's own
+  vendor log. A refusal means the layout changed and the profile needs the
+  built-in-browser slot again. That slot launches the selected profile through
+  the untouched official app. It remains the same Doppel account profile, but
+  macOS shows the official ChatGPT identity while it runs. The browser extension
+  is unaffected either way: its check stops at the parent process, so browser
+  control works in every instance and several instances can share one browser.
 - Instances are unsigned by Apple standards (ad hoc or self-signed), so Gatekeeper
   assessment (`spctl`) rejects them. They launch fine because they are built
   locally and never quarantined.
