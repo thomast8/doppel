@@ -475,6 +475,47 @@ def locate_restore_member(archive: Archive) -> tuple[Member, bytes, bool]:
     raise PatchError(f"found {count} callback restoration members; refusing an ambiguous patch")
 
 
+# Every ChatGPT copy runs Work Louder's driver for the Codex Micro / Creator
+# Micro pad and opens it over HID on its own. Ownership is only arbitrated
+# between windows of one app, so with clones running every press (push-to-talk
+# included) reaches every copy at once. The stock app cannot be patched, so
+# clones leave the pad to it unless DOPPEL_CODEX_MICRO=1 opts one in. The
+# service's ``start`` is the single place that opens HID; marking it stopped
+# also makes ``updateLighting`` a no-op.
+MICRO_PATCH_MARKER = b"process.env.DOPPEL_CODEX_MICRO"
+MICRO_SERVICE_NEIGHBOUR = b"CodexMicroService"
+MICRO_START = b"start(){if(this.lifecycleState!==`started`){"
+MICRO_PATCHED_START = (
+    b"start(){if(" + MICRO_PATCH_MARKER + b"!==`1`){this.lifecycleState=`stopped`;return}"
+    b"if(this.lifecycleState!==`started`){"
+)
+
+
+def locate_micro_member(archive: Archive) -> tuple[Member, bytes, bool] | None:
+    """Return the Micro service member, or None when the build has no pad support."""
+    found: list[tuple[Member, bytes, bool]] = []
+    for member in members(archive):
+        if not member.path.endswith(".js") or member.size == 0:
+            continue
+        data = read_member(archive, member)
+        if MICRO_SERVICE_NEIGHBOUR not in data or b"@worklouder/device-kit-oai" not in data:
+            continue
+        if data.count(MICRO_PATCH_MARKER) == 1 and data.count(MICRO_PATCHED_START) == 1:
+            found.append((member, data, True))
+        elif MICRO_PATCH_MARKER not in data and data.count(MICRO_START) == 1:
+            found.append((member, data.replace(MICRO_START, MICRO_PATCHED_START), False))
+        elif MICRO_PATCH_MARKER not in data and MICRO_START not in data:
+            # A reshaped service only costs the pad its single owner; failing
+            # here would leave every clone unbuildable after a vendor update.
+            print(f"patch-deep-link: warning: Codex Micro start not found in {member.path}; "
+                  "clones will share the pad", file=sys.stderr)
+        else:
+            raise PatchError(f"the Codex Micro service start is ambiguous in {member.path}")
+    if len(found) > 1:
+        raise PatchError(f"found {len(found)} Codex Micro services; refusing an ambiguous patch")
+    return found[0] if found else None
+
+
 def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -582,6 +623,11 @@ def patch(path: Path) -> str:
     member, data, already_patched = locate_restore_member(archive)
     if not already_patched:
         rewrite_archive(archive, member, data)
+
+    archive = read_archive(path)
+    micro = locate_micro_member(archive)
+    if micro is not None and not micro[2]:
+        rewrite_archive(archive, micro[0], micro[1])
     return verify(path)
 
 
@@ -601,6 +647,12 @@ def verify(path: Path) -> str:
     if not restore_patched:
         raise PatchError("the OAuth callback does not restore primary codex:// ownership")
     verify_member_integrity(restore_member.entry, restore_data)
+
+    micro = locate_micro_member(archive)
+    if micro is not None:
+        if not micro[2]:
+            raise PatchError("the clone still opens the Codex Micro pad alongside the primary")
+        verify_member_integrity(micro[0].entry, micro[1])
     return digest(archive.header_json)
 
 

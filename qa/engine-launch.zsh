@@ -275,6 +275,36 @@ OUT="$(run_engine launch "$INSTANCE_APP" || true)"
     && pass "the real owner is still found past a rejected candidate" \
     || fail "the real owner is still found past a rejected candidate" "got: $OUT"
 
+# The pad owner is read when a clone starts. The CLI writes the slug and the
+# engine compares it with the instance whose bundle id it was built for, so a
+# stale, foreign or malformed owner must leave the clone off the pad.
+print -r -- "only the clone named by doppel micro opts into the Creator Micro"
+stop_stubs
+readonly MICRO_HOME="$FIXTURE_HOME/Library/Application Support/Doppel"
+/bin/mkdir -p "$MICRO_HOME/instances/engine-qa"
+/bin/cp "$ASSETS/instance-config.zsh" "$MICRO_HOME/instances/engine-qa/"
+micro_cli() { HOME="$FIXTURE_HOME" DOPPEL_DEV=1 DOPPEL_HOME="$MICRO_HOME" /bin/zsh "$REPO_ROOT/bin/doppel" micro "$@" 2>&1 }
+micro_check() {
+    HOME="$FIXTURE_HOME" DOPPEL_DEV=1 DOPPEL_HOME="$MICRO_HOME" DOPPEL_BUNDLE_ID="com.openai.codex.engine-qa" \
+        /bin/zsh -c "$(/usr/bin/sed -n -e '/^managed_slug_for_this_profile()/,/^}/p' \
+            -e '/^codex_micro_owner_is_this_profile()/,/^}/p' "$ENGINE")"$'\ncodex_micro_owner_is_this_profile'
+}
+OUT="$(micro_cli assign "ChatGPT Engine QA")"
+[[ "$OUT" == *"assigned to: ChatGPT Engine QA"* ]] && micro_check \
+    && [[ "$(micro_cli status)" == *"Creator Micro: ChatGPT Engine QA"* ]] \
+    && pass "an assigned clone is opted in at launch" \
+    || fail "an assigned clone is opted in at launch" "got: $OUT"
+for owner in other-instance "../engine-qa" ""; do
+    print -r -- "$owner" > "$MICRO_HOME/state/codex-micro-owner"
+    micro_check && fail "a foreign or malformed owner is ignored" "accepted: '$owner'" && continue
+    pass "a foreign or malformed owner is ignored ('$owner')"
+done
+micro_cli release >/dev/null
+! micro_check && [[ ! -e "$MICRO_HOME/state/codex-micro-owner" ]] \
+    && [[ "$(micro_cli status)" == *"no clone assigned"* ]] \
+    && pass "release leaves every clone off the pad" \
+    || fail "release leaves every clone off the pad" "owner file still present or accepted"
+
 print -r -- ""
 print -r -- "engine-launch QA: $PASSED passed, $FAILED failed"
 (( FAILED == 0 ))
