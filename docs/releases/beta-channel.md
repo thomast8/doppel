@@ -15,3 +15,5 @@ Stable 1.1.12 was published from reviewed commit 1020071bd53929d7944ef56c85d8c25
 PR #50 merged as de2491286ee1f560f0592be1bbaeadd9b76d3091 after explicit approval. The existing doppel-notary profile is available again and its submission history reads successfully; no credentials or Keychain settings were changed. Beta-2 packaging is resuming.
 
 Beta-2 build 26 distribution verification passed: Apple notarization 8491a5dc-0b3f-4515-b0ad-064fa268b1c4 Accepted, stapled ticket validated, extracted archive Gatekeeper-accepted as Notarized Developer ID, strict nested signing and Sparkle EdDSA verification passed. Both app/helper architectures declare macOS 14 minimum; actual compatibility limitations remain unchanged. No credentials were found in the package. SHA-256: 7a476c2b8f9d05d996c7cde8fe8a9721bcbed43cd23e49523183d7ab27be2fd3. The stable public feed was read back as 1.1.12 build 25.
+
+Published v2.0.0-beta-2 as a prerelease from source 2f615ce87853539f4df6fe4a4471f61accc3ebee. The beta appcast now advertises build 26, above stable build 25, using the verified archive URL and EdDSA signature. Beta-1 and the stable feed remain unchanged.

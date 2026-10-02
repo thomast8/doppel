@@ -6,14 +6,15 @@
         <description>Signed Doppel releases</description>
         <language>en</language>
         <item>
-            <title>2.0.0-beta-1</title>
-            <pubDate>Fri, 02 Oct 2026 20:53:09 +0200</pubDate>
+            <title>2.0.0-beta-2</title>
+            <pubDate>Fri, 02 Oct 2026 21:38:10 +0200</pubDate>
             <link>https://github.com/thomast8/doppel</link>
-            <sparkle:version>24</sparkle:version>
-            <sparkle:shortVersionString>2.0.0-beta-1</sparkle:shortVersionString>
+            <sparkle:version>26</sparkle:version>
+            <sparkle:shortVersionString>2.0.0-beta-2</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[# Doppel 2.0.0-beta-1
+            <description sparkle:format="markdown"><![CDATA[# Doppel 2.0.0-beta-2
 
+- Switch update channels using Receive Beta Updates in the Doppel menu. Your selection persists after updating; switching off waits for a newer stable release.
 - Set up iPhone Codex access from each profile's new Remote Access window. Keep Personal and Work as separate phone connections with independently signed-in accounts and managed runtimes.
 - Choose your existing LAN or private network, including Meshnet. Doppel supplies the connection details and an iPhone-compatible PEM key without enabling macOS Remote Login.
 - Check the live remote account, replace a phone key, update one remote runtime, or revoke a connection from the GUI. Remote Access remains off until you enable it.
@@ -24,7 +25,21 @@ Remote tasks use the Mac user's filesystem permissions. The Mac must remain awak
 
 This is a beta. Two-account iPhone task routing, cold recovery and reconnect coexistence were tested on the current Mac and iPhone. macOS 14 execution, logout/login recovery and network-loss recovery still need broader testing.
 ]]></description>
-            <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.0-beta-1/Doppel-2.0.0-beta-1-macOS.zip" length="7741325" type="application/octet-stream" sparkle:edSignature="qYAv2Q6PtYsy8SmZRQCMSARqtDcpaDnymP7PiXfwGm+5KWMRIAuglf2Vdrp90LF2X5rKeBmlBA8gqwzpVXlGCA=="/>
+            <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.0-beta-2/Doppel-2.0.0-beta-2-macOS.zip" length="7749145" type="application/octet-stream" sparkle:edSignature="bbfximyK8lQvDoZPYSTxxA7Uq6dbEJJoLnlWWPaGGdTQSxh1Dy4Gna+0HCmqCMvzVwyl4DAYQpbGHCjuneNCCg=="/>
+        </item>
+        <item>
+            <title>1.1.12</title>
+            <pubDate>Fri, 02 Oct 2026 20:09:37 +0100</pubDate>
+            <link>https://github.com/thomast8/doppel</link>
+            <sparkle:version>25</sparkle:version>
+            <sparkle:shortVersionString>1.1.12</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Doppel 1.1.12
+
+- Choose Receive Beta Updates in the Doppel menu to switch to the beta update feed and check for an update immediately. The choice persists across app updates. Turn it off to wait for a newer stable release; it does not downgrade an installed beta.
+- Includes the latest merged clone-engine, Creator Micro and permission-probe fixes.
+]]></description>
+            <enclosure url="https://github.com/thomast8/doppel/releases/download/v1.1.12/Doppel-1.1.12-macOS.zip" length="3148344" type="application/octet-stream" sparkle:edSignature="Mhm9VoN5K0CJMcHCxtJ8At19NUZlPX0fO4PB3VX04LtZZNAFAXpoVyjUNMO9aiTnB/vsMd04pEOICWRwRPfTAg=="/>
         </item>
         <item>
             <title>1.1.11</title>
@@ -41,19 +56,6 @@ This is a beta. Two-account iPhone task routing, cold recovery and reconnect coe
 - Installing ChatGPT updates no longer stalls on a suspended permission check, and instances build again from ChatGPT build 12404.
 ]]></description>
             <enclosure url="https://github.com/thomast8/doppel/releases/download/v1.1.11/Doppel-1.1.11-macOS.zip" length="3031078" type="application/octet-stream" sparkle:edSignature="Ylt9y3P+RELeIwy14JeY/bj4z1Ssc7oSpCjgehXheqS1EoMfBxmKSxTeCML/C0zTdNd317cJRrlgzFvDKhpWAw=="/>
-        </item>
-        <item>
-            <title>1.1.10</title>
-            <pubDate>Tue, 29 Sep 2026 14:56:14 +0200</pubDate>
-            <link>https://github.com/thomast8/doppel</link>
-            <sparkle:version>22</sparkle:version>
-            <sparkle:shortVersionString>1.1.10</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[# Doppel 1.1.10
-
-- ChatGPT Personal and other cloned instances open again with ChatGPT 26.924. Doppel now refreshes the framework integrity digest and helper signatures when rebuilding a clone. After updating Doppel, choose Rebuild & Reopen for each affected instance. Your accounts and profiles stay in place.
-]]></description>
-            <enclosure url="https://github.com/thomast8/doppel/releases/download/v1.1.10/Doppel-1.1.10-macOS.zip" length="3028971" type="application/octet-stream" sparkle:edSignature="eXG4y3EEO4ApL7rtaFIJPLlypiCVTS+r+WfvPa8OMaNuBvmzO3G7DVrcoJYlg5WFLnCD0vfKiQtT/KE1g4tMAw=="/>
         </item>
     </channel>
 </rss>
