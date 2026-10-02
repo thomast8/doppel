@@ -598,9 +598,10 @@ instance_dir_for_app_path() {
 
 # MARK: - Movable vendor engine slot
 #
-# A locally re-signed bundle can never pass ChatGPT's in-app-browser peer
-# check. Doppel therefore assigns that capability to a profile, not to its
-# clone: the selected profile is launched through the untouched vendor app
+# A locally re-signed bundle passes ChatGPT's in-app-browser peer check only
+# while the vendor's helper chain keeps it outside the checked ancestry, so the
+# official engine stays available as a per-profile fallback: the selected
+# profile is launched through the untouched vendor app
 # with the same CODEX_HOME and Electron data root. The one-line slot file is
 # global because there is exactly one certified vendor runtime in v1.
 iab_slot_slug() {
@@ -2116,6 +2117,7 @@ release_update_lock() {
 # Output is one tab-separated row:
 #   none                       nothing official is running
 #   bare                       quit it, reopen /Applications/ChatGPT.app as itself
+#   clone-profile<TAB>slug     quit it, reopen that unassigned profile's clone
 #   vendor-profile<TAB>slug    quit it, reopen that profile's official engine
 #   refuse<TAB>reason          stop before fetching, locking or touching an app
 plan_vendor_update_restart() {
@@ -2123,10 +2125,15 @@ plan_vendor_update_restart() {
     local runtime_kind runtime_slug runtime_name runtime_pid
     parse_vendor_runtime_snapshot "$2"
     [[ "$runtime_kind" != "none" ]] || { print -r -- "none"; return 0 }
-    # With no assignment the official app is only ever itself, which is the one
-    # shape the manifest has always been able to reopen.
+    # Clones are the default engine: an unassigned managed profile that the
+    # official app happened to be holding (a Dock click on the vendor default
+    # root) comes back through its own clone after the update.
     if [[ -z "$slot" ]]; then
-        print -r -- "bare"
+        if [[ "$runtime_kind" == "managed" && -n "$runtime_slug" ]]; then
+            printf 'clone-profile\t%s\n' "$runtime_slug"
+        else
+            print -r -- "bare"
+        fi
         return 0
     fi
     if [[ "$runtime_kind" == "managed" && "$runtime_slug" == "$slot" ]]; then
@@ -2159,7 +2166,7 @@ decide_vendor_update_restart() {
     vendor_kind="${plan%%$'\t'*}"
     [[ "$vendor_kind" != "refuse" ]] || die "${plan#*$'\t'}"
     vendor_dir=""
-    [[ "$vendor_kind" != "vendor-profile" ]] || vendor_dir="$INSTANCES_ROOT/${plan#*$'\t'}"
+    [[ "$vendor_kind" != *-profile ]] || vendor_dir="$INSTANCES_ROOT/${plan#*$'\t'}"
 }
 
 typeset -g UPDATE_ABORT_MANIFEST=""
@@ -2521,6 +2528,18 @@ cmd_update_apply() {
     # lock and installing the engine assets all happen between here and the
     # check above, and the user can quit or open ChatGPT throughout.
     (( reconcile_only )) || decide_vendor_update_restart
+
+    # The clone joins the apps reopened after their rebuild, which gates it on
+    # verification and lets an aborted run reopen it too. Without an installed
+    # clone the profile can only come back the way it was.
+    if [[ "$vendor_kind" == "clone-profile" ]]; then
+        app="$(app_path_for "$vendor_dir")"
+        if (( ${apps[(Ie)$app]} )); then
+            (( ${running_apps[(Ie)$app]} )) || running_apps+=("$app")
+        else
+            vendor_kind="bare"
+        fi
+    fi
 
     restart_manifest="$UPDATE_ROOT/restart-after-update"
     : > "$restart_manifest"
@@ -3246,7 +3265,7 @@ native_tools_status() {
     elif [[ "$runtime_kind" != "none" ]]; then
         print -r -- "In-app browser: not assigned; another official ChatGPT process is running ($runtime_name)"
     else
-        print -r -- "In-app browser: not assigned (locally signed engines use the browser extension)"
+        print -r -- "In-app browser: not assigned (every instance runs on its Doppel engine)"
     fi
     (( ${#clone_lines} )) && print -rl -- "${clone_lines[@]}"
     if (( ${#browser_lines} == 0 )); then
