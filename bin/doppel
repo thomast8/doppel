@@ -833,6 +833,10 @@ vendor_command_uses_profile() {
     profile_root_is_primary_default "$profile_root"
 }
 
+# Only the Electron main process counts. The bundle's own ChatGPT executable is
+# also launched as a short-lived helper (the menu bar's permission probe runs
+# it every few minutes), and treating that as the app made a launch in that
+# window activate the probe instead of starting ChatGPT.real.
 clone_instance_is_running() {
     local app candidates pid command
     app="$(app_path_for "$1")"
@@ -840,7 +844,7 @@ clone_instance_is_running() {
     for pid in ${(f)candidates}; do
         [[ "$pid" == <1-> ]] || continue
         command="$(/bin/ps -p "$pid" -o command= 2>/dev/null || true)"
-        [[ "$command" == "$app/Contents/MacOS/"* ]] && return 0
+        [[ "$command" == "$app/Contents/MacOS/ChatGPT.real"* ]] && return 0
     done
     return 1
 }
@@ -2390,7 +2394,10 @@ wait_for_locked_clone_adoption() {
     local app="$1" waited=0 observed_launcher=0
     while true; do
         /usr/bin/pgrep -f "${app}/Contents/MacOS/ChatGPT.real" >/dev/null 2>&1 && return 0
-        if /usr/bin/pgrep -f "${app}/Contents/MacOS/ChatGPT" >/dev/null 2>&1 || \
+        # Match only the launcher started with this launch's marker, not every
+        # process of the bundle: a lingering permission probe would otherwise
+        # keep this loop (and the global engine lock) alive until it exits.
+        if /usr/bin/pgrep -f "${app}/Contents/MacOS/ChatGPT --doppel-authorized-clone=" >/dev/null 2>&1 || \
            /usr/bin/pgrep -f "${app}/Contents/Resources/Doppel/doppel-engine.zsh launch" >/dev/null 2>&1; then
             observed_launcher=1
         elif (( observed_launcher )); then
