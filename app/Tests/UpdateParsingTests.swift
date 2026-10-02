@@ -17,6 +17,15 @@ final class UpdateParsingTests: XCTestCase {
         XCTAssertTrue(condition(), message, file: file, line: line)
     }
 
+    @MainActor
+    func testBetaChannelSelection() {
+        XCTAssertEqual(DoppelUpdater.selectedFeed(betaPreference: nil, bundledFeed: DoppelUpdater.stableFeed), DoppelUpdater.stableFeed)
+        XCTAssertEqual(DoppelUpdater.selectedFeed(betaPreference: true, bundledFeed: DoppelUpdater.stableFeed), DoppelUpdater.betaFeed)
+        XCTAssertEqual(DoppelUpdater.selectedFeed(betaPreference: false, bundledFeed: DoppelUpdater.betaFeed), DoppelUpdater.stableFeed)
+        XCTAssertEqual(DoppelUpdater.selectedFeed(betaPreference: nil, bundledFeed: DoppelUpdater.betaFeed), DoppelUpdater.betaFeed)
+        XCTAssertEqual(DoppelUpdater.selectedFeed(betaPreference: nil, bundledFeed: "http://localhost:1234/appcast.xml"), "http://localhost:1234/appcast.xml")
+    }
+
     func testUpdateAndPermissionParsing() {
         let installPrompt = DoppelUpdatePromptModel(
             currentVersion: "1.0.9", availableVersion: "1.1.0",

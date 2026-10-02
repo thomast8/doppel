@@ -6,21 +6,49 @@ import SwiftUI
 /// extraction and installation. Doppel owns only the presentation layer so an
 /// update feels like part of the app instead of a second, unrelated utility.
 @MainActor
-final class DoppelUpdater {
-    let updater: SPUUpdater
+final class DoppelUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
+    private(set) var updater: SPUUpdater!
+    @Published private(set) var receivesBetaUpdates: Bool
+    private let defaults: UserDefaults
+    private let bundledFeed: String?
+    static let channelPreference = "DoppelReceiveBetaUpdates"
+    static let stableFeed = "https://raw.githubusercontent.com/thomast8/doppel/main/appcast.xml"
+    static let betaFeed = "https://raw.githubusercontent.com/thomast8/doppel/codex/remote-access-2-0/appcast-beta.xml"
     private let userDriver: DoppelUpdateDriver
     private var started = false
 
-    init(startingUpdater: Bool) {
+    init(startingUpdater: Bool, defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        bundledFeed = Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String
+        receivesBetaUpdates = (defaults.object(forKey: Self.channelPreference) as? Bool)
+            ?? (bundledFeed == Self.betaFeed)
         let userDriver = DoppelUpdateDriver(hostBundle: .main)
         self.userDriver = userDriver
+        super.init()
         updater = SPUUpdater(
             hostBundle: .main,
             applicationBundle: .main,
             userDriver: userDriver,
-            delegate: nil)
+            delegate: self)
         userDriver.updater = updater
         if startingUpdater { start() }
+    }
+
+    static func selectedFeed(betaPreference: Bool?, bundledFeed: String?) -> String? {
+        guard let betaPreference else { return bundledFeed }
+        return betaPreference ? betaFeed : stableFeed
+    }
+
+    func feedURLString(for updater: SPUUpdater) -> String? {
+        Self.selectedFeed(betaPreference: defaults.object(forKey: Self.channelPreference) as? Bool,
+                          bundledFeed: bundledFeed)
+    }
+
+    func setReceivesBetaUpdates(_ enabled: Bool) {
+        receivesBetaUpdates = enabled
+        defaults.set(enabled, forKey: Self.channelPreference)
+        updater.resetUpdateCycle()
+        if updater.canCheckForUpdates { updater.checkForUpdates() }
     }
 
     func start() {

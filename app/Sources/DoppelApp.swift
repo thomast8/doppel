@@ -86,7 +86,7 @@ struct DoppelApp: App {
         MenuBarExtra {
             MenuContent(
                 store: store,
-                checkForDoppelUpdates: { updaterController.checkForUpdates() },
+                updaterController: updaterController,
                 doppelUpdatesEnabled: doppelUpdatesEnabled)
         } label: {
             MenuBarLabel(store: store)
@@ -216,7 +216,7 @@ private enum DoppelMenuBarMark {
 
 struct MenuContent: View {
     @ObservedObject var store: InstanceStore
-    let checkForDoppelUpdates: () -> Void
+    @ObservedObject var updaterController: DoppelUpdater
     let doppelUpdatesEnabled: Bool
     @Environment(\.openWindow) private var openWindow
 
@@ -467,7 +467,13 @@ struct MenuContent: View {
             get: { store.loginItemEnabled },
             set: { store.setLoginItem($0) }
         ))
-        Button("Check for Doppel Updates…", action: checkForDoppelUpdates)
+        Toggle("Receive Beta Updates", isOn: Binding(
+            get: { updaterController.receivesBetaUpdates },
+            set: { updaterController.setReceivesBetaUpdates($0) }
+        ))
+        .disabled(!doppelUpdatesEnabled)
+        .help("Beta updates may be less reliable. Turning this off waits for a newer stable release; it does not downgrade.")
+        Button("Check for Doppel Updates…") { updaterController.checkForUpdates() }
             .disabled(!doppelUpdatesEnabled)
         Divider()
         // Which Doppel, and which ChatGPT it is managing. Both matter when
