@@ -529,6 +529,7 @@ struct MenuContent: View {
         alert.informativeText = """
             The app moves to the Trash and can be rebuilt at any time.
             Its account data (chats and login) is kept unless you tick below.
+            Remote Access is disabled first, interrupting any remote tasks.
             """
         alert.alertStyle = .warning
         let purge = NSButton(checkboxWithTitle: "Also move this account's data to the Trash", target: nil, action: nil)

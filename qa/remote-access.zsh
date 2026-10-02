@@ -12,7 +12,7 @@ setopt PIPE_FAIL
 zmodload zsh/datetime
 
 readonly REPO_ROOT="${0:A:h:h}"
-readonly CLI="$REPO_ROOT/bin/doppel"
+readonly CLI="${DOPPEL_REMOTE_QA_CLI:-$REPO_ROOT/bin/doppel}"
 readonly HELPER="${DOPPEL_REMOTE_QA_HELPER:-$REPO_ROOT/app/.build/release/DoppelRemoteHelper}"
 readonly PROFILE="${DOPPEL_REMOTE_QA_PROFILE:-}"
 readonly DATA_ROOT="${DOPPEL_REMOTE_QA_DATA_ROOT:-}"
@@ -26,7 +26,7 @@ pass() { print -r -- "PASS $1"; }
     fail "set DOPPEL_REMOTE_QA_PROFILE to the exact name of a disposable instance prefixed 'Remote QA '"
 [[ -n "$DATA_ROOT" && -d "$DATA_ROOT" ]] || \
     fail "set DOPPEL_REMOTE_QA_DATA_ROOT to the existing temporary root for this disposable instance"
-[[ -x "$CLI" && -x "$HELPER" ]] || fail "the checked-out CLI or built native helper is missing"
+[[ -x "$CLI" && -x "$HELPER" ]] || fail "the selected CLI or built native helper is missing"
 
 readonly REAL_DATA_ROOT="$(cd "$DATA_ROOT" && pwd -P)"
 case "$REAL_DATA_ROOT/" in
@@ -56,9 +56,9 @@ readonly PROFILE_DIR="$INSTANCES_ROOT/$SLUG"
 # the native helper context. In particular, both data paths must remain under
 # the explicitly supplied temporary root; pilot and live homes are refused.
 source "$PROFILE_DIR/instance-config.zsh"
-for path in "$DOPPEL_PROFILE_ROOT" "$DOPPEL_CODEX_HOME"; do
-    [[ "$path" == /* && "$path" != *"/../"* ]] || fail "the disposable profile contains an unsafe data path"
-    resolved="$(cd "$path" 2>/dev/null && pwd -P)" || fail "the disposable profile data path does not exist"
+for fixture_path in "$DOPPEL_PROFILE_ROOT" "$DOPPEL_CODEX_HOME"; do
+    [[ "$fixture_path" == /* && "$fixture_path" != *"/../"* ]] || fail "the disposable profile contains an unsafe data path"
+    resolved="$(cd "$fixture_path" 2>/dev/null && pwd -P)" || fail "the disposable profile data path does not exist"
     [[ "$resolved" == "$REAL_DATA_ROOT"/* ]] || fail "the profile or CODEX_HOME is outside the supplied temporary root"
 done
 [[ -d "$APP_PATH" ]] || \
@@ -168,7 +168,8 @@ pass "quoted arguments are validated without shell execution"
 # configuration. The account identifiers remain process-local and are never
 # printed; there is no authentication/key copying in this script.
 if ! ENABLE_RESULT="$(helper enable --expected-account-id "$ACCOUNT_ID" --expected-email "$EMAIL" 2>/dev/null)"; then
-    fail "native helper could not enable the isolated listener; check the disposable runtime and GUI sign-in"
+    REASON="$(print -r -- "$ENABLE_RESULT" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin).get("error", "unknown setup failure"))' 2>/dev/null)"
+    fail "native helper could not enable the isolated listener: ${REASON:-unreadable setup failure}"
 fi
 OWN_LISTENER=1
 print -r -- "$ENABLE_RESULT" | /usr/bin/python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("enabled") is True and d.get("state")=="ready"' \
@@ -242,6 +243,31 @@ load_status || fail "status failed after disable"
 if /usr/bin/nc -z -G 2 "$ORIGINAL_HOST" "$ORIGINAL_PORT" >/dev/null 2>&1; then
     fail "the listener still accepts connections after disable"
 fi
+# A dangling key link must be rejected before any key-generation write. Keep
+# both the original key and rejected link recoverable, and restore in finally.
+/usr/bin/python3 - "$HELPER" "$SLUG" "$PROFILE_DIR" "$DOPPEL_CODEX_HOME" \
+    "${DOPPEL_PRIMARY_APP:-/Applications/ChatGPT.app}" "$CLI" "$CLIENT_KEY" "$ARTIFACTS" <<'PYQA' \
+    || fail "dangling key symlink was not rejected before generation"
+import os, pathlib, subprocess, sys
+helper, slug, profile_dir, desktop_home, primary_app, cli, key_path, artifacts = sys.argv[1:]
+key = pathlib.Path(key_path)
+archive = pathlib.Path(artifacts) / "preserved-fixture-key.pem"
+missing = pathlib.Path(artifacts) / "must-not-be-created.pem"
+os.replace(key, archive)
+try:
+    key.symlink_to(missing)
+    result = subprocess.run([helper, "export-key", "--profile-slug", slug,
+        "--profile-dir", profile_dir, "--desktop-home", desktop_home,
+        "--primary-app", primary_app, "--cli", cli], stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+    assert result.returncode != 0 and not missing.exists()
+finally:
+    if key.is_symlink():
+        os.replace(key, pathlib.Path(artifacts) / "rejected-key-link")
+    os.replace(archive, key)
+PYQA
+pass "dangling key symlinks are rejected without writing their target"
+
 helper enable --expected-account-id "$ACCOUNT_ID" --expected-email "$EMAIL" >/dev/null 2>&1 \
     || fail "re-enable failed for the same isolated identity"
 OWN_LISTENER=1

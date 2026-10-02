@@ -1,16 +1,16 @@
 # Remote Access 2.0 implementation evidence
 
-Feature branch: `codex/remote-access-2-0`. This is an incomplete implementation, not a release qualification record.
+Feature branch: `codex/remote-access-2-0`. This ledger separates observed beta checks from outstanding compatibility and recovery checks.
 
 ## Acceptance ledger
 
 - [x] Managed startup checkpoint on the two existing independently authenticated pilot homes: direct proxy attachment and cold recovery.
 - [x] Repeat that checkpoint on fresh production GUI homes.
 - [ ] Per-profile private-address SSH listeners, stable ports, key isolation and revocation.
-- [ ] Profile-scoped GUI setup, identity confirmation, explicit access grant and private clipboard transfer.
+- [x] Profile-scoped GUI setup, identity confirmation, explicit access grant and private clipboard transfer.
 - [ ] Background persistence, network recovery, rename/removal and runtime update behavior.
 - [x] Two phone entries, correct live identities and marker tasks, reconnect without cancelling the other target.
-- [ ] Existing desktop authentication and work preserved.
+- [x] Existing desktop authentication and work preserved during the two-account phone experiment.
 - [ ] Focused tests, local SSH QA, full repository gates and packaged GUI QA.
 - [ ] Security self-review, ready-for-review PR and published diff readback.
 - [ ] Developer ID signing, notarization, stapling, Gatekeeper and Sparkle archive verification.
@@ -157,3 +157,18 @@ At this checkpoint the Developer ID signing identity was unavailable. Later sign
 - Refreshed GUI attachment succeeded after launching the QA copy with its missing `--remote-access-qa` argument and dismissing unrelated update prompts. The actual setup window emits automatic code-copy feedback and exposes a clickable code button with Copy help text; clicking it again works. Disposable isolated authentication remains user-completed and is pending for the final local SSH lifecycle gate.
 - The disposable GUI sign-in reached its ten-minute timeout without authentication. The actual window cleared the temporary code, restored enabled controls, preserved the saved network and displayed “The Codex request timed out. Check Again or restart sign-in.” Local SSH lifecycle QA remains blocked by this fixture's missing explicit login.
 - Final `just test` passed: 35 executed, 32 passed and three opt-in live checks skipped; release-notes QA passed. The final full `just qa` gate is running sequentially. Current public release readback is 1.1.11, maximum appcast build 23; build 24 remains available for the planned beta. Mac is 27.2 and installed ChatGPT is 26.928.31416, build 12553. Exact iOS/app versions remain unrecorded.
+
+### Final beta integration and gates
+
+- User selected publication as `2.0.0-beta-1`, rather than a stable 2.0.0 release. The beta uses a separate Sparkle feed; the stable 1.x feed remains unchanged.
+- Integrated current main through `cdd4d17`, preserving its clone-engine, permission-probe, browser status and Creator Micro fixes. The only merge conflict was command usage text; both command sets were retained.
+- The earlier global QA failures coincided with another worktree running the same engine-lock suites. A clean edge replay passed all 132 checks, including the previously failing entitlements and live-permission checks. Integration subsequently required a final full run.
+- Final integrated `just test` passed: 35 executed, 32 passed, three opt-in skips. Deep-link QA passed 10 checks, end-to-end QA 38, edge QA 144 and engine-launch QA 16; update reconciliation passed all 26 checks. The final full suite exited successfully.
+- Disposable GUI authentication completed through its own device-code flow. Packaged first enable returned actual Ready status. Source-checkout startup subsequently hit the eight-second readiness deadline while compiling its helper; the lifecycle harness now accepts a selected packaged CLI for distribution QA, while source CLI discovery continues to compile checked-out code. No production timeout or trust check was weakened.
+- iPhone Mirroring is currently unavailable because the phone is in use. Exact iOS/ChatGPT iOS versions remain unrecorded. macOS 14 execution, actual Mac logout/login and deliberate private-network disappearance/recovery remain outside this beta qualification.
+- Final signed universal beta build passed with version `2.0.0-beta-1`, build 24, normal bundle identity and a separate beta feed. The existing removal confirmation now explicitly warns that revocation interrupts remote tasks.
+
+- Final packaged local SSH QA passed quoted arguments and exit status, empty-command and wrong-key rejection, explicit private binding, disable/re-enable, port conflicts, rename and removal revocation. The harness also fixed its zsh `path` loop variable, which replaced PATH and prevented runtime startup.
+- Removal now returns success after preserving data when no cache directory exists; the actual packaged removal replay passed.
+- Final access self-review found dangling symlinks could appear absent through FileManager. Private writes and key generation now inspect entries with lstat and reject those links. Focused Remote tests (34 executed, 31 passed, three opt-in skips) and a real packaged SSH dangling-key regression passed; no authorization or validation checks were weakened.
+- Both universal slices declare macOS 14 minimum, strict Developer ID verification passed, and the payload scan found no remote credentials. Final packaged GUI readback remains unavailable while the Mac is locked; prior running GUI and phone workflow checks are recorded above.

@@ -1669,6 +1669,7 @@ cmd_remove() {
         [[ -n "$codex_home" ]] && print -r -- "  $codex_home"
         [[ -n "$cache_root" && -d "$cache_root" ]] && print -r -- "  $cache_root"
     fi
+    return 0
 }
 
 # Renames an instance and/or changes its icon colour. Identity and data stay

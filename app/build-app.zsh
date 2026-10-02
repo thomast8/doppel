@@ -23,7 +23,7 @@ readonly UNIVERSAL="${DOPPEL_UNIVERSAL:-0}"
 # Developer ID build; from there notarisation is only notarytool plus stapling.
 # Ad-hoc builds can still use EdDSA-verified Sparkle updates for personal use.
 readonly SIGN_ID="${DOPPEL_SIGN_ID:--}"
-readonly DOPPEL_VERSION="${DOPPEL_VERSION:-2.0.0}"
+readonly DOPPEL_VERSION="${DOPPEL_VERSION:-2.0.0-beta-1}"
 readonly DOPPEL_BUILD="${DOPPEL_BUILD:-24}"
 readonly DOPPEL_BUNDLE_ID="${DOPPEL_BUNDLE_ID:-ai.doppel.menubar}"
 readonly SPARKLE_FEED_URL="${DOPPEL_SPARKLE_FEED_URL:-https://raw.githubusercontent.com/thomast8/doppel/main/appcast.xml}"

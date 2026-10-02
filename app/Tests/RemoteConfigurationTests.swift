@@ -38,5 +38,12 @@ final class RemoteConfigurationTests: XCTestCase {
         let link = root.appendingPathComponent("link")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: root)
         XCTAssertThrowsError(try store.validate(link))
+        let missing = root.appendingPathComponent("missing-key")
+        let dangling = root.appendingPathComponent("dangling-key")
+        try FileManager.default.createSymbolicLink(at: dangling, withDestinationURL: missing)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dangling.path))
+        XCTAssertThrowsError(try store.validateIfPresent(dangling, privateMode: true))
+        XCTAssertFalse(try store.validateIfPresent(missing, privateMode: true))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: missing.path))
     }
 }

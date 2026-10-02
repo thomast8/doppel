@@ -86,6 +86,16 @@ public final class RemoteConfigurationStore {
         }
     }
 
+    public func validateIfPresent(_ url: URL, privateMode: Bool = false) throws -> Bool {
+        var info = stat()
+        if lstat(url.path, &info) == 0 {
+            try validate(url, privateMode: privateMode)
+            return true
+        }
+        guard errno == ENOENT else { throw RemoteAccessError("Could not inspect a remote setup path safely.") }
+        return false
+    }
+
     public func validateParents(_ url: URL) throws {
         var current = url.standardizedFileURL
         let userHome = fm.homeDirectoryForCurrentUser.standardizedFileURL
@@ -181,7 +191,7 @@ public final class RemoteConfigurationStore {
 
     public func write(_ data: Data, to url: URL) throws {
         try validateParents(url.deletingLastPathComponent())
-        if fm.fileExists(atPath: url.path) { try validate(url, privateMode: true) }
+        _ = try validateIfPresent(url, privateMode: true)
         try data.write(to: url, options: .atomic)
         guard chmod(url.path, 0o600) == 0 else { throw RemoteAccessError("Could not secure remote setup file.") }
     }

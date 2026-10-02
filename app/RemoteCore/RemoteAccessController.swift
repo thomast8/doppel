@@ -255,7 +255,8 @@ public final class RemoteAccessController {
     private func ensureKeys(_ config: RemoteConfiguration) throws {
         let dir = try store.directory(config.remoteId)
         let client = dir.appendingPathComponent("client-key.pem")
-        if !fm.fileExists(atPath: client.path) {
+        if try !store.validateIfPresent(client, privateMode: true) {
+            _ = try store.validateIfPresent(client.appendingPathExtension("pub"))
             try Self.generatePhoneKey(at: client)
             let generatedPublic = client.appendingPathExtension("pub")
             try store.write(Data(contentsOf: generatedPublic), to: dir.appendingPathComponent("client-key.pub"))
@@ -272,7 +273,8 @@ public final class RemoteAccessController {
         func fields(_ data: Data) -> [Substring] { String(decoding: data, as: UTF8.self).split(whereSeparator: \.isWhitespace).prefix(2).map { $0 } }
         guard fields(derived) == fields(try Data(contentsOf: publicFile)) else { throw RemoteAccessError("The phone key does not match its authorization.") }
         let host = dir.appendingPathComponent("host-key")
-        if !fm.fileExists(atPath: host.path) {
+        if try !store.validateIfPresent(host, privateMode: true) {
+            _ = try store.validateIfPresent(host.appendingPathExtension("pub"))
             _ = try RemoteSystem.requireSuccess("/usr/bin/ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", host.path], message: "Could not generate the SSH host key.")
         }
         try store.validate(host, privateMode: true)
