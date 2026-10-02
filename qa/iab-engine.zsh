@@ -315,8 +315,8 @@ expect "$(plan "personal" "none")" "none" \
     "an assignment on its own is not a reason to restart anything"
 expect "$(plan "" $'unmanaged\t\tChatGPT\t701')" "bare" \
     "an unassigned official window is reopened as itself"
-expect "$(plan "" $'managed\tpersonal\tChatGPT Personal QA\t701')" "bare" \
-    "without an assignment the official app is only ever itself"
+expect "$(plan "" $'managed\tpersonal\tChatGPT Personal QA\t701')" $'clone-profile\tpersonal' \
+    "an unassigned managed profile comes back through its clone, not stock"
 expect "$(plan "personal" $'managed\tpersonal\tChatGPT Personal QA\t701')" \
     $'vendor-profile\tpersonal' \
     "the assigned profile's own official window is reopened through its engine"

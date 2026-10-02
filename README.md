@@ -74,6 +74,9 @@ running. APFS copy-on-write clones avoid copying the unchanged parts of the
 1+ GB vendor bundle once per instance. A failed
 download changes nothing; a failed install restores the previous primary; and a
 partial rebuild keeps the restart manifest and reports the exact instance.
+If official ChatGPT was holding an unassigned managed profile, which happens
+when it is opened on the vendor's default data root, that profile comes back
+through its own clone rather than through official ChatGPT.
 
 The profile assigned the built-in browser is running through the untouched
 official app rather than through a clone, so the restart manifest records it as
@@ -188,12 +191,14 @@ by older Doppel versions; it does not change active apps or account data.
 installs the instance into `~/Applications`, and stores the instance definition in
 `~/Library/Application Support/Doppel/instances/`.
 
-### Assigning the built-in browser
+### Running a profile on official ChatGPT (fallback)
 
 Doppel treats an account profile and the process that opens it as separate
-things. By default a profile uses its own locally signed Doppel app. One profile
-at a time can instead use the untouched `/Applications/ChatGPT.app` as its
-engine, preserving the OpenAI signature chain required by the built-in browser:
+things. By default a profile uses its own locally signed Doppel app, and current
+ChatGPT builds serve the built-in browser there too. That works only because of
+how ChatGPT happens to launch its browser helper today, so one profile at a time
+can still use the untouched `/Applications/ChatGPT.app` as its engine, keeping
+the OpenAI signature chain intact if a vendor update closes that gap again:
 
 ```sh
 bin/doppel browser assign "ChatGPT Personal"
