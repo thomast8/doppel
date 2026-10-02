@@ -118,6 +118,13 @@ else
         "found $RESTORE_MARKERS restoration markers and $RESTORE_SPAWNS direct spawn calls"
 fi
 
+MICRO_MARKERS="$(LC_ALL=C /usr/bin/grep -a -o 'process.env.DOPPEL_CODEX_MICRO' "$TEST_ASAR" | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
+if [[ "$MICRO_MARKERS" == "1" ]]; then
+    pass "the clone leaves the Codex Micro pad to the primary"
+else
+    fail "the clone leaves the Codex Micro pad to the primary" "found $MICRO_MARKERS Micro gates"
+fi
+
 # Everything above runs against whichever vendor build happens to be installed,
 # which is the real signal but only ever covers one build at a time. These
 # shapes are the ones that actually shipped: 6321 and 6662 differ only in names
