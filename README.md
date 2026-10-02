@@ -112,6 +112,8 @@ bin/doppel launch "ChatGPT Personal"
 bin/doppel browser assign "ChatGPT Personal"  # give this profile the built-in browser
 bin/doppel browser status
 bin/doppel browser release
+bin/doppel micro assign "ChatGPT Personal"    # this clone answers the Creator Micro pad
+bin/doppel micro status
 bin/doppel rebuild "ChatGPT Personal"
 bin/doppel native-tools status
 bin/doppel native-tools repair

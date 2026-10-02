@@ -62,6 +62,7 @@ readonly APPCAST_URL="${DOPPEL_APPCAST_URL:-https://persistent.oaistatic.com/cod
 readonly UPDATE_ROOT="${DOPPEL_UPDATE_ROOT:-$DOPPEL_HOME/updates}"
 readonly VENDOR_LOG_ROOT="${DOPPEL_VENDOR_LOG_ROOT:-$HOME/Library/Logs/com.openai.codex}"
 readonly IAB_SLOT_FILE="$DOPPEL_HOME/state/iab-engine-slot"
+readonly CODEX_MICRO_OWNER_FILE="$DOPPEL_HOME/state/codex-micro-owner"
 readonly IAB_RUNTIME_FILE="$DOPPEL_HOME/state/iab-engine-runtime"
 readonly IAB_OPERATION_LOCK="$DOPPEL_HOME/state/IABCoordinator.lock"
 readonly CLONE_LAUNCH_ROOT="$DOPPEL_HOME/state/clone-launch"
@@ -1528,6 +1529,46 @@ cmd_browser() {
         release) with_iab_operation_lock cmd_browser_release "$@" ;;
         status) cmd_browser_status "$@" ;;
         *) die "usage: doppel browser {assign [--quit-running] <name>|release|status [--porcelain]}" ;;
+    esac
+}
+
+# Every ChatGPT copy opens the Codex Micro / Creator Micro pad by itself, so one
+# press used to reach them all. Clones are patched to ignore it unless named
+# here; the engine reads this file when a clone starts. Stock ChatGPT cannot be
+# patched and listens whenever it runs.
+cmd_micro() {
+    local action="${1:-status}" dir slug staged
+    (( $# > 0 )) && shift
+    case "$action" in
+        assign)
+            [[ $# -eq 1 ]] || die "usage: doppel micro assign <name>"
+            dir="$(instance_dir_for "$1")"
+            /bin/mkdir -p "${CODEX_MICRO_OWNER_FILE:h}"
+            staged="$(/usr/bin/mktemp "${CODEX_MICRO_OWNER_FILE}.XXXXXXXX")" || \
+                die "could not stage the Creator Micro assignment"
+            if ! print -r -- "${dir:t}" > "$staged" || ! /bin/mv "$staged" "$CODEX_MICRO_OWNER_FILE"; then
+                /bin/rm -f "$staged"
+                die "could not save the Creator Micro assignment"
+            fi
+            print -r -- "Creator Micro assigned to: $(config_value "$dir" DOPPEL_DISPLAY_NAME) (takes effect when it next starts)"
+            ;;
+        release)
+            [[ $# -eq 0 ]] || die "usage: doppel micro release"
+            /bin/rm -f "$CODEX_MICRO_OWNER_FILE" || die "could not clear the Creator Micro assignment"
+            print -r -- "Creator Micro released; only official ChatGPT will use it"
+            ;;
+        status)
+            [[ $# -eq 0 ]] || die "usage: doppel micro status"
+            slug=""
+            [[ -r "$CODEX_MICRO_OWNER_FILE" ]] && { IFS= read -r slug < "$CODEX_MICRO_OWNER_FILE" || true }
+            if [[ -n "$slug" && "$slug" != *[^a-z0-9-]* ]] && is_instance_dir "$INSTANCES_ROOT/$slug"; then
+                print -r -- "Creator Micro: $(config_value "$INSTANCES_ROOT/$slug" DOPPEL_DISPLAY_NAME)"
+            else
+                print -r -- "Creator Micro: no clone assigned"
+            fi
+            print -r -- "Official ChatGPT also uses it whenever it is running."
+            ;;
+        *) die "usage: doppel micro {assign <name>|release|status}" ;;
     esac
 }
 
@@ -3384,7 +3425,8 @@ case "${1:-}" in
     update) shift; cmd_update "$@" ;;
     permissions) shift; cmd_permissions "$@" ;;
     browser) shift; cmd_browser "$@" ;;
+    micro) shift; cmd_micro "$@" ;;
     native-tools) shift; cmd_native_tools "$@" ;;
     prune) shift; [[ $# -le 1 ]] || die "usage: doppel prune [<name>]"; cmd_prune "${1:-}" ;;
-    *) die "usage: doppel {create|list|launch|rebuild|edit|remove|update|permissions|browser|native-tools|prune} ..." ;;
+    *) die "usage: doppel {create|list|launch|rebuild|edit|remove|update|permissions|browser|micro|native-tools|prune} ..." ;;
 esac

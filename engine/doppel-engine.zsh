@@ -848,10 +848,26 @@ primary_holds_profile() {
     return 1
 }
 
+# Clones leave the Codex Micro / Creator Micro pad alone (see the ASAR patch)
+# unless `doppel micro assign` named this one. Read at launch, so assigning
+# needs no rebuild and takes effect when the instance next starts.
+codex_micro_owner_is_this_profile() {
+    local doppel_home="$HOME/Library/Application Support/Doppel" owner=""
+    if [[ "${DOPPEL_DEV:-0}" == "1" ]]; then
+        doppel_home="${DOPPEL_HOME:-$doppel_home}"
+    fi
+    [[ -r "$doppel_home/state/codex-micro-owner" ]] || return 1
+    IFS= read -r owner < "$doppel_home/state/codex-micro-owner"
+    [[ -n "$owner" && "$owner" != *[^a-z0-9-]* ]] || return 1
+    [[ "$owner" == "$(managed_slug_for_this_profile)" ]]
+}
+
 exec_clone_binary() {
     local app="$1"
     shift
     mkdir -p "$DOPPEL_PROFILE_ROOT" "$DOPPEL_CODEX_HOME"
+    unset DOPPEL_CODEX_MICRO
+    codex_micro_owner_is_this_profile && export DOPPEL_CODEX_MICRO=1
     export CODEX_ELECTRON_USER_DATA_PATH="$DOPPEL_PROFILE_ROOT"
     export CODEX_HOME="$DOPPEL_CODEX_HOME"
     export DOPPEL_URL_SCHEME
