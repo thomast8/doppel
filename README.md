@@ -89,6 +89,59 @@ the official window, so it never asks.
 
 ## Usage
 
+### iPhone Remote Access
+
+The first 2.0 beta is available on the [2.0.0-beta-1 release page](https://github.com/thomast8/doppel/releases/tag/v2.0.0-beta-1). Download the ZIP, quit Doppel and install its `Doppel.app` in place of your existing menu app. Your profile data and remote connections are retained. This build receives future betas from `appcast-beta.xml`; the stable update feed stays on 1.x.
+
+Open a profile's **Remote Access…** menu item. Choose an assigned private Mac
+address, save the network, and sign in to the intended ChatGPT account using the
+temporary device code. Confirm the displayed email and workspace before choosing
+**Enable Remote Access**. Each profile gets its own stable port, phone key and
+separately authenticated remote home. Existing desktop credentials are not copied.
+
+On the phone, open **Codex → Settings → Add connection → SSH**. Enter the supplied
+host, port and username, choose private-key authentication, and paste the key from
+**Copy Private Key**. The exported PKCS#8 PEM begins `-----BEGIN PRIVATE KEY-----`;
+replace the entire key field when updating it. Check the host-key fingerprint. Choose **Connection Saved**
+in Doppel when finished; Doppel restores the previous clipboard only if it still
+contains the copied key. Repeat for another profile without changing the phone's
+ChatGPT login.
+
+A LAN address works only while the phone can reach that LAN. For Meshnet, enable
+it on both devices and allow the phone's incoming remote connections on the Mac.
+Select the Mac's Meshnet address in Doppel. See NordVPN's
+[macOS setup](https://meshnet.nordvpn.com/getting-started/how-to-start-using-meshnet/using-meshnet-on-macos)
+and [remote-access permissions](https://meshnet.nordvpn.com/features/explaining-permissions/remote-access-permissions).
+Doppel does not install a VPN or configure internet routing.
+
+**Ready on this Mac** confirms the local listener and live identity, not a
+successful phone connection. Keep the Mac awake and the user logged in. The
+listener continues when the menu app quits and resumes after login when its
+selected private address is available. Disabling access revokes the phone key and
+stops only that profile's listener and remote daemon; its history is retained.
+
+The phone key permits execution with the Mac user's filesystem privileges.
+Account separation is not an operating-system sandbox. New remote tasks are
+supported; desktop history, Browser, Computer Use and cloud synchronization are
+outside 2.0. Upgrading from 1.x enables no listeners or background jobs.
+
+The CLI uses the same setup and lifecycle:
+
+```sh
+doppel remote status [profile] --json
+doppel remote configure <profile> --bind-address <private-ip> [--host <hostname>]
+doppel remote login <profile>
+doppel remote enable <profile>
+doppel remote disable <profile>
+doppel remote replace-key <profile>
+doppel remote update-runtime <profile>
+doppel remote export-key <profile>
+```
+
+Ordinary results are versioned JSON. Login emits temporary device-code and
+completion events. Only `export-key` returns private key material. Disable an
+enabled connection before replacing its key or updating its runtime.
+
 The menu bar app covers the everyday flows; **New Instance…** asks for a name
 and a colour and derives everything else:
 

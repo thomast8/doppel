@@ -1563,6 +1563,13 @@ cmd_remove() {
         done
     fi
 
+    if [[ -d "$HOME/.dpr" || -L "$HOME/.dpr" ]]; then
+        local -a remote_remove_options
+        remote_remove_options=()
+        (( purge )) && remote_remove_options+=(--purge-data)
+        cmd_remote __remove "${dir:t}" "${remote_remove_options[@]}" >/dev/null || \
+            die "remote access revocation failed; the profile was not removed"
+    fi
     quit_instance "$app" "$bundle_id" "$target"
     any_chatgpt_process_uses_profile "$dir" && \
         die "'$target''s profile is still open through another ChatGPT process; no app or account data was moved."
@@ -3274,6 +3281,123 @@ forget_pinned_requirement() {
     /bin/rm -f "$DOPPEL_HOME/pins/$digest" 2>/dev/null || true
 }
 
+
+remote_json_error() {
+    local message="$1" profile_slug="${2:-}"
+    case "$message" in
+        "Invalid remote status arguments."|"Could not inspect this remote profile."|"Unknown remote command."|\
+        "Usage: doppel remote <command> <profile> [options]."|"The requested remote profile could not be found."|\
+        "Remote option requires a value."|"Invalid remote option."|"Remote Access helper could not be prepared."|\
+        "Remote Access helper is unavailable.") ;;
+        *) message="Remote Access operation failed." ;;
+    esac
+    local profile_field=""
+    if [[ -n "$profile_slug" && "$profile_slug" =~ '^[a-z0-9]+(-[a-z0-9]+)*$' ]]; then
+        profile_field=",\"profileSlug\":\"$profile_slug\""
+    fi
+    print -r -- "{\"schemaVersion\":1,\"error\":\"$message\"$profile_field}"
+}
+
+remote_failure() {
+    local message="$1" internal="${2:-false}" profile_slug="${3:-}"
+    if [[ "$internal" == true ]]; then die "$message"; fi
+    remote_json_error "$message" "$profile_slug"
+    exit 1
+}
+
+cmd_remote() {
+    local command="${1:-}" profile="${2:-}" dir helper internal=false
+    local separator="" result failed=0 profile_slug profile_name
+    if [[ "$command" == status && ( -z "$profile" || "$profile" == --json ) ]]; then
+        (( $# <= 2 )) || { remote_failure "Invalid remote status arguments."; return 1; }
+        print -rn -- '{"schemaVersion":1,"profiles":['
+        for dir in "$INSTANCES_ROOT"/*(N/); do
+            is_instance_dir "$dir" || continue
+            profile_name="$(config_value "$dir" DOPPEL_DISPLAY_NAME)"
+            profile_slug="${dir:t}"
+            if [[ -z "$profile_name" ]]; then
+                failed=1
+                result="$(remote_json_error "Could not inspect this remote profile." "$profile_slug")"
+            elif result="$(cmd_remote status "$profile_name" --json)"; then
+                :
+            else
+                failed=1
+                result="$(remote_json_error "Could not inspect this remote profile." "$profile_slug")"
+            fi
+            print -rn -- "$separator$result"
+            separator=,
+        done
+        print -r -- ']}'
+        (( failed == 0 )) && return 0
+        return 1
+    fi
+
+    case "$command" in
+        status|configure|login|enable|disable|replace-key|update-runtime|export-key) ;;
+        __serve|__session|__remove) internal=true ;;
+        *) remote_failure "Unknown remote command."; return 1 ;;
+    esac
+    [[ -n "$profile" ]] || { remote_failure "Usage: doppel remote <command> <profile> [options]." "$internal"; return 1; }
+    shift 2
+
+    if [[ "$internal" == true ]]; then
+        [[ "$profile" != */* && "$profile" != . && "$profile" != .. ]] || \
+            { remote_failure "Invalid remote profile." true; return 1; }
+        dir="$INSTANCES_ROOT/$profile"
+        is_instance_dir "$dir" || { remote_failure "Remote profile no longer exists." true; return 1; }
+    else
+        if ! dir="$(instance_dir_for "$profile" 2>/dev/null)"; then
+            remote_failure "The requested remote profile could not be found."
+            return 1
+        fi
+    fi
+
+    local -a options
+    options=()
+    while (( $# )); do
+        if [[ "$1" == --json ]]; then
+            shift
+            continue
+        fi
+        if [[ "$command" == __remove && "$1" == --purge-data ]]; then
+            options+=(--purge true)
+            shift
+            continue
+        fi
+        case "$command:$1" in
+            enable:--expected-account-id|enable:--expected-email|configure:--bind-address|configure:--host)
+                (( $# >= 2 )) || { remote_failure "Remote option requires a value." "$internal" "${dir:t}"; return 1; }
+                options+=("$1" "$2")
+                shift 2
+                ;;
+            *) remote_failure "Invalid remote option." "$internal" "${dir:t}"; return 1 ;;
+        esac
+    done
+
+    if [[ -f "$REPO_ROOT/app/Package.swift" ]]; then
+        # Source builds always compile the checked-out helper, never a cached payload.
+        if ! /usr/bin/swift build --package-path "$REPO_ROOT/app" -c release --product DoppelRemoteHelper >/dev/null 2>&1; then
+            remote_failure "Remote Access helper could not be prepared." "$internal" "${dir:t}"
+            return 1
+        fi
+        helper="$REPO_ROOT/app/.build/release/DoppelRemoteHelper"
+    else
+        helper="$PREBUILT_DIR/DoppelRemoteHelper"
+    fi
+    [[ -x "$helper" ]] || { remote_failure "Remote Access helper is unavailable." "$internal" "${dir:t}"; return 1; }
+
+    local -a invocation
+    invocation=("$helper" "$command" --profile-slug "${dir:t}" --profile-dir "$dir" \
+        --desktop-home "$(config_value "$dir" DOPPEL_CODEX_HOME)" \
+        --primary-app "$PRIMARY_APP" --cli "$REPO_ROOT/bin/doppel" "${options[@]}")
+    if [[ "$command" == __remove ]]; then
+        "${invocation[@]}"
+    else
+        # The helper must receive GUI cancellation and SSH signals directly.
+        exec "${invocation[@]}"
+    fi
+}
+
 # The hidden worker entrypoint is valid only while its parent supervisor owns
 # the exact global lock. It runs one whitelisted function without recursively
 # acquiring that same lock.
@@ -3304,6 +3428,7 @@ case "${1:-}" in
     permissions) shift; cmd_permissions "$@" ;;
     browser) shift; cmd_browser "$@" ;;
     native-tools) shift; cmd_native_tools "$@" ;;
+    remote) shift; cmd_remote "$@" ;;
     prune) shift; [[ $# -le 1 ]] || die "usage: doppel prune [<name>]"; cmd_prune "${1:-}" ;;
-    *) die "usage: doppel {create|list|launch|rebuild|edit|remove|update|permissions|browser|native-tools|prune} ..." ;;
+    *) die "usage: doppel {create|list|launch|rebuild|edit|remove|update|permissions|browser|native-tools|remote|prune} ..." ;;
 esac

@@ -10,6 +10,37 @@ import AppKit
 /// render into ImageRenderer without a window.
 @MainActor
 enum UIRenderer {
+    private static var remoteQAWindow: NSWindow?
+    private static var remoteQALaunchObserver: NSObjectProtocol?
+
+    static func scheduleRemoteAccessQA(profileID: String) {
+        remoteQALaunchObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didFinishLaunchingNotification, object: nil, queue: .main
+        ) { _ in
+            Task { @MainActor in
+                if let observer = remoteQALaunchObserver { NotificationCenter.default.removeObserver(observer) }
+                remoteQALaunchObserver = nil
+                showRemoteAccessQA(profileID: profileID)
+            }
+        }
+    }
+
+    /// Opens the real setup view for native QA when a menu-only app cannot
+    /// be selected by the accessibility bridge. Does not configure or enable it.
+    static func showRemoteAccessQA(profileID: String) {
+        let store = InstanceStore()
+        guard profileID.range(of: "^[a-z0-9]+(?:-[a-z0-9]+)*$", options: .regularExpression) != nil else { return }
+        NSApp.setActivationPolicy(.regular)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 568, height: 650),
+                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.title = "Remote Access QA"
+        window.isReleasedWhenClosed = false
+        window.contentViewController = NSHostingController(rootView: RemoteAccessView(store: store, profileID: profileID))
+        remoteQAWindow = window
+        window.center(); window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     static func render(to url: URL, editing: Bool) {
         let store = InstanceStore()
         // Give the store a moment to populate from the CLI so the rendered

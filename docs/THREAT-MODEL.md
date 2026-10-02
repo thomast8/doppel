@@ -36,6 +36,33 @@ keeping stable across rebuilds.
 
 ## Who is in scope
 
+### Optional phone Remote Access
+
+Remote Access is disabled until a user configures and enables a profile. Its
+generated phone key grants command execution with that Mac user's filesystem
+privileges. Separate Codex homes keep account credentials, history and daemon
+state apart; they do not provide an operating-system sandbox.
+
+Each profile uses a separate unprivileged SSH listener, stable port and ECDSA
+P-256 PEM key. The listener binds only the selected, currently assigned private
+IPv4 address. It accepts its own key, rejects interactive shells and disables
+password authentication, forwarding, PTYs and SSH environment/startup injection.
+No system SSH configuration, Remote Login setting or existing authorized keys
+is changed. Users are responsible for their private-network peer permissions.
+
+Before admission, Doppel verifies the daemon's actual home, live ChatGPT email
+and workspace against the confirmed target. Missing evidence blocks access.
+Remote credentials are obtained through a separate explicit sign-in and kept in
+private file storage; desktop tokens are never copied. Runtime bootstrap requires
+the installed OpenAI application's Apple-anchored release signature. Automatic
+updates are disabled for these homes; updates require an explicit action.
+
+Disabling revokes the profile's authorization, stops its listener and SSH
+sessions, then stops only its remote daemon. A lost phone key should be replaced
+through Doppel. Private keys and device codes appear only during explicit
+transfer/sign-in; diagnostics omit them. The clipboard is restored only while
+Doppel still owns its copied contents.
+
 | Actor | Treatment |
 |---|---|
 | OpenAI | Trusted for code it signs. Doppel verifies the signature; it does not audit the app. |
