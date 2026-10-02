@@ -346,7 +346,7 @@ The `qa/` suites need nothing beyond macOS.
 A menu-bar-only front end (`LSUIElement`, so no Dock icon): list instances,
 launch, rebuild, rename, recolour or remove them, coordinate ChatGPT updates,
 create a new one from a name plus a colour picker, toggle **Start at Login**, or
-choose **Check for Doppel Updates…**.
+choose **Check for Doppel Updates…**. Enable **Receive Beta Updates** in the Doppel menu to opt into beta releases. Turning it off returns future checks to the stable feed; it does not downgrade an installed beta.
 The foot of the menu shows Doppel's own version and the ChatGPT build it is
 managing, which is what you want to hand over when reporting a problem.
 

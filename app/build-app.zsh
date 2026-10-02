@@ -254,7 +254,7 @@ done
 /usr/bin/codesign --verify --deep --strict "$APP" >/dev/null
 if [[ "$SIGN_ID" != "-" ]]; then
     # Fail the build rather than ship an archive that cannot be notarised.
-    /usr/bin/codesign -dv --verbose=4 "$APP" 2>&1 | /usr/bin/grep -q "^Authority=Developer ID Application" || {
+    /usr/bin/codesign -dv --verbose=4 "$APP" 2>&1 | /usr/bin/grep "^Authority=Developer ID Application" >/dev/null || {
         print -u2 -r -- "the outer bundle is not signed by a Developer ID Application certificate"; exit 1
     }
     print -r -- "Signed for Developer ID distribution. Next: notarytool submit, then stapler staple."
