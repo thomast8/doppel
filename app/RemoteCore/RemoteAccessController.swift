@@ -468,9 +468,14 @@ public final class RemoteAccessController {
         defer { operation.release() }
         guard var config = try store.find(profileSlug: profile.slug) else { return }
         let dir = try store.directory(config.remoteId)
-        let sessions = try listenerPID(config).map { try sshDescendants(of: $0) } ?? []
         config.enabled = false; try store.save(config)
+        // Revoke the key before the snapshot. sshd forks a session process per
+        // connection and reads authorized_keys at authentication, so any session
+        // that can still authenticate already exists when the snapshot runs; a
+        // later connection finds no key. The snapshot has to precede bootout,
+        // which reparents surviving sessions away from the listener.
         try store.write(Data(), to: dir.appendingPathComponent("authorized_keys"))
+        let sessions = try listenerPID(config).map { try sshDescendants(of: $0) } ?? []
         _ = try RemoteSystem.requireSuccess("/bin/launchctl", ["disable", service(config)], message: "Could not disable the background listener.", timeout: 8)
         _ = try RemoteSystem.run("/bin/launchctl", ["bootout", service(config)], timeout: 8)
         try stopSSHTransports(sessions)
