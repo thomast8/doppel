@@ -7,6 +7,7 @@ final class RemoteControllerTests: XCTestCase {
     func testGeneratedAndReencodedPhoneKeysLoadInAppleParser() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("doppel-key-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: root) }
         let generated = root.appendingPathComponent("generated.pem")
         try RemoteAccessController.generatePhoneKey(at: generated)
         let generatedText = try String(contentsOf: generated, encoding: .utf8)
@@ -26,6 +27,7 @@ final class RemoteControllerTests: XCTestCase {
     func testExplicitCurvePKCS8IsNormalizedWithoutChangingAuthorization() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("doppel-explicit-key-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: root) }
         let key = root.appendingPathComponent("explicit.pem")
         _ = try RemoteSystem.requireSuccess("/usr/bin/openssl", ["genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-pkeyopt", "ec_param_enc:explicit", "-out", key.path], message: "Fixture generation failed.")
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: key.path)

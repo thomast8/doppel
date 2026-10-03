@@ -26,9 +26,9 @@ final class RemoteConfigurationTests: XCTestCase {
     }
 
     func testSharedWritableOrSymlinkFilesAreRejected() throws {
-        // Keep the generated fixture for inspection; no unrelated file is removed.
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("doppel-permissions-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: root) }
         let store = RemoteConfigurationStore(root: root)
         XCTAssertNoThrow(try store.validate(root, privateMode: true))
         let shared = root.appendingPathComponent("shared")
