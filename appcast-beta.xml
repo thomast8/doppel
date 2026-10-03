@@ -6,21 +6,23 @@
         <description>Signed Doppel releases</description>
         <language>en</language>
         <item>
-            <title>2.0.0-beta-5</title>
-            <pubDate>Sat, 03 Oct 2026 16:47:03 +0100</pubDate>
+            <title>2.0.0-beta-3</title>
+            <pubDate>Sat, 03 Oct 2026 17:07:04 +0100</pubDate>
             <link>https://github.com/thomast8/doppel</link>
-            <sparkle:version>30</sparkle:version>
-            <sparkle:shortVersionString>2.0.0-beta-5</sparkle:shortVersionString>
+            <sparkle:version>31</sparkle:version>
+            <sparkle:shortVersionString>2.0.0-beta-3</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[# Doppel 2.0.0-beta-5
+            <description sparkle:format="markdown"><![CDATA[# Doppel 2.0.0-beta-3
 
 - Disabling Remote Access now revokes the phone key before it closes open sessions, so a phone that connects at that moment can't slip in and keep running.
-- You can switch a disabled profile to a different ChatGPT account. Signing in no longer fails against the previous account, and Enable locks in the one you confirm.
+- You can switch a disabled profile to a different ChatGPT account, and Enable works again after Disable without signing in a second time. Doppel still checks that the live account matches the one you confirm before turning access on.
 - Replace Key and Update Runtime now appear while a profile is disabled, which is when they can run.
+- The menu notices engine changes made from the `doppel` command line within a few minutes. Running a profile on official ChatGPT now lives under each instance's Fallback Engine submenu, since clones are the normal engine.
+- Beta builds point at the beta update feed by default, so a beta install keeps receiving later betas.
 
-This is a beta. Remote Access limits from earlier betas still apply: the Mac must stay awake and logged in, and macOS 14 execution, logout/login recovery and network-loss recovery still need broader testing.
+This is a beta. Remote Access limits from beta-2 still apply: the Mac must stay awake and logged in, and macOS 14 execution, logout/login recovery and network-loss recovery still need broader testing.
 ]]></description>
-            <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.0-beta-5/Doppel-2.0.0-beta-5-macOS.zip" length="7752940" type="application/octet-stream" sparkle:edSignature="oHObgoMChM5FE/OaUmvZ9NwhNJoXrcIF2abRXtiyw8TATkUqhuIRrss7YwYh1wjnbDKIT/E4t0Sb+Oq3bozuBQ=="/>
+            <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.0-beta-3/Doppel-2.0.0-beta-3-macOS.zip" length="7752940" type="application/octet-stream" sparkle:edSignature="qMiooeD0t2YkbpZO6G+kThsvFTYGdUS8CNy3BDRPXaVHmF5+QeTIkG0iQA0UNO/HodUkbo13A5aeglth1kBjAg=="/>
         </item>
         <item>
             <title>1.1.13</title>
