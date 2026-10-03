@@ -35,6 +35,7 @@ final class InstanceStore: ObservableObject {
     @Published var checkingPermissions = false
     @Published var nativeToolsStatus: NativeToolsStatus?
     @Published var checkingNativeTools = false
+    private var remoteProcesses: [UUID: RemoteCLIProcess] = [:]
 
     var permissionIssues: [PermissionIssue] { permissionStatuses.filter(\.needsAttention) }
 
@@ -94,6 +95,32 @@ final class InstanceStore: ObservableObject {
         return nil
     }
 
+    /// Starts a Remote Access CLI command without passing profile data through
+    /// a shell. Output is delivered one line at a time; callers must ignore
+    /// stdout for commands that can emit secrets (notably export-key).
+    @discardableResult
+    func runRemoteCLI(_ arguments: [String], timeout: TimeInterval = 300,
+                      onLine: @escaping @MainActor (String) -> Void = { _ in },
+                      completion: @escaping @MainActor (Result<String, Error>) -> Void) -> RemoteCLIProcess? {
+        guard let cli = discoveredCLI else {
+            completion(.failure(RemoteCLIError("Doppel CLI is unavailable.")))
+            return nil
+        }
+        let id = UUID()
+        let operation = RemoteCLIProcess()
+        retainRemoteProcess(operation, id: id)
+        operation.start(cli: cli, arguments: ["remote"] + arguments, timeout: timeout,
+                        onLine: onLine, completion: { [weak self] result in
+            self?.releaseRemoteProcess(id)
+            completion(result)
+        })
+        return operation
+    }
+
+    var activeRemoteProcessCount: Int { remoteProcesses.count }
+    func retainRemoteProcess(_ process: RemoteCLIProcess, id: UUID) { remoteProcesses[id] = process }
+    func releaseRemoteProcess(_ id: UUID) { remoteProcesses.removeValue(forKey: id) }
+
     /// A CLI anyone in the admin group can replace is not one to execute
     /// silently; /opt/homebrew/bin is group-writable on many machines.
     nonisolated private static func isGroupOrWorldWritable(_ path: String) -> Bool {
@@ -103,7 +130,10 @@ final class InstanceStore: ObservableObject {
         return permissions.uint16Value & 0o022 != 0
     }
 
-    init() {
+    convenience init() { self.init(testingWithoutStartup: false) }
+
+    init(testingWithoutStartup: Bool) {
+        guard !testingWithoutStartup else { return }
         reload()
         // Check shortly after launch, then every six hours while Doppel is
         // running. The CLI performs the official-feed and signature checks;

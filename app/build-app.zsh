@@ -2,7 +2,7 @@
 # Builds Doppel.app and installs it into ~/Applications. LSUIElement keeps it
 # out of the Dock and the Cmd-Tab switcher: it lives in the menu bar only.
 #
-# The bundle is self-contained. The CLI, the engine and the three compiled
+# The bundle is self-contained. The CLI, the engine and the compiled
 # helpers ship inside Contents/Resources/doppel, so a copy of the app needs
 # neither this repository nor any developer tooling. Everything it calls at
 # runtime — codesign, security, sips, iconutil, lsregister — is part of macOS.
@@ -23,10 +23,17 @@ readonly UNIVERSAL="${DOPPEL_UNIVERSAL:-0}"
 # Developer ID build; from there notarisation is only notarytool plus stapling.
 # Ad-hoc builds can still use EdDSA-verified Sparkle updates for personal use.
 readonly SIGN_ID="${DOPPEL_SIGN_ID:--}"
-readonly DOPPEL_VERSION="${DOPPEL_VERSION:-1.0.0}"
-readonly DOPPEL_BUILD="${DOPPEL_BUILD:-10}"
+readonly DOPPEL_VERSION="${DOPPEL_VERSION:-2.0.0-beta-3}"
+readonly DOPPEL_BUILD="${DOPPEL_BUILD:-31}"
 readonly DOPPEL_BUNDLE_ID="${DOPPEL_BUNDLE_ID:-ai.doppel.menubar}"
-readonly SPARKLE_FEED_URL="${DOPPEL_SPARKLE_FEED_URL:-https://raw.githubusercontent.com/thomast8/doppel/main/appcast.xml}"
+# A beta version embeds the beta feed, so the standard packaging path keeps a
+# beta install on later betas instead of the stable 1.x feed.
+if [[ "$DOPPEL_VERSION" == *-beta* ]]; then
+    readonly DEFAULT_FEED_URL="https://raw.githubusercontent.com/thomast8/doppel/codex/remote-access-2-0/appcast-beta.xml"
+else
+    readonly DEFAULT_FEED_URL="https://raw.githubusercontent.com/thomast8/doppel/main/appcast.xml"
+fi
+readonly SPARKLE_FEED_URL="${DOPPEL_SPARKLE_FEED_URL:-$DEFAULT_FEED_URL}"
 readonly SPARKLE_PUBLIC_KEY="${DOPPEL_SPARKLE_PUBLIC_KEY:-}"
 readonly SINGLE_INSTANCE_LOCK_NAME="${DOPPEL_SINGLE_INSTANCE_LOCK_NAME:-}"
 readonly SWIFT_SCRATCH="${DOPPEL_SWIFT_SCRATCH_PATH:-$APP_SRC/.build}"
@@ -61,6 +68,8 @@ else
 fi
 readonly BINARY="$binary"
 [[ -x "$BINARY" ]] || { print -u2 -r -- "build produced no binary at $BINARY"; exit 1 }
+readonly REMOTE_BINARY="${BINARY:h}/DoppelRemoteHelper"
+[[ -x "$REMOTE_BINARY" ]] || { print -u2 -r -- "build produced no Remote Access helper"; exit 1 }
 print -r -- "Architectures: $(/usr/bin/lipo -archs "$BINARY" 2>/dev/null || print -r -- unknown)"
 
 typeset sparkle_source="$SPARKLE_ROOT/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
@@ -84,6 +93,7 @@ fi
 # The CLI, engine and helpers travel with the app.
 readonly PAYLOAD="$APP/Contents/Resources/doppel"
 /bin/mkdir -p "$PAYLOAD/bin" "$PAYLOAD/engine" "$PAYLOAD/prebuilt"
+/bin/cp "$REMOTE_BINARY" "$PAYLOAD/prebuilt/DoppelRemoteHelper"
 /bin/cp "$REPO_ROOT/bin/doppel" "$REPO_ROOT/bin/doppel-signing" "$PAYLOAD/bin/"
 /bin/cp "$REPO_ROOT/engine/doppel-engine.zsh" "$PAYLOAD/engine/"
 /bin/cp "$REPO_ROOT/engine/patch-deep-link.py" "$PAYLOAD/engine/"
@@ -206,6 +216,7 @@ nested=(
     "$PAYLOAD/prebuilt/doppel-alert"
     "$PAYLOAD/prebuilt/doppel-url-handler"
     "$PAYLOAD/prebuilt/doppel-icon"
+    "$PAYLOAD/prebuilt/DoppelRemoteHelper"
 )
 readonly SPARKLE_FRAMEWORK="$APP/Contents/Frameworks/Sparkle.framework"
 readonly SPARKLE_VERSION_ROOT="$SPARKLE_FRAMEWORK/Versions/B"

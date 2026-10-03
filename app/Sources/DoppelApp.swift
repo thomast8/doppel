@@ -14,6 +14,7 @@ struct DoppelApp: App {
         let updateQALaunch = foregroundUpdateQALaunch || backgroundUpdateQALaunch
         let headlessCommand = arguments.contains("--login-item")
             || arguments.contains("--render-ui")
+            || arguments.contains("--remote-access-qa")
         doppelUpdatesEnabled = !(Bundle.main.object(
             forInfoDictionaryKey: "SUPublicEDKey") as? String ?? "").isEmpty
         updaterController = DoppelUpdater(
@@ -56,6 +57,11 @@ struct DoppelApp: App {
             exit(0)
         }
 
+        if let index = arguments.firstIndex(of: "--remote-access-qa"), index + 1 < arguments.count {
+            let profileID = arguments[index + 1]
+            UIRenderer.scheduleRemoteAccessQA(profileID: profileID)
+        }
+
         // Deterministic production-like QA hook. It drives the same Sparkle
         // controller as the menu item, after AppKit has entered its event loop.
         if updateQALaunch {
@@ -87,6 +93,14 @@ struct DoppelApp: App {
         }
         Window("New Doppel Instance", id: "create-instance") {
             CreateInstanceView(store: store)
+        }
+        .windowResizability(.contentSize)
+        .windowStyle(.hiddenTitleBar)
+
+        WindowGroup("Remote Access", id: "remote-access", for: String.self) { $profileID in
+            if let profileID {
+                RemoteAccessView(store: store, profileID: profileID)
+            }
         }
         .windowResizability(.contentSize)
         .windowStyle(.hiddenTitleBar)
@@ -269,6 +283,11 @@ struct MenuContent: View {
                     .disabled(engineBusy)
                 Button("Rename or Recolour…") {
                     openWindow(id: "edit-instance", value: instance.id)
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+                .disabled(engineBusy)
+                Button("Remote Access…") {
+                    openWindow(id: "remote-access", value: instance.id)
                     NSApp.activate(ignoringOtherApps: true)
                 }
                 .disabled(engineBusy)
@@ -518,6 +537,7 @@ struct MenuContent: View {
         alert.informativeText = """
             The app moves to the Trash and can be rebuilt at any time.
             Its account data (chats and login) is kept unless you tick below.
+            Remote Access is disabled first, interrupting any remote tasks.
             """
         alert.alertStyle = .warning
         let purge = NSButton(checkboxWithTitle: "Also move this account's data to the Trash", target: nil, action: nil)
