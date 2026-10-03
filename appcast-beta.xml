@@ -6,21 +6,20 @@
         <description>Signed Doppel releases</description>
         <language>en</language>
         <item>
-            <title>2.0.0-beta-3</title>
-            <pubDate>Sat, 03 Oct 2026 12:54:58 +0100</pubDate>
+            <title>2.0.0-beta-4</title>
+            <pubDate>Sat, 03 Oct 2026 15:54:40 +0100</pubDate>
             <link>https://github.com/thomast8/doppel</link>
-            <sparkle:version>28</sparkle:version>
-            <sparkle:shortVersionString>2.0.0-beta-3</sparkle:shortVersionString>
+            <sparkle:version>29</sparkle:version>
+            <sparkle:shortVersionString>2.0.0-beta-4</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[# Doppel 2.0.0-beta-3
+            <description sparkle:format="markdown"><![CDATA[# Doppel 2.0.0-beta-4
 
-- The menu now notices engine changes made from the `doppel` command line within a few minutes, instead of showing an instance on official ChatGPT until you click Refresh.
-- Running a profile on official ChatGPT is now under each instance's Fallback Engine submenu. Clones are the normal engine, so the menu no longer leads with it. A profile actually on the fallback still shows that at the top, with Switch Back to Doppel Engine.
-- Includes everything in stable 1.1.13 and the Remote Access features from beta-2.
+- After you disable Remote Access for a profile, Enable works again without signing in a second time. Doppel still checks that the live account matches the one you confirmed before it turns access back on.
+- Beta builds now point at the beta update feed by default, so a beta install keeps receiving later betas.
 
-This is a beta. Remote Access limits from beta-2 still apply: the Mac must stay awake and logged in, and macOS 14 execution, logout/login recovery and network-loss recovery still need broader testing.
+This is a beta. Remote Access limits from earlier betas still apply: the Mac must stay awake and logged in, and macOS 14 execution, logout/login recovery and network-loss recovery still need broader testing.
 ]]></description>
-            <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.0-beta-3/Doppel-2.0.0-beta-3-macOS.zip" length="7749288" type="application/octet-stream" sparkle:edSignature="31ihQk/CyRhYas3txR11D/ibBqXvoYibcfF5/iYkU89/zNhXXzaG6FqWaQkYyXPHeKRJfca2SbiQCZFDiu7xBQ=="/>
+            <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.0-beta-4/Doppel-2.0.0-beta-4-macOS.zip" length="7752279" type="application/octet-stream" sparkle:edSignature="rYT6ndhOVYNkrwj8GadXb83XsF5Cq8s1x2otnGu94fIGpYASoGmBrVaDHSUafrBUOUbUndoBLyI2tvmLjEU8Aw=="/>
         </item>
         <item>
             <title>1.1.13</title>
