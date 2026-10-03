@@ -24,7 +24,7 @@ readonly UNIVERSAL="${DOPPEL_UNIVERSAL:-0}"
 # Ad-hoc builds can still use EdDSA-verified Sparkle updates for personal use.
 readonly SIGN_ID="${DOPPEL_SIGN_ID:--}"
 readonly DOPPEL_VERSION="${DOPPEL_VERSION:-2.0.0-beta-3}"
-readonly DOPPEL_BUILD="${DOPPEL_BUILD:-26}"
+readonly DOPPEL_BUILD="${DOPPEL_BUILD:-28}"
 readonly DOPPEL_BUNDLE_ID="${DOPPEL_BUNDLE_ID:-ai.doppel.menubar}"
 readonly SPARKLE_FEED_URL="${DOPPEL_SPARKLE_FEED_URL:-https://raw.githubusercontent.com/thomast8/doppel/main/appcast.xml}"
 readonly SPARKLE_PUBLIC_KEY="${DOPPEL_SPARKLE_PUBLIC_KEY:-}"
