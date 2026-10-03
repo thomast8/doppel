@@ -91,6 +91,7 @@ cleanup() {
     /bin/rm -rf "$DOPPEL_DIR/instances/$SIBLING_SLUG" 2>/dev/null || true
     /bin/rm -rf "$DOPPEL_DIR/state/Removed/$SLUG."*(N) 2>/dev/null || true
     /bin/rm -rf "$DOPPEL_DIR/state/com.openai.codex.doppel-$SLUG" 2>/dev/null || true
+    /bin/rmdir "$DOPPEL_DIR/state/Removed" 2>/dev/null || true
     [[ -n "$final" ]] && /bin/rm -f "$(pin_file "$final")" 2>/dev/null
     /bin/rm -rf "$SCRATCH" 2>/dev/null || true
     return 0
