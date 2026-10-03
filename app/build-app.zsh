@@ -23,8 +23,8 @@ readonly UNIVERSAL="${DOPPEL_UNIVERSAL:-0}"
 # Developer ID build; from there notarisation is only notarytool plus stapling.
 # Ad-hoc builds can still use EdDSA-verified Sparkle updates for personal use.
 readonly SIGN_ID="${DOPPEL_SIGN_ID:--}"
-readonly DOPPEL_VERSION="${DOPPEL_VERSION:-2.0.0-beta-4}"
-readonly DOPPEL_BUILD="${DOPPEL_BUILD:-29}"
+readonly DOPPEL_VERSION="${DOPPEL_VERSION:-2.0.0-beta-5}"
+readonly DOPPEL_BUILD="${DOPPEL_BUILD:-30}"
 readonly DOPPEL_BUNDLE_ID="${DOPPEL_BUNDLE_ID:-ai.doppel.menubar}"
 # A beta version embeds the beta feed, so the standard packaging path keeps a
 # beta install on later betas instead of the stable 1.x feed.
