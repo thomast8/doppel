@@ -6,26 +6,35 @@
         <description>Signed Doppel releases</description>
         <language>en</language>
         <item>
-            <title>2.0.0-beta-2</title>
-            <pubDate>Fri, 02 Oct 2026 21:38:10 +0200</pubDate>
+            <title>2.0.0-beta-3</title>
+            <pubDate>Sat, 03 Oct 2026 12:54:58 +0100</pubDate>
             <link>https://github.com/thomast8/doppel</link>
-            <sparkle:version>26</sparkle:version>
-            <sparkle:shortVersionString>2.0.0-beta-2</sparkle:shortVersionString>
+            <sparkle:version>28</sparkle:version>
+            <sparkle:shortVersionString>2.0.0-beta-3</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[# Doppel 2.0.0-beta-2
+            <description sparkle:format="markdown"><![CDATA[# Doppel 2.0.0-beta-3
 
-- Switch update channels using Receive Beta Updates in the Doppel menu. Your selection persists after updating; switching off waits for a newer stable release.
-- Set up iPhone Codex access from each profile's new Remote Access window. Keep Personal and Work as separate phone connections with independently signed-in accounts and managed runtimes.
-- Choose your existing LAN or private network, including Meshnet. Doppel supplies the connection details and an iPhone-compatible PEM key without enabling macOS Remote Login.
-- Check the live remote account, replace a phone key, update one remote runtime, or revoke a connection from the GUI. Remote Access remains off until you enable it.
+- The menu now notices engine changes made from the `doppel` command line within a few minutes, instead of showing an instance on official ChatGPT until you click Refresh.
+- Running a profile on official ChatGPT is now under each instance's Fallback Engine submenu. Clones are the normal engine, so the menu no longer leads with it. A profile actually on the fallback still shows that at the top, with Switch Back to Doppel Engine.
+- Includes everything in stable 1.1.13 and the Remote Access features from beta-2.
 
-- Includes the latest merged desktop changes: cloned-app launches by default, Creator Micro support, in-app browser status, and fixes for permission probes, rebuild alerts and rollback backups.
-
-Remote tasks use the Mac user's filesystem permissions. The Mac must remain awake and logged in. Desktop history, Browser, Computer Use and cloud synchronization are outside this release.
-
-This is a beta. Two-account iPhone task routing, cold recovery and reconnect coexistence were tested on the current Mac and iPhone. macOS 14 execution, logout/login recovery and network-loss recovery still need broader testing.
+This is a beta. Remote Access limits from beta-2 still apply: the Mac must stay awake and logged in, and macOS 14 execution, logout/login recovery and network-loss recovery still need broader testing.
 ]]></description>
-            <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.0-beta-2/Doppel-2.0.0-beta-2-macOS.zip" length="7749145" type="application/octet-stream" sparkle:edSignature="bbfximyK8lQvDoZPYSTxxA7Uq6dbEJJoLnlWWPaGGdTQSxh1Dy4Gna+0HCmqCMvzVwyl4DAYQpbGHCjuneNCCg=="/>
+            <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.0-beta-3/Doppel-2.0.0-beta-3-macOS.zip" length="7749288" type="application/octet-stream" sparkle:edSignature="31ihQk/CyRhYas3txR11D/ibBqXvoYibcfF5/iYkU89/zNhXXzaG6FqWaQkYyXPHeKRJfca2SbiQCZFDiu7xBQ=="/>
+        </item>
+        <item>
+            <title>1.1.13</title>
+            <pubDate>Sat, 03 Oct 2026 13:39:18 +0200</pubDate>
+            <link>https://github.com/thomast8/doppel</link>
+            <sparkle:version>27</sparkle:version>
+            <sparkle:shortVersionString>1.1.13</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Doppel 1.1.13
+
+- The menu now notices engine changes made from the `doppel` command line within a few minutes, instead of showing an instance on official ChatGPT until you click Refresh.
+- Running a profile on official ChatGPT is now under each instance's Fallback Engine submenu. Clones are the normal engine, so the menu no longer leads with it. A profile actually on the fallback still shows that at the top, with Switch Back to Doppel Engine.
+]]></description>
+            <enclosure url="https://github.com/thomast8/doppel/releases/download/v1.1.13/Doppel-1.1.13-macOS.zip" length="3147970" type="application/octet-stream" sparkle:edSignature="LOgP8BAeHFxRWh+33c6LrSuQy1ayCqqHg/dh0mClIBooQt2pLwHRS1Dwr9S7YJ9lTqHHnk7/giWlaxgG/omJDg=="/>
         </item>
         <item>
             <title>1.1.12</title>
@@ -40,22 +49,6 @@ This is a beta. Two-account iPhone task routing, cold recovery and reconnect coe
 - Includes the latest merged clone-engine, Creator Micro and permission-probe fixes.
 ]]></description>
             <enclosure url="https://github.com/thomast8/doppel/releases/download/v1.1.12/Doppel-1.1.12-macOS.zip" length="3148344" type="application/octet-stream" sparkle:edSignature="Mhm9VoN5K0CJMcHCxtJ8At19NUZlPX0fO4PB3VX04LtZZNAFAXpoVyjUNMO9aiTnB/vsMd04pEOICWRwRPfTAg=="/>
-        </item>
-        <item>
-            <title>1.1.11</title>
-            <pubDate>Thu, 01 Oct 2026 17:10:32 +0100</pubDate>
-            <link>https://github.com/thomast8/doppel</link>
-            <sparkle:version>23</sparkle:version>
-            <sparkle:shortVersionString>1.1.11</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[# Doppel 1.1.11
-
-- macOS no longer shows "You can't open the application ….app.rollback because it may be damaged or incomplete". Doppel now hides the backup it keeps from each rebuild as a plain folder, so macOS no longer treats it as a broken app. Existing backups are converted the next time Doppel repairs them (`native-tools repair`).
-- An error dialog left open after a failed rebuild no longer blocks Doppel. Before, every later launch or rebuild failed with "another Doppel engine operation is already in progress" until the dialog was closed. Each instance picks up the fix on its next rebuild.
-- `native-tools status` now shows whether the in-app browser works inside each running instance. Current ChatGPT builds allow it in instances. If a future build blocks it again, the status says so, and you can give that profile the built-in browser instead.
-- Installing ChatGPT updates no longer stalls on a suspended permission check, and instances build again from ChatGPT build 12404.
-]]></description>
-            <enclosure url="https://github.com/thomast8/doppel/releases/download/v1.1.11/Doppel-1.1.11-macOS.zip" length="3031078" type="application/octet-stream" sparkle:edSignature="Ylt9y3P+RELeIwy14JeY/bj4z1Ssc7oSpCjgehXheqS1EoMfBxmKSxTeCML/C0zTdNd317cJRrlgzFvDKhpWAw=="/>
         </item>
     </channel>
 </rss>
