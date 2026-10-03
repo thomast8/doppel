@@ -216,20 +216,16 @@ struct MenuContent: View {
             let permissions = store.permissionStatuses.filter { $0.instanceID == instance.id }
             let engineBusy = store.engineOperationBusy
             Menu {
+                // The Doppel engine is the normal case and needs no label; only
+                // the fallback is worth surfacing at the top.
                 if instance.usesBuiltInBrowser {
                     Label("Engine — Official ChatGPT (fallback)", systemImage: "checkmark.shield.fill")
                     Button("Switch Back to Doppel Engine") {
                         store.releaseBuiltInBrowser()
                     }
                     .disabled(engineBusy)
-                } else {
-                    Label("Engine — Doppel", systemImage: "square.stack.3d.up")
-                    Button("Run on Official ChatGPT Instead") {
-                        store.assignBuiltInBrowser(to: instance)
-                    }
-                    .disabled(engineBusy || !store.primaryInstalled)
+                    Divider()
                 }
-                Divider()
                 Menu(instance.usesBuiltInBrowser
                      ? "Fallback Doppel Permissions"
                      : "Privacy Permissions") {
@@ -276,6 +272,15 @@ struct MenuContent: View {
                     NSApp.activate(ignoringOtherApps: true)
                 }
                 .disabled(engineBusy)
+                if !instance.usesBuiltInBrowser {
+                    Menu("Fallback Engine") {
+                        Text("Only if a ChatGPT update breaks this clone.")
+                        Button("Run on Official ChatGPT Instead") {
+                            store.assignBuiltInBrowser(to: instance)
+                        }
+                        .disabled(engineBusy || !store.primaryInstalled)
+                    }
+                }
                 Divider()
                 Button("Remove…") { confirmRemove(instance) }
                     .disabled(engineBusy)
@@ -349,9 +354,6 @@ struct MenuContent: View {
                     Label("In-app browser — Not available in instances",
                           systemImage: "xmark.circle")
                     Text("ChatGPT only opens it for an app signed by OpenAI.")
-                } else {
-                    Label("Built-in browser — Not assigned", systemImage: "circle.dotted")
-                    Text("Every instance runs on its Doppel engine.")
                 }
                 if status.browserHosts.isEmpty {
                     Label("Browser extension — Not installed", systemImage: "circle.dotted")

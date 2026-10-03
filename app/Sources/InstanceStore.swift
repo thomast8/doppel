@@ -118,10 +118,9 @@ final class InstanceStore: ObservableObject {
             Task { @MainActor in self?.checkForUpdates() }
         }
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 5 * 60, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.checkPermissions()
-                self?.checkNativeTools()
-            }
+            // reload() re-reads the instance list before both checks, so an
+            // engine switch made from the CLI reaches the menu too.
+            Task { @MainActor in self?.reload() }
         }
     }
 
