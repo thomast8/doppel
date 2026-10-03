@@ -195,7 +195,14 @@ public final class RemoteAccessController {
             emit(login)
             try await rpc.waitForLogin(loginId: login.loginId)
             let result = try await rpc.readIdentity(expectedHome: store.home(config.remoteId).path)
-            try requireIdentity(result, configuration: config, allowUnconfirmed: true)
+            // Signing in on a disabled profile is an explicit account change, so
+            // the old pin no longer applies. The desktop match is still enforced,
+            // and Enable pins the account the user confirms next.
+            var unpinned = config
+            unpinned.expectedAccountId = nil
+            unpinned.expectedEmail = nil
+            try requireIdentity(result, configuration: unpinned, allowUnconfirmed: true)
+            if config.expectedAccountId != nil || config.expectedEmail != nil { try store.save(unpinned) }
             await rpc.close()
         } catch {
             await rpc.close()

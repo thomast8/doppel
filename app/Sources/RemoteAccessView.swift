@@ -23,6 +23,12 @@ final class RemoteAccessModel: ObservableObject {
         return status.remoteId != nil && status.bindAddress == selectedAddress && !selectedAddress.isEmpty
     }
 
+    /// Replace Key and Update Runtime run on a disabled profile, and on a ready
+    /// one by disabling and re-enabling around the change.
+    nonisolated static func showsMaintenanceActions(_ status: RemoteAccessStatus) -> Bool {
+        status.remoteId != nil && (!status.enabled || status.state == .ready)
+    }
+
     nonisolated static func shouldRestoreAfterDisruption(wasEnabled: Bool) -> Bool { wasEnabled }
 
     /// A disabled profile has no running daemon, so its status carries only the
@@ -378,7 +384,7 @@ struct RemoteAccessView: View {
                     Button("Connection Saved") { model.restoreClipboard() }
                 }
                 HStack {
-                    if ready {
+                    if RemoteAccessModel.showsMaintenanceActions(status) {
                         Button("Replace Key") { confirm("Replace the key? Existing phone connections will stop working, and running tasks will be interrupted.") { model.disruptiveAction(store: store, profile: profile, command: "replace-key") } }
                         Button("Update Runtime") { confirm("Update runtime? Running tasks may be interrupted.") { model.disruptiveAction(store: store, profile: profile, command: "update-runtime", timeout: 600) } }
                     }

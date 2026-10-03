@@ -70,6 +70,15 @@ final class RemoteAccessGUITests: XCTestCase {
         XCTAssertFalse(RemoteAccessModel.canEnable(status, selectedAddress: "192.168.1.20", identityConfirmed: false))
     }
 
+    func testMaintenanceActionsStayAvailableWhileDisabled() throws {
+        func status(_ state: String, enabled: Bool) throws -> RemoteAccessStatus {
+            try RemoteAccessStatus.parse(Data(#"{"schemaVersion":1,"profileSlug":"personal","remoteId":"012345abcdef","state":"\#(state)","enabled":\#(enabled),"networks":[]}"#.utf8))
+        }
+        XCTAssertTrue(RemoteAccessModel.showsMaintenanceActions(try status("disabled", enabled: false)))
+        XCTAssertTrue(RemoteAccessModel.showsMaintenanceActions(try status("ready", enabled: true)))
+        XCTAssertFalse(RemoteAccessModel.showsMaintenanceActions(try status("networkUnavailable", enabled: true)))
+    }
+
     func testRejectsUnsupportedStatusVersion() {
         let json = #"{"schemaVersion":2,"profileSlug":"personal","state":"ready","enabled":true,"networks":[]}"#
         XCTAssertThrowsError(try RemoteAccessStatus.parse(Data(json.utf8)))
