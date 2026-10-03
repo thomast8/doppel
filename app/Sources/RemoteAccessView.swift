@@ -25,9 +25,13 @@ final class RemoteAccessModel: ObservableObject {
 
     nonisolated static func shouldRestoreAfterDisruption(wasEnabled: Bool) -> Bool { wasEnabled }
 
+    /// A disabled profile has no running daemon, so its status carries only the
+    /// saved account and no live check. That is enough to offer Enable: the
+    /// helper starts the runtime and refuses unless the live identity matches
+    /// the account and email confirmed here.
     nonisolated static func canEnable(_ status: RemoteAccessStatus?, selectedAddress: String,
                                       identityConfirmed: Bool) -> Bool {
-        guard let status, status.state != .blocked, status.checkedAt != nil,
+        guard let status, status.state != .blocked,
               let email = status.email, !email.isEmpty,
               let account = status.accountId, !account.isEmpty,
               identityConfirmed else { return false }

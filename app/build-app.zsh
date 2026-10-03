@@ -26,7 +26,14 @@ readonly SIGN_ID="${DOPPEL_SIGN_ID:--}"
 readonly DOPPEL_VERSION="${DOPPEL_VERSION:-2.0.0-beta-3}"
 readonly DOPPEL_BUILD="${DOPPEL_BUILD:-28}"
 readonly DOPPEL_BUNDLE_ID="${DOPPEL_BUNDLE_ID:-ai.doppel.menubar}"
-readonly SPARKLE_FEED_URL="${DOPPEL_SPARKLE_FEED_URL:-https://raw.githubusercontent.com/thomast8/doppel/main/appcast.xml}"
+# A beta version embeds the beta feed, so the standard packaging path keeps a
+# beta install on later betas instead of the stable 1.x feed.
+if [[ "$DOPPEL_VERSION" == *-beta* ]]; then
+    readonly DEFAULT_FEED_URL="https://raw.githubusercontent.com/thomast8/doppel/codex/remote-access-2-0/appcast-beta.xml"
+else
+    readonly DEFAULT_FEED_URL="https://raw.githubusercontent.com/thomast8/doppel/main/appcast.xml"
+fi
+readonly SPARKLE_FEED_URL="${DOPPEL_SPARKLE_FEED_URL:-$DEFAULT_FEED_URL}"
 readonly SPARKLE_PUBLIC_KEY="${DOPPEL_SPARKLE_PUBLIC_KEY:-}"
 readonly SINGLE_INSTANCE_LOCK_NAME="${DOPPEL_SINGLE_INSTANCE_LOCK_NAME:-}"
 readonly SWIFT_SCRATCH="${DOPPEL_SWIFT_SCRATCH_PATH:-$APP_SRC/.build}"
