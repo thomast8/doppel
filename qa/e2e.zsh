@@ -144,6 +144,9 @@ cleanup() {
     # (N) keeps an unmatched glob quiet: zsh otherwise reports it itself, before
     # the redirection on the command can swallow anything.
     /bin/rm -rf "$HOME/Library/Application Support/Doppel/state/Removed/$SLUG."*(N) 2>/dev/null || true
+    /bin/rm -rf "$HOME/Library/Application Support/Doppel/state/com.openai.codex.doppel-$SLUG" 2>/dev/null || true
+    # rmdir leaves Removed alone when it still holds someone's undo records.
+    /bin/rmdir "$HOME/Library/Application Support/Doppel/state/Removed" 2>/dev/null || true
 }
 trap cleanup EXIT
 
