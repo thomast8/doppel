@@ -1563,10 +1563,18 @@ cmd_micro() {
             print -r -- "Creator Micro released; only official ChatGPT will use it"
             ;;
         status)
-            [[ $# -eq 0 ]] || die "usage: doppel micro status"
+            [[ $# -eq 0 || ( $# -eq 1 && "$1" == "--porcelain" ) ]] || \
+                die "usage: doppel micro status [--porcelain]"
             slug=""
             [[ -r "$CODEX_MICRO_OWNER_FILE" ]] && { IFS= read -r slug < "$CODEX_MICRO_OWNER_FILE" || true }
-            if [[ -n "$slug" && "$slug" != *[^a-z0-9-]* ]] && is_instance_dir "$INSTANCES_ROOT/$slug"; then
+            if [[ -z "$slug" || "$slug" == *[^a-z0-9-]* ]] || ! is_instance_dir "$INSTANCES_ROOT/$slug"; then
+                slug=""
+            fi
+            if [[ "${1:-}" == "--porcelain" ]]; then
+                printf 'owner\t%s\n' "$slug"
+                return
+            fi
+            if [[ -n "$slug" ]]; then
                 print -r -- "Creator Micro: $(config_value "$INSTANCES_ROOT/$slug" DOPPEL_DISPLAY_NAME)"
             else
                 print -r -- "Creator Micro: no clone assigned"

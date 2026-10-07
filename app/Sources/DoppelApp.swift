@@ -322,6 +322,36 @@ struct MenuContent: View {
         } else if store.checkingPermissions {
             Text("Checking Managed App Permissions…")
         }
+        Menu("Creator Micro") {
+            if store.checkingCreatorMicro {
+                Text("Checking assignment…")
+            } else if !store.creatorMicroStatusAvailable {
+                Text("Assignment unavailable")
+            } else if let owner = store.instances.first(where: { $0.id == store.creatorMicroOwnerID }) {
+                Text("Assigned to \(owner.name)")
+            } else {
+                Text("No Doppel instance assigned")
+            }
+            Divider()
+            ForEach(store.instances) { instance in
+                Button {
+                    store.assignCreatorMicro(to: instance)
+                } label: {
+                    if store.creatorMicroOwnerID == instance.id {
+                        Label(instance.name, systemImage: "checkmark")
+                    } else {
+                        Text(instance.name)
+                    }
+                }
+                .disabled(store.checkingCreatorMicro || store.busy.contains("creator-micro"))
+            }
+            Button("Release Assignment") { store.releaseCreatorMicro() }
+                .disabled(store.creatorMicroOwnerID == nil || store.checkingCreatorMicro
+                          || store.busy.contains("creator-micro"))
+            Divider()
+            Text("Restart affected instances to apply changes.")
+            Text("Official ChatGPT also uses the keypad when running.")
+        }
         Menu("Native Tools") {
             if let status = store.nativeToolsStatus {
                 Label(status.computerUse == .ready
