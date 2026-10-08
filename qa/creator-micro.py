@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise Creator Micro assignment through the real CLI in isolated state."""
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -13,7 +14,10 @@ with tempfile.TemporaryDirectory(prefix="doppel-micro-") as scratch:
     for slug, name in [("personal", "ChatGPT Personal"), ("veridue", "ChatGPT Veridue")]:
         instance = root / "instances" / slug
         instance.mkdir(parents=True)
-        (instance / "instance-config.zsh").write_text(f'DOPPEL_DISPLAY_NAME="{name}"\n')
+        (instance / "instance-config.zsh").write_text(
+            f'DOPPEL_DISPLAY_NAME="{name}"\n'
+            f'DOPPEL_BUNDLE_ID="ai.doppel.fixture.{slug}"\n')
+        (instance / "install-root").write_text(str(root / "apps") + "\n")
 
     def run(*arguments, success=True):
         result = subprocess.run(["/bin/zsh", str(cli), "micro", *arguments],
@@ -37,3 +41,104 @@ with tempfile.TemporaryDirectory(prefix="doppel-micro-") as scratch:
     run("status", "--bad-option", success=False)
 
 print("Creator Micro CLI QA passed")
+
+# Exercise the actual lifecycle functions with controlled process/AppleEvent
+# boundaries; the real CLI checks above cover dispatch, locking and persistence.
+source = cli.read_text()
+functions = "\n".join(re.search(rf"^{name}\(\) \{{.*?^\}}", source, re.M | re.S)[0]
+                      for name in ["reopen_clone_instances", "cmd_micro_change", "cmd_micro",
+                                   "cmd_browser_assign", "cmd_browser_release"])
+stubs = r'''
+set -eu
+INSTANCES_ROOT="$QA_ROOT/instances"
+CODEX_MICRO_OWNER_FILE="$QA_ROOT/state/owner"
+IAB_SLOT_FILE="$QA_ROOT/state/browser"
+PRIMARY_APP=official
+PRIMARY_BUNDLE_ID=official
+mkdir -p "$INSTANCES_ROOT/old" "$INSTANCES_ROOT/new" "$QA_ROOT/state"
+die() { print -u2 -r -- "$*"; exit 1; }
+config_value() { print -r -- "${1:t}"; }
+app_path_for() { print -r -- "${1:t}"; }
+is_instance_dir() { [[ -d "$1" ]]; }
+instance_dir_for() { [[ -d "$INSTANCES_ROOT/$1" ]] || die unknown; print -r -- "$INSTANCES_ROOT/$1"; }
+with_iab_operation_lock() { "$@"; }
+clone_instance_is_running() { [[ -f "$QA_ROOT/running-${1:t}" ]]; }
+any_chatgpt_process_uses_profile() { clone_instance_is_running "$1" || vendor_instance_is_running "$1"; }
+vendor_instance_is_running() { [[ -f "$QA_ROOT/vendor-${1:t}" ]]; }
+quit_instance() {
+    print -r -- "quit:$1" >> "$QA_ROOT/events"
+    [[ "$1" != "${QA_REFUSE:-}" ]] || die refused
+    if [[ "$1" == official ]]; then
+        rm -f "$QA_ROOT"/vendor-*(N)
+    else
+        rm -f "$QA_ROOT/running-$1"
+    fi
+}
+launch_clone_instance() {
+    print -r -- "clone:${1:t}" >> "$QA_ROOT/events"
+    [[ "${1:t}" != "${QA_FAIL_LAUNCH:-}" ]] || die launch-failed
+    touch "$QA_ROOT/running-${1:t}"
+}
+launch_vendor_instance() { print -r -- "vendor:${1:t}" >> "$QA_ROOT/events"; touch "$QA_ROOT/vendor-${1:t}"; }
+validate_vendor_app() { return 0; }
+require_transparent_router_profile() { return 0; }
+require_compatible_transparent_router_profile() { return 0; }
+require_vendor_compatible_profile() { return 0; }
+iab_slot_slug() { cat "$IAB_SLOT_FILE" 2>/dev/null || true; }
+write_iab_slot() { print -r -- "$1" > "$IAB_SLOT_FILE"; }
+clear_iab_slot() { rm -f "$IAB_SLOT_FILE"; }
+raw_vendor_profile_pids() { vendor_instance_is_running "$1" && print -r -- 123 || true; }
+other_vendor_engine_is_running() { [[ -f "$QA_ROOT/vendor-other" ]]; }
+vendor_main_pids() { [[ -n "$(print -r -- "$QA_ROOT"/vendor-*(N))" ]] && print -r -- 123 || true; }
+write_iab_runtime_receipt() { :; }
+primary_version() { print -r -- 1; }
+'''
+
+
+def lifecycle(command, *, owner="old", browser="", running=(), vendor=(),
+              refuse="", fail_launch="", success=True, events=(), expected_owner="old",
+              expected_browser=""):
+    with tempfile.TemporaryDirectory(prefix="doppel-restart-") as scratch:
+        root = Path(scratch)
+        (root / "state").mkdir()
+        if owner:
+            (root / "state/owner").write_text(owner + "\n")
+        if browser:
+            (root / "state/browser").write_text(browser + "\n")
+        for name in running:
+            (root / f"running-{name}").touch()
+        for name in vendor:
+            (root / f"vendor-{name}").touch()
+        result = subprocess.run(["/bin/zsh", "-c", stubs + functions + "\n" + command],
+                                env={**os.environ, "QA_ROOT": scratch, "QA_REFUSE": refuse,
+                                     "QA_FAIL_LAUNCH": fail_launch}, capture_output=True, text=True)
+        assert (result.returncode == 0) == success, (command, result.stderr)
+        log = root / "events"
+        assert (log.read_text().splitlines() if log.exists() else []) == list(events), command
+        for path, expected in [("owner", expected_owner), ("browser", expected_browser)]:
+            record = root / "state" / path
+            assert (record.read_text().strip() if record.exists() else "") == expected, command
+
+
+lifecycle("cmd_micro assign new", running=("old", "new", "unrelated"),
+          events=("quit:old", "quit:new", "clone:old", "clone:new"), expected_owner="new")
+lifecycle("cmd_micro assign new", running=("old",),
+          events=("quit:old", "clone:old"), expected_owner="new")
+lifecycle("cmd_micro assign old", running=("old",), events=("quit:old", "clone:old"))
+lifecycle("cmd_micro release", running=("old",), events=("quit:old", "clone:old"), expected_owner="")
+lifecycle("cmd_micro assign new", running=("old", "new"), refuse="new", success=False,
+          events=("quit:old", "quit:new", "clone:old"))
+lifecycle("cmd_micro assign new", running=("old", "new"), fail_launch="old", success=False,
+          events=("quit:old", "quit:new", "clone:old", "clone:new"), expected_owner="new")
+lifecycle("cmd_browser_assign --quit-running new", browser="old", vendor=("old",), running=("new",),
+          events=("quit:official", "quit:new", "clone:old", "vendor:new"), expected_browser="new")
+lifecycle('touch "$QA_ROOT/no-dir"; CODEX_MICRO_OWNER_FILE="$QA_ROOT/no-dir/owner"; cmd_micro assign new',
+          running=("new",), success=False, events=("quit:new", "clone:new"))
+lifecycle("cmd_browser_assign --quit-running new", browser="old", expected_browser="new")
+lifecycle("cmd_browser_release --quit-running", browser="old", vendor=("old",),
+          events=("quit:official", "clone:old"))
+lifecycle("cmd_browser_release", browser="old", vendor=("old",), success=False, expected_browser="old")
+lifecycle("cmd_browser_release --quit-running", browser="old", vendor=("old",), refuse="official",
+          success=False, events=("quit:official",), expected_browser="old")
+lifecycle("cmd_browser_release --quit-running", browser="old")
+print("Automatic restart lifecycle QA passed")

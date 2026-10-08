@@ -216,20 +216,20 @@ final class InstanceStore: ObservableObject {
     private func confirmQuitAndAssignBrowser(to instance: Instance, detail: String) {
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Quit ChatGPT and assign Browser?"
+        alert.messageText = "Restart ChatGPT and assign Browser?"
         let reason = detail
             .replacingOccurrences(of: "doppel: ", with: "")
             .replacingOccurrences(
                 of: "the Browser assignment needs running ChatGPT apps to quit: ",
                 with: "")
         alert.informativeText = """
-            Doppel needs to close the official ChatGPT window or managed instance involved before assigning the built-in Browser to \(instance.name). Other Doppel clones will stay open.
+            Doppel will close the affected ChatGPT apps and reopen running managed instances after assigning the built-in Browser to \(instance.name). Other Doppel clones will stay open.
 
             \(reason)
 
             Save any unfinished drafts before continuing.
             """
-        alert.addButton(withTitle: "Quit and Assign")
+        alert.addButton(withTitle: "Restart and Assign")
         alert.addButton(withTitle: "Cancel")
         alert.buttons[0].hasDestructiveAction = true
         alert.buttons[0].keyEquivalent = ""
@@ -242,20 +242,20 @@ final class InstanceStore: ObservableObject {
     }
 
     func releaseBuiltInBrowser() {
-        runCLI(["browser", "release"], busyKey: "iab-slot") { [weak self] failure in
-            if failure == nil { self?.reload() }
+        runCLI(["browser", "release", "--quit-running"], busyKey: "iab-slot") { [weak self] _ in
+            self?.reload()
         }
     }
 
     func assignCreatorMicro(to instance: Instance) {
-        runCLI(["micro", "assign", instance.name], busyKey: "creator-micro") { [weak self] failure in
-            if failure == nil { self?.checkCreatorMicro() }
+        runCLI(["micro", "assign", instance.name], busyKey: "creator-micro") { [weak self] _ in
+            self?.checkCreatorMicro()
         }
     }
 
     func releaseCreatorMicro() {
-        runCLI(["micro", "release"], busyKey: "creator-micro") { [weak self] failure in
-            if failure == nil { self?.checkCreatorMicro() }
+        runCLI(["micro", "release"], busyKey: "creator-micro") { [weak self] _ in
+            self?.checkCreatorMicro()
         }
     }
 
@@ -293,7 +293,7 @@ final class InstanceStore: ObservableObject {
     /// Mirrors the CLI's global engine-operation lock so the menu avoids
     /// offering operations that would only be refused as concurrent work.
     var engineOperationBusy: Bool {
-        busy.contains("iab-slot") || busy.contains("update") || busy.contains("signing") ||
+        busy.contains("creator-micro") || busy.contains("iab-slot") || busy.contains("update") || busy.contains("signing") ||
             busy.contains("create") || instances.contains { busy.contains($0.id) }
     }
 

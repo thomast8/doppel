@@ -343,13 +343,13 @@ struct MenuContent: View {
                         Text(instance.name)
                     }
                 }
-                .disabled(store.checkingCreatorMicro || store.busy.contains("creator-micro"))
+                .disabled(store.checkingCreatorMicro || store.engineOperationBusy)
             }
             Button("Release Assignment") { store.releaseCreatorMicro() }
                 .disabled(store.creatorMicroOwnerID == nil || store.checkingCreatorMicro
-                          || store.busy.contains("creator-micro"))
+                          || store.engineOperationBusy)
             Divider()
-            Text("Restart affected instances to apply changes.")
+            Text("Running affected instances restart automatically.")
             Text("Official ChatGPT also uses the keypad when running.")
         }
         Menu("Native Tools") {

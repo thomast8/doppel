@@ -1451,11 +1451,23 @@ cmd_browser_assign() {
     fi
 
     write_iab_slot "${dir:t}"
+    local restart_failed=0
+    if (( current_running )); then
+        ( launch_clone_instance "$current_dir" ) || restart_failed=1
+    fi
+    if (( target_clone_running )) || [[ -n "$target_vendor_pids" ]]; then
+        ( launch_vendor_instance "$dir" ) || restart_failed=1
+    fi
+    (( ! restart_failed )) || die "Browser assigned, but an affected instance could not reopen. Launch it again from Doppel."
     print -r -- "built-in browser assigned to: $name"
 }
 
 cmd_browser_release() {
-    [[ $# -eq 0 ]] || die "usage: doppel browser release"
+    local quit_running=0 was_running=0
+    if [[ "${1:-}" == "--quit-running" ]]; then
+        quit_running=1; shift
+    fi
+    [[ $# -eq 0 ]] || die "usage: doppel browser release [--quit-running]"
     local slug dir name
     slug="$(iab_slot_slug)"
     if [[ -z "$slug" ]]; then
@@ -1469,10 +1481,23 @@ cmd_browser_release() {
     fi
     dir="$INSTANCES_ROOT/$slug"
     name="$(config_value "$dir" DOPPEL_DISPLAY_NAME)"
-    any_chatgpt_process_uses_profile "$dir" && \
-        die "'$name' is using a ChatGPT engine. Quit it before releasing the built-in browser."
     require_vendor_compatible_profile "$dir"
+    if any_chatgpt_process_uses_profile "$dir"; then
+        (( quit_running )) || die "'$name' is using a ChatGPT engine. Quit it before releasing the built-in browser."
+        if clone_instance_is_running "$dir"; then
+            quit_instance "$(app_path_for "$dir")" "$(config_value "$dir" DOPPEL_BUNDLE_ID)" "$name"
+        elif vendor_instance_is_running "$dir"; then
+            quit_instance "$PRIMARY_APP" "$PRIMARY_BUNDLE_ID" "ChatGPT"
+        else
+            die "'$name' is using an untracked ChatGPT engine. Quit it before releasing the built-in browser."
+        fi
+        any_chatgpt_process_uses_profile "$dir" && die "'$name' is still running; Browser assignment was not changed."
+        was_running=1
+    fi
     clear_iab_slot
+    if (( was_running )); then
+        ( launch_clone_instance "$dir" ) || die "Browser released, but '$name' could not reopen. Launch it again from Doppel."
+    fi
     print -r -- "built-in browser released from: $name"
 }
 
@@ -1541,27 +1566,68 @@ cmd_browser() {
 # press used to reach them all. Clones are patched to ignore it unless named
 # here; the engine reads this file when a clone starts. Stock ChatGPT cannot be
 # patched and listens whenever it runs.
+reopen_clone_instances() {
+    local dir failed=0
+    for dir in "$@"; do
+        ( launch_clone_instance "$dir" ) || failed=1
+    done
+    return "$failed"
+}
+
+cmd_micro_change() {
+    local action="$1" dir="" slug previous="" staged failure
+    shift
+    if [[ "$action" == assign ]]; then
+        [[ $# -eq 1 ]] || die "usage: doppel micro assign <name>"
+        dir="$(instance_dir_for "$1")"
+    else
+        [[ $# -eq 0 ]] || die "usage: doppel micro release"
+    fi
+    slug="$(cmd_micro status --porcelain)"
+    slug="${slug#*$'\t'}"
+    [[ -z "$slug" ]] || previous="$INSTANCES_ROOT/$slug"
+    local -a affected=("$previous" "$dir") running=() closed=()
+    for slug in "${(@u)affected}"; do
+        [[ -n "$slug" ]] || continue
+        clone_instance_is_running "$slug" && running+=("$slug")
+    done
+    for slug in "${running[@]}"; do
+        if failure="$(quit_instance "$(app_path_for "$slug")" \
+            "$(config_value "$slug" DOPPEL_BUNDLE_ID)" \
+            "$(config_value "$slug" DOPPEL_DISPLAY_NAME)" 2>&1)"; then
+            closed+=("$slug")
+        else
+            reopen_clone_instances "${closed[@]}" || true
+            die "$failure; Creator Micro assignment was not changed."
+        fi
+    done
+    if [[ "$action" == assign ]]; then
+        # Stage before replacing the owner so a failed write preserves it.
+        if ! ( staged=""; trap '[[ -z "$staged" ]] || /bin/rm -f "$staged"' EXIT
+            /bin/mkdir -p "${CODEX_MICRO_OWNER_FILE:h}" &&
+            staged="$(/usr/bin/mktemp "${CODEX_MICRO_OWNER_FILE}.XXXXXXXX")" &&
+            { print -r -- "${dir:t}" > "$staged" && /bin/mv "$staged" "$CODEX_MICRO_OWNER_FILE"; } ); then
+            reopen_clone_instances "${closed[@]}" || true
+            die "could not save the Creator Micro assignment"
+        fi
+    elif ! /bin/rm -f "$CODEX_MICRO_OWNER_FILE"; then
+        reopen_clone_instances "${closed[@]}" || true
+        die "could not clear the Creator Micro assignment"
+    fi
+    reopen_clone_instances "${closed[@]}" || \
+        die "Creator Micro assignment saved, but an affected instance could not reopen. Launch it again from Doppel."
+    if [[ "$action" == assign ]]; then
+        print -r -- "Creator Micro assigned to: $(config_value "$dir" DOPPEL_DISPLAY_NAME)"
+    else
+        print -r -- "Creator Micro released; only official ChatGPT will use it"
+    fi
+}
+
 cmd_micro() {
-    local action="${1:-status}" dir slug staged
+    local action="${1:-status}" slug
     (( $# > 0 )) && shift
     case "$action" in
-        assign)
-            [[ $# -eq 1 ]] || die "usage: doppel micro assign <name>"
-            dir="$(instance_dir_for "$1")"
-            /bin/mkdir -p "${CODEX_MICRO_OWNER_FILE:h}"
-            staged="$(/usr/bin/mktemp "${CODEX_MICRO_OWNER_FILE}.XXXXXXXX")" || \
-                die "could not stage the Creator Micro assignment"
-            if ! print -r -- "${dir:t}" > "$staged" || ! /bin/mv "$staged" "$CODEX_MICRO_OWNER_FILE"; then
-                /bin/rm -f "$staged"
-                die "could not save the Creator Micro assignment"
-            fi
-            print -r -- "Creator Micro assigned to: $(config_value "$dir" DOPPEL_DISPLAY_NAME) (takes effect when it next starts)"
-            ;;
-        release)
-            [[ $# -eq 0 ]] || die "usage: doppel micro release"
-            /bin/rm -f "$CODEX_MICRO_OWNER_FILE" || die "could not clear the Creator Micro assignment"
-            print -r -- "Creator Micro released; only official ChatGPT will use it"
-            ;;
+        assign|release) with_iab_operation_lock cmd_micro_change "$action" "$@" ;;
         status)
             [[ $# -eq 0 || ( $# -eq 1 && "$1" == "--porcelain" ) ]] || \
                 die "usage: doppel micro status [--porcelain]"
@@ -3565,7 +3631,7 @@ if [[ "${1:-}" == "__iab-worker" ]]; then
     readonly IAB_WORKER_OPERATION="$3"
     shift 3
     case "$IAB_WORKER_OPERATION" in
-        cmd_create|cmd_launch|cmd_route_launch|cmd_rebuild|cmd_edit|cmd_remove|cmd_browser_assign|cmd_browser_release|cmd_update_apply)
+        cmd_create|cmd_launch|cmd_route_launch|cmd_rebuild|cmd_edit|cmd_remove|cmd_browser_assign|cmd_browser_release|cmd_micro_change|cmd_update_apply)
             "$IAB_WORKER_OPERATION" "$@"
             exit $?
             ;;
