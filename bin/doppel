@@ -2279,7 +2279,7 @@ cmd_update_prepare() {
     archive="$UPDATE_ROOT/Downloads/ChatGPT-$latest_version.zip"
     if [[ ! -f "$archive" ]]; then
         print -u2 -r -- "Downloading ChatGPT $latest_short…"
-        /usr/bin/curl --fail --show-error --location --retry 3 --retry-all-errors --retry-delay 2 \
+        /usr/bin/curl --fail --silent --show-error --location --retry 3 --retry-all-errors --retry-delay 2 \
             --continue-at - --output "$partial" "$latest_url" || \
             die "downloading ChatGPT $latest_short failed; the partial download was kept for retry"
         /bin/mv "$partial" "$archive" || die "finishing the ChatGPT download failed"
