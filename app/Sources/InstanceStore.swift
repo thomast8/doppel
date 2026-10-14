@@ -35,6 +35,9 @@ final class InstanceStore: ObservableObject {
     @Published var checkingPermissions = false
     @Published var nativeToolsStatus: NativeToolsStatus?
     @Published var checkingNativeTools = false
+    @Published var creatorMicroOwnerID: String?
+    @Published var checkingCreatorMicro = false
+    @Published var creatorMicroStatusAvailable = false
     private var remoteProcesses: [UUID: RemoteCLIProcess] = [:]
 
     var permissionIssues: [PermissionIssue] { permissionStatuses.filter(\.needsAttention) }
@@ -177,6 +180,7 @@ final class InstanceStore: ObservableObject {
                     self.instances = Self.parsePorcelain(stdout).sorted { $0.name < $1.name }
                     self.checkPermissions()
                     self.checkNativeTools()
+                    self.checkCreatorMicro()
                 }
             }
         }
@@ -212,20 +216,20 @@ final class InstanceStore: ObservableObject {
     private func confirmQuitAndAssignBrowser(to instance: Instance, detail: String) {
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Quit ChatGPT and assign Browser?"
+        alert.messageText = "Restart ChatGPT and assign Browser?"
         let reason = detail
             .replacingOccurrences(of: "doppel: ", with: "")
             .replacingOccurrences(
                 of: "the Browser assignment needs running ChatGPT apps to quit: ",
                 with: "")
         alert.informativeText = """
-            Doppel needs to close the official ChatGPT window or managed instance involved before assigning the built-in Browser to \(instance.name). Other Doppel clones will stay open.
+            Doppel will close the affected ChatGPT apps and reopen running managed instances after assigning the built-in Browser to \(instance.name). Other Doppel clones will stay open.
 
             \(reason)
 
             Save any unfinished drafts before continuing.
             """
-        alert.addButton(withTitle: "Quit and Assign")
+        alert.addButton(withTitle: "Restart and Assign")
         alert.addButton(withTitle: "Cancel")
         alert.buttons[0].hasDestructiveAction = true
         alert.buttons[0].keyEquivalent = ""
@@ -238,8 +242,42 @@ final class InstanceStore: ObservableObject {
     }
 
     func releaseBuiltInBrowser() {
-        runCLI(["browser", "release"], busyKey: "iab-slot") { [weak self] failure in
-            if failure == nil { self?.reload() }
+        runCLI(["browser", "release", "--quit-running"], busyKey: "iab-slot") { [weak self] _ in
+            self?.reload()
+        }
+    }
+
+    func assignCreatorMicro(to instance: Instance) {
+        runCLI(["micro", "assign", instance.name], busyKey: "creator-micro") { [weak self] _ in
+            self?.checkCreatorMicro()
+        }
+    }
+
+    func releaseCreatorMicro() {
+        runCLI(["micro", "release"], busyKey: "creator-micro") { [weak self] _ in
+            self?.checkCreatorMicro()
+        }
+    }
+
+    func checkCreatorMicro() {
+        guard !checkingCreatorMicro, !busy.contains("creator-micro"), let cli = discoveredCLI else { return }
+        checkingCreatorMicro = true
+        Task.detached { [weak self] in
+            let result = Self.runProcess(cli: cli, arguments: ["micro", "status", "--porcelain"])
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.checkingCreatorMicro = false
+                switch result {
+                case .failure(let message):
+                    self.creatorMicroStatusAvailable = false
+                    self.creatorMicroOwnerID = nil
+                    self.report(message, for: "creator-micro-status")
+                case .success(let output):
+                    self.clearReport(for: "creator-micro-status")
+                    self.creatorMicroStatusAvailable = true
+                    self.creatorMicroOwnerID = Self.parseCreatorMicroOwner(output)
+                }
+            }
         }
     }
 
@@ -255,7 +293,7 @@ final class InstanceStore: ObservableObject {
     /// Mirrors the CLI's global engine-operation lock so the menu avoids
     /// offering operations that would only be refused as concurrent work.
     var engineOperationBusy: Bool {
-        busy.contains("iab-slot") || busy.contains("update") || busy.contains("signing") ||
+        busy.contains("creator-micro") || busy.contains("iab-slot") || busy.contains("update") || busy.contains("signing") ||
             busy.contains("create") || instances.contains { busy.contains($0.id) }
     }
 
@@ -791,6 +829,13 @@ final class InstanceStore: ObservableObject {
                     : .clone
             )
         }
+    }
+
+    nonisolated static func parseCreatorMicroOwner(_ output: String) -> String? {
+        let fields = output.trimmingCharacters(in: .newlines)
+            .split(separator: "\t", omittingEmptySubsequences: false)
+        guard fields.count == 2, fields[0] == "owner", !fields[1].isEmpty else { return nil }
+        return String(fields[1])
     }
 
     nonisolated private static func runProcess(cli: URL, arguments: [String]) -> ProcessResult {

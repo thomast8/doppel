@@ -280,6 +280,9 @@ OUT="$(run_engine launch "$INSTANCE_APP" || true)"
 # stale, foreign or malformed owner must leave the clone off the pad.
 print -r -- "only the clone named by doppel micro opts into the Creator Micro"
 stop_stubs
+# Release the simulated coordinator from the earlier authorized-launch case.
+/bin/rm -f "$DOPPEL_STATE/IABCoordinator.lock/pid"
+/bin/rmdir "$DOPPEL_STATE/IABCoordinator.lock"
 readonly MICRO_HOME="$FIXTURE_HOME/Library/Application Support/Doppel"
 /bin/mkdir -p "$MICRO_HOME/instances/engine-qa"
 /bin/cp "$ASSETS/instance-config.zsh" "$MICRO_HOME/instances/engine-qa/"
@@ -289,7 +292,7 @@ micro_check() {
         /bin/zsh -c "$(/usr/bin/sed -n -e '/^managed_slug_for_this_profile()/,/^}/p' \
             -e '/^codex_micro_owner_is_this_profile()/,/^}/p' "$ENGINE")"$'\ncodex_micro_owner_is_this_profile'
 }
-OUT="$(micro_cli assign "ChatGPT Engine QA")"
+OUT="$(micro_cli assign "ChatGPT Engine QA")" || { print -u2 -r -- "$OUT"; exit 1; }
 [[ "$OUT" == *"assigned to: ChatGPT Engine QA"* ]] && micro_check \
     && [[ "$(micro_cli status)" == *"Creator Micro: ChatGPT Engine QA"* ]] \
     && pass "an assigned clone is opted in at launch" \

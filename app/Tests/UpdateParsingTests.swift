@@ -7,6 +7,13 @@ import XCTest
 // practice, so this uses the mature one. `app/test.zsh` finds a toolchain that
 // has it, whatever `xcode-select` happens to point at.
 final class UpdateParsingTests: XCTestCase {
+    func testCreatorMicroAssignmentParsing() {
+        XCTAssertEqual(InstanceStore.parseCreatorMicroOwner("owner\tchatgpt-veridue\n"), "chatgpt-veridue")
+        XCTAssertNil(InstanceStore.parseCreatorMicroOwner("owner\t\n"))
+        XCTAssertNil(InstanceStore.parseCreatorMicroOwner("Creator Micro: no clone assigned\n"))
+        XCTAssertNil(InstanceStore.parseCreatorMicroOwner("owner\tfirst\tsecond\n"))
+    }
+
     // Kept so every assertion below reads exactly as it did when this was a
     // standalone program. The only change is that a failure now reports its own
     // call site and the run keeps going instead of exiting on the first one.
