@@ -396,6 +396,8 @@ with the Command Line Tools, and a Mac can have Xcode installed while
 toolchain that has XCTest instead of asking you to change that global setting.
 The `qa/` suites need nothing beyond macOS.
 
+Failed actions show a short message instead of command output. When the disk is writable, the original CLI diagnostics are saved locally to `~/Library/Logs/Doppel/cli-errors.log`, readable only by your account.
+
 A menu-bar-only front end (`LSUIElement`, so no Dock icon): list instances,
 launch, rebuild, rename, recolour or remove them, coordinate ChatGPT updates,
 create a new one from a name plus a colour picker, toggle **Start at Login**, or
