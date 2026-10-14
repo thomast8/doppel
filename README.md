@@ -189,8 +189,10 @@ bin/doppel prune "ChatGPT Personal"                  # just this instance's
 
 The menu-bar app's **Creator Micro** submenu assigns the keypad to a Doppel
 instance and shows the current selection. **Release Assignment** stops managed
-clones from using it. Restart the previously assigned and newly selected
-instances to apply a change; Doppel does not close them automatically. Official
+clones from using it, including when the assigned instance was removed. Doppel
+automatically restarts running previously assigned and newly selected instances
+to apply a change; closed instances stay closed. Save unfinished drafts before
+changing the assignment. Selecting the current owner leaves it running. Official
 ChatGPT also uses the keypad whenever it is running.
 
 `rebuild` opens the rebuilt instance when it succeeds, even if the instance was

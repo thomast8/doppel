@@ -1586,6 +1586,10 @@ cmd_micro_change() {
     slug="$(cmd_micro status --porcelain)"
     slug="${slug#*$'\t'}"
     [[ -z "$slug" ]] || previous="$INSTANCES_ROOT/$slug"
+    if [[ "$action" == assign && "$previous" == "$dir" ]]; then
+        print -r -- "Creator Micro already assigned to: $(config_value "$dir" DOPPEL_DISPLAY_NAME)"
+        return 0
+    fi
     local -a affected=("$previous" "$dir") running=() closed=()
     for slug in "${(@u)affected}"; do
         [[ -n "$slug" ]] || continue

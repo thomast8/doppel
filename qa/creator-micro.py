@@ -31,6 +31,10 @@ with tempfile.TemporaryDirectory(prefix="doppel-micro-") as scratch:
     assert "Creator Micro: ChatGPT Veridue\n" in run("status")
     run("assign", "ChatGPT Personal")
     assert run("status", "--porcelain") == "owner\tpersonal\n"
+    owner_file = root / "state" / "codex-micro-owner"
+    previous_stamp = owner_file.stat().st_mtime_ns
+    assert "already assigned" in run("assign", "ChatGPT Personal")
+    assert owner_file.stat().st_mtime_ns == previous_stamp
     run("assign", "Missing Instance", success=False)
     assert run("status", "--porcelain") == "owner\tpersonal\n"
     run("release")
@@ -38,6 +42,8 @@ with tempfile.TemporaryDirectory(prefix="doppel-micro-") as scratch:
     for invalid in ["missing-instance", "../personal"]:
         (root / "state" / "codex-micro-owner").write_text(invalid + "\n")
         assert run("status", "--porcelain") == "owner\t\n"
+        run("release")
+        assert not (root / "state" / "codex-micro-owner").exists()
     run("status", "--bad-option", success=False)
 
 print("Creator Micro CLI QA passed")
@@ -124,7 +130,7 @@ lifecycle("cmd_micro assign new", running=("old", "new", "unrelated"),
           events=("quit:old", "quit:new", "clone:old", "clone:new"), expected_owner="new")
 lifecycle("cmd_micro assign new", running=("old",),
           events=("quit:old", "clone:old"), expected_owner="new")
-lifecycle("cmd_micro assign old", running=("old",), events=("quit:old", "clone:old"))
+lifecycle("cmd_micro assign old", running=("old",))
 lifecycle("cmd_micro release", running=("old",), events=("quit:old", "clone:old"), expected_owner="")
 lifecycle("cmd_micro assign new", running=("old", "new"), refuse="new", success=False,
           events=("quit:old", "quit:new", "clone:old"))

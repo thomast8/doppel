@@ -346,8 +346,7 @@ struct MenuContent: View {
                 .disabled(store.checkingCreatorMicro || store.engineOperationBusy)
             }
             Button("Release Assignment") { store.releaseCreatorMicro() }
-                .disabled(store.creatorMicroOwnerID == nil || store.checkingCreatorMicro
-                          || store.engineOperationBusy)
+                .disabled(store.checkingCreatorMicro || store.engineOperationBusy)
             Divider()
             Text("Running affected instances restart automatically.")
             Text("Official ChatGPT also uses the keypad when running.")
