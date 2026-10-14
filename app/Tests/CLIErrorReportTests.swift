@@ -17,6 +17,11 @@ final class CLIErrorReportTests: XCTestCase {
                        "downloading ChatGPT failed; the partial download was kept for retry")
     }
 
+    func testInstanceNameCannotBeMistakenForDiskSpaceFailure() {
+        XCTAssertEqual(CLIErrorReport.summary("doppel: 'No space left on device' is not installed"),
+                       "'No space left on device' is not installed")
+    }
+
     func testPreservesShortActionableMessages() {
         XCTAssertEqual(CLIErrorReport.summary("  Another update is already in progress.\n"),
                        "Another update is already in progress.")
@@ -28,6 +33,20 @@ final class CLIErrorReportTests: XCTestCase {
             XCTAssertEqual(CLIErrorReport.summary(output),
                            "Doppel could not complete the operation. Check its local logs for details.")
         }
+    }
+
+    func testExistingLogIsMadePrivateBeforeAppending() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let log = directory.appendingPathComponent("cli-errors.log")
+        try "previous failure\n".write(to: log, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: log.path)
+        try CLIErrorReport.record("new failure", arguments: ["update", "prepare"], to: log)
+        let attributes = try FileManager.default.attributesOfItem(atPath: log.path)
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+        let contents = try String(contentsOf: log, encoding: .utf8)
+        XCTAssertTrue(contents.hasPrefix("previous failure\n"))
+        XCTAssertTrue(contents.contains("new failure"))
     }
 
     func testRecordsOriginalDiagnosticsWithoutOverwritingPreviousFailure() throws {

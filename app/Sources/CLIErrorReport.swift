@@ -9,7 +9,7 @@ enum CLIErrorReport {
         let lines = output.split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-        if lines.contains(where: { $0.localizedCaseInsensitiveContains("No space left on device") }) {
+        if lines.contains(where: { $0.hasPrefix("ditto: ") && $0.hasSuffix(": No space left on device") }) {
             return "Your Mac ran out of disk space. Free up some space, then try again."
         }
         if let failure = lines.last(where: { $0.hasPrefix("doppel: ") }) {
@@ -32,6 +32,9 @@ enum CLIErrorReport {
         guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         defer { try? handle.close() }
+        guard fchmod(descriptor, S_IRUSR | S_IWUSR) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
         let entry = "\(Date().ISO8601Format()) doppel \(arguments.joined(separator: " "))\n\(output)\n\n"
         try handle.write(contentsOf: Data(entry.utf8))
     }
