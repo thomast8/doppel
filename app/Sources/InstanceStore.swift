@@ -802,7 +802,7 @@ final class InstanceStore: ObservableObject {
         reported[key] = message
         let alert = NSAlert()
         alert.messageText = "Doppel could not finish that"
-        alert.informativeText = message
+        alert.informativeText = CLIErrorReport.summary(message)
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
         present(alert)
@@ -858,9 +858,9 @@ final class InstanceStore: ObservableObject {
                 let detail = !stderr.isEmpty
                     ? stderr
                     : stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-                return .failure(detail.isEmpty
-                                ? "doppel exited \(process.terminationStatus)"
-                                : detail)
+                let message = detail.isEmpty ? "doppel exited \(process.terminationStatus)" : detail
+                try? CLIErrorReport.record(message, arguments: arguments, to: CLIErrorReport.logURL)
+                return .failure(CLIErrorReport.summary(message))
             }
             return .success(stdout)
         } catch {
