@@ -133,6 +133,8 @@ QUEUED_OPEN_URL_HANDLER = re.compile(
 # single scope and same-looking names still get distinct groups.
 # Build 12404 wraps the same handler in a guarded function and registers a
 # universal-link listener before draining. Preserve both shipped layouts.
+# Build 31256 skips the deep-link callback for one route kind
+# (``n.kind!==`wakeQueuedThread`&&d?.(...)``), so that guard is optional.
 DRAINED_OPEN_URL_HANDLER = re.compile(
     rb"(?P<prefix>(?:if\([A-Za-z_$][A-Za-z0-9_$]*\)\{|"
     rb"function [A-Za-z_$][A-Za-z0-9_$]*\(\)\{if\(!"
@@ -142,6 +144,7 @@ DRAINED_OPEN_URL_HANDLER = re.compile(
     rb"\)=>\{let (?P<route>[A-Za-z_$][A-Za-z0-9_$]*)="
     rb"(?P<parse>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=url)\);if\((?P=route)\)\{"
     rb"(?P<queue>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=route)\),"
+    rb"(?:(?P=route)\.kind!==`[A-Za-z]+`&&)?"
     rb"(?P<callback>[A-Za-z_$][A-Za-z0-9_$]*)\?\.\("
     rb"(?P<source>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=route)(?:,(?P=url))?\)\)),"
     rb"(?P<suffix>(?P=event)\?\.preventDefault\(\);return\}let "
