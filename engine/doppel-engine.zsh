@@ -11,7 +11,7 @@
 set -u
 setopt PIPE_FAIL
 
-readonly ENGINE_VERSION="30"
+readonly ENGINE_VERSION="31"
 
 # When this engine copy runs from inside an installed bundle, environment
 # overrides are ignored: otherwise a same-uid process could point a
@@ -676,6 +676,35 @@ release_rebuild_lock() {
     /bin/rmdir "$lock"
 }
 
+exchange_app_contents() {
+    /usr/bin/python3 - "$1/Contents" "$2/Contents" <<'PYEXCHANGE'
+import ctypes, errno, os, sys
+left, right = sys.argv[1:]
+libc = ctypes.CDLL(None, use_errno=True)
+if libc.renamex_np(os.fsencode(left), os.fsencode(right), 2) == 0:  # RENAME_SWAP
+    sys.exit(0)
+error = ctypes.get_errno()
+if error not in (errno.ENOTSUP, errno.EINVAL):
+    raise OSError(error, os.strerror(error))
+# Some writable installation filesystems lack atomic exchange. Keep the old
+# Contents beside the new one until both same-volume renames have succeeded.
+holding = right + '.doppel-swap'
+if os.path.lexists(holding):
+    raise FileExistsError(holding)
+os.rename(left, holding)
+try:
+    os.rename(right, left)
+    try:
+        os.rename(holding, right)
+    except OSError:
+        os.rename(left, right)
+        raise
+except OSError:
+    os.rename(holding, left)
+    raise
+PYEXCHANGE
+}
+
 managed_slug_for_this_profile() {
     local doppel_home="$HOME/Library/Application Support/Doppel"
     if [[ "${DOPPEL_DEV:-0}" == "1" ]]; then
@@ -715,24 +744,26 @@ consume_clone_launch_authorization() {
 }
 
 route_managed_engine() {
-    local slug output status
+    local slug mode token extra
     slug="$(managed_slug_for_this_profile)"
     [[ -n "$slug" ]] || return 1
     [[ -x "$ROUTER_CLI" ]] || \
         fail_closed "This profile owns Built-in Browser, but its signed engine router is missing. Rebuild it from Doppel."
     log_message "Direct app launch entered locked engine routing"
-    output="$("$ROUTER_CLI" __route-launch "$slug" "$@" 2>&1)"
-    status=$?
-    if (( status != 0 )); then
-        output="${output#doppel: }"
-        [[ -n "$output" ]] || output="The assigned official engine could not be started."
-        fail_closed "$output"
+    # Read permission to continue while the coordinator retains its lock until
+    # this exact process execs the runtime. Reopening the app splits its Dock tile.
+    coproc "$ROUTER_CLI" __route-launch-in-place "$slug" "$$" "$@" 2>&1
+    if ! IFS=$'\t' read -r -p mode token extra; then
+        fail_closed "The engine coordinator did not authorize this launcher."
     fi
-    [[ -n "$output" ]] && log_message "$output"
-    # The official process now owns this profile. Returning to launch_instance
-    # would open ChatGPT.real as well, so a successful handoff always ends the
-    # locally signed launcher process here.
-    exit 0
+    if [[ "$mode" == clone && -z "$extra" ]]; then
+        consume_clone_launch_authorization "$slug:$token" || \
+            fail_closed "The engine coordinator's launch authorization was not valid."
+        return 0
+    fi
+    [[ "$mode" == routed && -z "$token" && -z "$extra" ]] && exit 0
+    mode="${mode#doppel: }"
+    fail_closed "${mode:-The assigned engine could not be started.}"
 }
 
 # True when this launch carries something the app itself has to receive, which
@@ -948,8 +979,8 @@ launch_instance() {
             return 0
         fi
         # Every known managed profile enters the CLI's one authoritative lock,
-        # even when it currently uses the fallback clone. The CLI relaunches a
-        # clone with a private one-shot marker that is consumed above. This
+        # even when it currently uses the fallback clone. The CLI authorizes
+        # this original process with a private one-shot token. This
         # closes Finder-launch versus Browser-assignment races without holding
         # the global lock for the lifetime of the GUI app.
         (( authorized_clone )) || route_managed_engine "$@" || true
@@ -960,25 +991,47 @@ launch_instance() {
         fail_closed "There is already an app at $app and it is not a Doppel instance. Move it aside first; Doppel will not replace it."
 
     validate_primary
-    local lock staging timestamp backup_root backup
+    local lock staging timestamp backup_root backup staging_root=""
     # The exit inside acquire_rebuild_lock only kills the $(...) subshell;
     # without this status check a concurrent rebuild would proceed unlocked.
     lock="$(acquire_rebuild_lock)" || exit 1
     timestamp="$(/bin/date '+%Y%m%d-%H%M%S')"
     staging="$STATE_ROOT/Staging/$DOPPEL_DISPLAY_NAME.$version.$timestamp.$$.app"
+    if [[ "${DOPPEL_INSTALL_ONLY:-0}" != "1" ]]; then
+        # Keep the app directory macOS launched; stage on its filesystem so
+        # replacing Contents cannot turn into a cross-volume copy and removal.
+        staging_root="$(/usr/bin/mktemp -d "${app:h}/.doppel-rebuild.XXXXXXXX")" || \
+            fail_closed "A staging directory beside the instance could not be created."
+        trap '/bin/rm -rf "$staging_root"' EXIT
+        staging="$staging_root/${app:t}"
+    fi
     build_instance "$staging" "$version" "$executable_hash"
 
     backup_root="$STATE_ROOT/Backups"
     mkdir -p "$backup_root"
     backup="$backup_root/$DOPPEL_DISPLAY_NAME.$timestamp.$$.app.rollback"
-    if [[ -e "$app" ]]; then
+    if [[ -n "$staging_root" ]]; then
+        if ! /bin/cp -cR "$app" "$backup" 2>/dev/null; then
+            /bin/rm -rf "$backup"
+            /usr/bin/ditto "$app" "$backup" || fail_closed "The existing instance could not be copied to rollback storage."
+        fi
+        mask_rollback_app "$backup" || fail_closed "The previous app could not be hidden safely in rollback storage."
+        exchange_app_contents "$app" "$staging" || fail_closed "Installing the rebuilt contents failed; the previous app and rollback were preserved."
+        if ! instance_is_healthy "$app" "$version" "$executable_hash"; then
+            exchange_app_contents "$app" "$staging" || \
+                fail_closed "The rebuilt app failed verification AND restoration failed; recover the previous app from $backup"
+            fail_closed "The rebuilt app failed verification; the previous app was restored."
+        fi
+        /bin/rm -rf "$staging_root"
+        trap - EXIT
+    elif [[ -e "$app" ]]; then
         /bin/mv "$app" "$backup" || fail_closed "The existing instance could not be preserved as a rollback backup."
         if ! mask_rollback_app "$backup"; then
             /bin/mv "$backup" "$app" 2>/dev/null || true
             fail_closed "The previous app could not be hidden safely in rollback storage; it was restored."
         fi
     fi
-    if ! /bin/mv "$staging" "$app"; then
+    if [[ -z "$staging_root" ]] && ! /bin/mv "$staging" "$app"; then
         if [[ -e "$backup" ]]; then
             if unmask_rollback_app "$backup" && /bin/mv "$backup" "$app" 2>/dev/null; then
                 fail_closed "Installing the rebuilt instance failed; the previous app was restored."
@@ -1006,10 +1059,8 @@ launch_instance() {
     if [[ "${DOPPEL_INSTALL_ONLY:-0}" == "1" ]]; then
         return 0
     fi
-    if (( authorized_clone )); then
-        exec_clone_binary "$app" "$@"
-    fi
-    /usr/bin/open -na "$app" || fail_closed "The rebuilt instance was installed but could not be opened."
+    (( authorized_clone )) || route_managed_engine "$@" || true
+    exec_clone_binary "$app" "$@"
 }
 
 case "${1:-}" in

@@ -27,6 +27,12 @@ A wrapper that starts the same app with a different profile works, but macOS tre
 the running process as the original app: same icon, same Dock identity, and only one
 of them can pin to the Dock meaningfully. A Doppel instance is a real bundle with
 its own bundle identifier, so macOS treats it as a genuinely different app.
+The engine coordinator authorizes the original launcher to open the profile,
+holding its lock until that process becomes the running app. It does not reopen
+the bundle as a second instance, so the running app stays on its pinned Dock icon.
+Automatic startup repair also preserves the app directory used by the Dock.
+Rebuild an existing instance once after updating Doppel to install the updated
+routing.
 
 ## Coordinated ChatGPT updates
 
