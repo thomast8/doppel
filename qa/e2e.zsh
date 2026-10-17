@@ -182,7 +182,7 @@ check "registered OAuth callback scheme remains eligible" \
     "$(plist "$APP" CFBundleURLTypes.0.CFBundleURLSchemes.1)" "codex"
 check "deep-link patch recorded" "$(plist "$APP" DoppelDeepLinkScheme)" "codex-$SLUG"
 ROUTER_HASH="$(/usr/bin/shasum -a 256 "$CLI" | /usr/bin/awk '{print $1}')"
-check "transparent engine router version" "$(plist "$APP" DoppelEngineVersion)" "30"
+check "transparent engine router version" "$(plist "$APP" DoppelEngineVersion)" "31"
 check "transparent engine router hash recorded" "$(plist "$APP" DoppelRouterSHA256)" "$ROUTER_HASH"
 if [[ -x "$APP/Contents/Resources/Doppel/bin/doppel" && \
       -x "$APP/Contents/Resources/Doppel/engine/doppel-engine.zsh" && \
@@ -275,7 +275,7 @@ check "recorded as original" "$(/bin/zsh -c "source '$DIR/instance-config.zsh'; 
 
 print -r -- ""
 print -r -- "direct Finder launch enters the locked engine router"
-/usr/bin/open -na "$RENAMED_APP" >/dev/null 2>&1
+/usr/bin/open -na "$RENAMED_APP" --args --mute-audio >/dev/null 2>&1
 for _ in {1..60}; do
     /usr/bin/pgrep -f "${RENAMED_APP}/Contents/MacOS/ChatGPT.real" >/dev/null 2>&1 && break
     /bin/sleep 1

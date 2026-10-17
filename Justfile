@@ -2,6 +2,8 @@ set shell := ["zsh", "-cu"]
 
 test:
     ./app/test.zsh
+    python3 ./qa/launcher.py
+    python3 ./qa/contents.py
     python3 ./qa/creator-micro.py
     ./qa/release-notes.zsh
 

@@ -1345,6 +1345,19 @@ cmd_route_launch() {
     fi
 }
 
+cmd_route_launch_in_place() {
+    local dir
+    dir="$(instance_dir_for "$1")"
+    local IAB_IN_PLACE_LAUNCH_PID="$2"
+    shift 2
+    if instance_uses_vendor_engine "$dir"; then
+        launch_vendor_instance "$dir" "$@" >/dev/null
+        print -r -- routed
+    else
+        launch_clone_instance "$dir" "$@"
+    fi
+}
+
 cmd_browser_assign() {
     local quit_running=0
     if [[ "${1:-}" == "--quit-running" ]]; then
@@ -2499,6 +2512,20 @@ wait_for_locked_clone_adoption() {
     done
 }
 
+wait_for_in_place_clone_adoption() {
+    local app="$1" pid="$2" started="$3" receipt="$4" executable
+    # An authorization already consumed cannot be revoked by a timeout.
+    while true; do
+        [[ "$(process_start_fingerprint "$pid" 2>/dev/null || true)" == "$started" ]] || return 1
+        executable="$(/usr/sbin/lsof -p "$pid" -a -d txt -Fn 2>/dev/null | \
+            /usr/bin/awk '/^n\// { print substr($0, 2); exit }')"
+        if [[ "${executable:A}" == "${app:A}/Contents/MacOS/ChatGPT.real" && ! -e "$receipt" ]]; then
+            return 0
+        fi
+        /bin/sleep 0.1
+    done
+}
+
 write_clone_launch_authorization() {
     local dir="$1" slug="${dir:t}" bundle_id token staged target
     bundle_id="$(config_value "$dir" DOPPEL_BUNDLE_ID)"
@@ -2530,6 +2557,8 @@ clear_clone_launch_authorization() {
 # ChatGPT.real starts, and this worker keeps the lock until that process is
 # visible. Consequently a Finder launch and `browser assign` cannot cross in
 # the read-slot-to-profile-adoption gap.
+typeset -g IAB_IN_PLACE_LAUNCH_PID=""
+
 launch_clone_instance() {
     local dir="$1"
     shift
@@ -2538,12 +2567,31 @@ launch_clone_instance() {
     app="$(app_path_for "$dir")"
     if clone_instance_is_running "$dir"; then
         /usr/bin/open "$app" >/dev/null 2>&1 || true
-        print -r -- "already running with Doppel engine: $name"
+        if [[ -n "$IAB_IN_PLACE_LAUNCH_PID" ]]; then
+            print -r -- routed
+        else
+            print -r -- "already running with Doppel engine: $name"
+        fi
         return 0
     fi
     any_chatgpt_process_uses_profile "$dir" && \
         die "'$name''s Electron profile is already open through another ChatGPT app. Quit that window before launching its Doppel engine."
     [[ -d "$app" ]] || die "instance app not installed at $app; run: doppel rebuild '$name'"
+    if [[ -n "$IAB_IN_PLACE_LAUNCH_PID" ]]; then
+        local started executable
+        started="$(process_start_fingerprint "$IAB_IN_PLACE_LAUNCH_PID")" || die "the original launcher exited before routing"
+        executable="$(/usr/sbin/lsof -p "$IAB_IN_PLACE_LAUNCH_PID" -a -d txt -Fn 2>/dev/null | \
+            /usr/bin/awk '/^n\// { print substr($0, 2); exit }')"
+        [[ "${executable:A}" == /bin/zsh ]] || die "the original launcher is not preparing its engine"
+        token="$(write_clone_launch_authorization "$dir")"
+        printf 'clone\t%s\n' "$token"
+        if ! wait_for_in_place_clone_adoption "$app" "$IAB_IN_PLACE_LAUNCH_PID" "$started" "$CLONE_LAUNCH_ROOT/${dir:t}"; then
+            clear_clone_launch_authorization "$dir"
+            die "the original launcher did not adopt '$name''s profile"
+        fi
+        clear_clone_launch_authorization "$dir"
+        return 0
+    fi
     token="$(write_clone_launch_authorization "$dir")"
     marker="--doppel-authorized-clone=${dir:t}:$token"
     if ! /usr/bin/open -na "$app" --args "$marker" "$@" >/dev/null; then
@@ -3635,7 +3683,7 @@ if [[ "${1:-}" == "__iab-worker" ]]; then
     readonly IAB_WORKER_OPERATION="$3"
     shift 3
     case "$IAB_WORKER_OPERATION" in
-        cmd_create|cmd_launch|cmd_route_launch|cmd_rebuild|cmd_edit|cmd_remove|cmd_browser_assign|cmd_browser_release|cmd_micro_change|cmd_update_apply)
+        cmd_create|cmd_launch|cmd_route_launch|cmd_route_launch_in_place|cmd_rebuild|cmd_edit|cmd_remove|cmd_browser_assign|cmd_browser_release|cmd_micro_change|cmd_update_apply)
             "$IAB_WORKER_OPERATION" "$@"
             exit $?
             ;;
@@ -3645,6 +3693,11 @@ fi
 
 case "${1:-}" in
     __route-launch) [[ $# -ge 2 ]] || die "invalid internal routed launch"; shift; with_iab_operation_lock cmd_route_launch "$@" ;;
+    __route-launch-in-place)
+        [[ $# -ge 3 && "$3" == <1-> && "$3" == "$PPID" ]] || die "invalid original launcher"
+        shift
+        with_iab_operation_lock cmd_route_launch_in_place "$@"
+        ;;
     create) shift; with_iab_operation_lock cmd_create "$@" ;;
     list) shift; cmd_list "$@" ;;
     launch) [[ $# -eq 2 ]] || die "usage: doppel launch <name>"; with_iab_operation_lock cmd_launch "$2" ;;

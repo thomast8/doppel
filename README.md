@@ -27,6 +27,12 @@ A wrapper that starts the same app with a different profile works, but macOS tre
 the running process as the original app: same icon, same Dock identity, and only one
 of them can pin to the Dock meaningfully. A Doppel instance is a real bundle with
 its own bundle identifier, so macOS treats it as a genuinely different app.
+The engine coordinator authorizes the original launcher to open the profile,
+holding its lock until that process becomes the running app. It does not reopen
+the bundle as a second instance, so the running app stays on its pinned Dock icon.
+Automatic startup repair also preserves the app directory used by the Dock.
+Rebuild an existing instance once after updating Doppel to install the updated
+routing.
 
 ## Coordinated ChatGPT updates
 
@@ -94,7 +100,7 @@ the official window, so it never asks.
 
 ### iPhone Remote Access
 
-The first 2.0 beta is available on the [2.0.0-beta-1 release page](https://github.com/thomast8/doppel/releases/tag/v2.0.0-beta-1). Download the ZIP, quit Doppel and install its `Doppel.app` in place of your existing menu app. Your profile data and remote connections are retained. This build receives future betas from `appcast-beta.xml`; the stable update feed stays on 1.x.
+Doppel 2.0.0 is available on the [stable release page](https://github.com/thomast8/doppel/releases/tag/v2.0.0). Download the ZIP, quit Doppel and install its `Doppel.app` in place of your existing menu app. Your profile data and remote connections are retained. Existing installations can also use Check for Updates. Rebuild each instance once to install the Dock handoff fix.
 
 Open a profile's **Remote Access…** menu item. Choose an assigned private Mac
 address, save the network, and sign in to the intended ChatGPT account using the
