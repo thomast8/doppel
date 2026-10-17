@@ -6,6 +6,25 @@
         <description>Signed Doppel releases</description>
         <language>en</language>
         <item>
+            <title>2.0.0</title>
+            <pubDate>Sat, 17 Oct 2026 18:54:55 +0100</pubDate>
+            <link>https://github.com/thomast8/doppel</link>
+            <sparkle:version>34</sparkle:version>
+            <sparkle:shortVersionString>2.0.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Doppel 2.0.0
+
+- Set up iPhone Codex access from each profile's new Remote Access window. Keep Personal and Work as separate phone connections with independently signed-in accounts and managed runtimes.
+- Choose your existing LAN or private network, including Meshnet. Doppel supplies the connection details and an iPhone-compatible PEM key without enabling macOS Remote Login.
+- Confirm the live remote account and workspace before enabling access. Replace a phone key, update one remote runtime, or switch accounts while access is disabled. Disabling access revokes the phone key before closing open sessions; you can enable it again without signing in again.
+- Choose Receive Beta Updates in the Doppel menu to switch update channels. Your selection persists after updating; switching off waits for a newer stable release.
+- Cloned apps now launch on their pinned Dock icon, and automatic startup repair preserves the app directory. Rebuild each existing instance once after updating Doppel to install the updated launcher.
+
+Remote tasks use the Mac user's filesystem permissions. The Mac must remain awake and logged in. Desktop history, Browser, Computer Use and cloud synchronization are outside this release.
+]]></description>
+            <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.0/Doppel-2.0.0-macOS.zip" length="7781905" type="application/octet-stream" sparkle:edSignature="57o74BWAWJ29oq4vylVSjqQFCP/EBT1X029SzY82OKLRYUpYcOiVykbSomeu1XJ7KCLFF9hRAem4IXLKiILeCw=="/>
+        </item>
+        <item>
             <title>2.0.0-beta-5</title>
             <pubDate>Fri, 16 Oct 2026 08:39:35 +0100</pubDate>
             <link>https://github.com/thomast8/doppel</link>
@@ -40,25 +59,6 @@ Includes [PR #55](https://github.com/thomast8/doppel/pull/55) and [PR #54](https
 This remains a beta. Remote Access requires the Mac to stay awake and logged in. Menu-click and physical-keypad reconnection QA remain incomplete, and macOS 14 execution, logout/login recovery, and network-loss recovery still need broader testing.
 </description>
             <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.0-beta-4/Doppel-2.0.0-beta-4-macOS.zip" length="7780588" type="application/octet-stream" sparkle:edSignature="A4n35L/yqULSvQHmrf7GKk6UPtIp1hG5ne4snNN6NEAg31aRKzGFyqq1i2f8Jj4GOVH0BAIZKkPyKJYLIH/3Cw=="/>
-        </item>
-        <item>
-            <title>2.0.0-beta-3</title>
-            <pubDate>Sat, 03 Oct 2026 17:07:04 +0100</pubDate>
-            <link>https://github.com/thomast8/doppel</link>
-            <sparkle:version>31</sparkle:version>
-            <sparkle:shortVersionString>2.0.0-beta-3</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[# Doppel 2.0.0-beta-3
-
-- Disabling Remote Access now revokes the phone key before it closes open sessions, so a phone that connects at that moment can't slip in and keep running.
-- You can switch a disabled profile to a different ChatGPT account, and Enable works again after Disable without signing in a second time. Doppel still checks that the live account matches the one you confirm before turning access on.
-- Replace Key and Update Runtime now appear while a profile is disabled, which is when they can run.
-- The menu notices engine changes made from the `doppel` command line within a few minutes. Running a profile on official ChatGPT now lives under each instance's Fallback Engine submenu, since clones are the normal engine.
-- Beta builds point at the beta update feed by default, so a beta install keeps receiving later betas.
-
-This is a beta. Remote Access limits from beta-2 still apply: the Mac must stay awake and logged in, and macOS 14 execution, logout/login recovery and network-loss recovery still need broader testing.
-]]></description>
-            <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.0-beta-3/Doppel-2.0.0-beta-3-macOS.zip" length="7752940" type="application/octet-stream" sparkle:edSignature="qMiooeD0t2YkbpZO6G+kThsvFTYGdUS8CNy3BDRPXaVHmF5+QeTIkG0iQA0UNO/HodUkbo13A5aeglth1kBjAg=="/>
         </item>
     </channel>
 </rss>
