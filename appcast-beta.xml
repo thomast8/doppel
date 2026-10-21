@@ -6,6 +6,21 @@
         <description>Signed Doppel releases</description>
         <language>en</language>
         <item>
+            <title>2.0.1</title>
+            <pubDate>Wed, 21 Oct 2026 13:30:33 +0100</pubDate>
+            <link>https://github.com/thomast8/doppel</link>
+            <sparkle:version>35</sparkle:version>
+            <sparkle:shortVersionString>2.0.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Doppel 2.0.1
+
+- Fixes ChatGPT updates that left Personal and Veridue stuck on the old build. ChatGPT 26.1016 changed how it reports its OAuth callback, and Doppel could not patch it.
+- Doppel now tests a new ChatGPT build against its patcher before closing or replacing anything. If the build is not compatible yet, the update stops with a clear message and your current apps keep working.
+- After updating Doppel, run the ChatGPT update again from the Doppel menu if you are still on 26.1013.
+]]></description>
+            <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.1/Doppel-2.0.1-macOS.zip" length="7656344" type="application/octet-stream" sparkle:edSignature="Li0CyrUafmVfeWkRAjmVfaK9CmV3IsxDNkhYGRDvwK4iG2lusGpcqtMFaST4GAHEqbPZZRyd0mDJUmaef1iJDw=="/>
+        </item>
+        <item>
             <title>2.0.0</title>
             <pubDate>Sat, 17 Oct 2026 18:54:55 +0100</pubDate>
             <link>https://github.com/thomast8/doppel</link>
@@ -40,25 +55,6 @@ Includes [PR #56](https://github.com/thomast8/doppel/pull/56).
 This remains a beta. Remote Access requires the Mac to stay awake and logged in. Menu-click and physical-keypad reconnection QA remain incomplete, and macOS 14 execution, logout/login recovery, and network-loss recovery still need broader testing.
 ]]></description>
             <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.0-beta-5/Doppel-2.0.0-beta-5-macOS.zip" length="7781222" type="application/octet-stream" sparkle:edSignature="A5NehbCmh7FtipY/W+SZgoZEYywZMYibDG3IzjfaQqU8uBkLw4WXj60D40VH0k7ZdXv87HfBNgD0RStlaY0CBg=="/>
-        </item>
-        <item>
-            <title>2.0.0-beta-4</title>
-            <pubDate>Wed, 14 Oct 2026 11:59:07 +0100</pubDate>
-            <link>https://github.com/thomast8/doppel</link>
-            <sparkle:version>32</sparkle:version>
-            <sparkle:shortVersionString>2.0.0-beta-4</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"># Doppel 2.0.0-beta-4
-
-- Failed actions now show short messages instead of command-output dumps. For example, a disk-full extraction error tells you to free space and retry. Full CLI diagnostics are saved locally with owner-only permissions.
-- Assign Creator Micro to a managed instance from Doppel’s menu. Assignment changes automatically restart affected running instances; selecting the current owner leaves it alone. Save unfinished drafts before changing the assignment. Official ChatGPT also uses the keypad while it runs.
-- Release Assignment can clear an old assignment after its instance was removed.
-
-Includes [PR #55](https://github.com/thomast8/doppel/pull/55) and [PR #54](https://github.com/thomast8/doppel/pull/54).
-
-This remains a beta. Remote Access requires the Mac to stay awake and logged in. Menu-click and physical-keypad reconnection QA remain incomplete, and macOS 14 execution, logout/login recovery, and network-loss recovery still need broader testing.
-</description>
-            <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.0-beta-4/Doppel-2.0.0-beta-4-macOS.zip" length="7780588" type="application/octet-stream" sparkle:edSignature="A4n35L/yqULSvQHmrf7GKk6UPtIp1hG5ne4snNN6NEAg31aRKzGFyqq1i2f8Jj4GOVH0BAIZKkPyKJYLIH/3Cw=="/>
         </item>
     </channel>
 </rss>
