@@ -6,6 +6,21 @@
         <description>Signed Doppel releases</description>
         <language>en</language>
         <item>
+            <title>2.0.1</title>
+            <pubDate>Wed, 21 Oct 2026 13:30:33 +0100</pubDate>
+            <link>https://github.com/thomast8/doppel</link>
+            <sparkle:version>35</sparkle:version>
+            <sparkle:shortVersionString>2.0.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Doppel 2.0.1
+
+- Fixes ChatGPT updates that left Personal and Veridue stuck on the old build. ChatGPT 26.1016 changed how it reports its OAuth callback, and Doppel could not patch it.
+- Doppel now tests a new ChatGPT build against its patcher before closing or replacing anything. If the build is not compatible yet, the update stops with a clear message and your current apps keep working.
+- After updating Doppel, run the ChatGPT update again from the Doppel menu if you are still on 26.1013.
+]]></description>
+            <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.1/Doppel-2.0.1-macOS.zip" length="7656344" type="application/octet-stream" sparkle:edSignature="Li0CyrUafmVfeWkRAjmVfaK9CmV3IsxDNkhYGRDvwK4iG2lusGpcqtMFaST4GAHEqbPZZRyd0mDJUmaef1iJDw=="/>
+        </item>
+        <item>
             <title>2.0.0</title>
             <pubDate>Sat, 17 Oct 2026 18:54:55 +0100</pubDate>
             <link>https://github.com/thomast8/doppel</link>
@@ -37,20 +52,6 @@ Remote tasks use the Mac user's filesystem permissions. The Mac must remain awak
 - Running a profile on official ChatGPT is now under each instance's Fallback Engine submenu. Clones are the normal engine, so the menu no longer leads with it. A profile actually on the fallback still shows that at the top, with Switch Back to Doppel Engine.
 ]]></description>
             <enclosure url="https://github.com/thomast8/doppel/releases/download/v1.1.13/Doppel-1.1.13-macOS.zip" length="3147970" type="application/octet-stream" sparkle:edSignature="LOgP8BAeHFxRWh+33c6LrSuQy1ayCqqHg/dh0mClIBooQt2pLwHRS1Dwr9S7YJ9lTqHHnk7/giWlaxgG/omJDg=="/>
-        </item>
-        <item>
-            <title>1.1.12</title>
-            <pubDate>Fri, 02 Oct 2026 20:09:37 +0100</pubDate>
-            <link>https://github.com/thomast8/doppel</link>
-            <sparkle:version>25</sparkle:version>
-            <sparkle:shortVersionString>1.1.12</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[# Doppel 1.1.12
-
-- Choose Receive Beta Updates in the Doppel menu to switch to the beta update feed and check for an update immediately. The choice persists across app updates. Turn it off to wait for a newer stable release; it does not downgrade an installed beta.
-- Includes the latest merged clone-engine, Creator Micro and permission-probe fixes.
-]]></description>
-            <enclosure url="https://github.com/thomast8/doppel/releases/download/v1.1.12/Doppel-1.1.12-macOS.zip" length="3148344" type="application/octet-stream" sparkle:edSignature="Mhm9VoN5K0CJMcHCxtJ8At19NUZlPX0fO4PB3VX04LtZZNAFAXpoVyjUNMO9aiTnB/vsMd04pEOICWRwRPfTAg=="/>
         </item>
     </channel>
 </rss>
