@@ -74,6 +74,22 @@ OAUTH_CALLBACK_HANDLER = re.compile(
     rb"\}://connector/oauth_callback`\}\)"
 )
 
+# Build 51333 dropped the ``app-connect-oauth-callback-url`` message handler
+# and moved the same lookup onto a class method that returns the bare URL
+# string instead of ``{callbackUrl}``. Both shapes are kept: older builds are
+# still rebuilt from archived bundles and the patcher must recognise either.
+OAUTH_CALLBACK_GETTER = re.compile(
+    rb"async getCallbackUrl\(\)\{return`\$\{"
+    rb"(?P<protocol>[A-Za-z_$][A-Za-z0-9_$]*)"
+    rb"\.(?P<helper>[A-Za-z_$][A-Za-z0-9_$]*)\("
+    rb"(?P<electron>[A-Za-z_$][A-Za-z0-9_$]*)\.app\.isPackaged\)"
+    rb"\}://connector/oauth_callback`\}"
+)
+OAUTH_PATCHED_CALLBACKS = (
+    b"callbackUrl:`codex://connector/oauth_callback`",
+    b"return`codex://connector/oauth_callback`}",
+)
+
 OPEN_URL_HANDLER = re.compile(
     rb"return (?P<mac>[A-Za-z_$][A-Za-z0-9_$]*)&&"
     rb"(?P<app>[A-Za-z_$][A-Za-z0-9_$]*)\.on\(`open-url`,\("
@@ -301,17 +317,32 @@ def locate_protocol_member(archive: Archive) -> tuple[Member, bytes, bool]:
     raise PatchError(f"found {count} candidate protocol members; refusing an ambiguous patch")
 
 
-def patched_oauth_handler(match: re.Match[bytes]) -> bytes:
-    electron = match.group("electron")
+def oauth_ownership_guard(electron: bytes) -> bytes:
     app = electron + b".app"
     return (
-        b'"app-connect-oauth-callback-url":async()=>{if(!'
+        b"if(!"
         + app
         + b".setAsDefaultProtocolClient(`codex`)&&!"
         + app
         + b".isDefaultProtocolClient(`codex`))throw Error(`"
         + OAUTH_PATCH_MARKER
-        + b"`);return{callbackUrl:`codex://connector/oauth_callback`}}"
+        + b"`);"
+    )
+
+
+def patched_oauth_handler(match: re.Match[bytes]) -> bytes:
+    return (
+        b'"app-connect-oauth-callback-url":async()=>{'
+        + oauth_ownership_guard(match.group("electron"))
+        + b"return{callbackUrl:`codex://connector/oauth_callback`}}"
+    )
+
+
+def patched_oauth_getter(match: re.Match[bytes]) -> bytes:
+    return (
+        b"async getCallbackUrl(){"
+        + oauth_ownership_guard(match.group("electron"))
+        + b"return`codex://connector/oauth_callback`}"
     )
 
 
@@ -323,15 +354,17 @@ def locate_oauth_member(archive: Archive) -> tuple[Member, bytes, bool]:
             continue
         data = read_member(archive, member)
         if OAUTH_PATCH_MARKER in data:
-            if data.count(OAUTH_PATCH_MARKER) != 1 or data.count(
-                b"callbackUrl:`codex://connector/oauth_callback`"
+            if data.count(OAUTH_PATCH_MARKER) != 1 or sum(
+                data.count(callback) for callback in OAUTH_PATCHED_CALLBACKS
             ) != 1:
                 raise PatchError(
                     f"the OAuth ownership patch is malformed in {member.path}"
                 )
             patched.append((member, data))
             continue
-        matches = list(OAUTH_CALLBACK_HANDLER.finditer(data))
+        matches = list(OAUTH_CALLBACK_HANDLER.finditer(data)) + list(
+            OAUTH_CALLBACK_GETTER.finditer(data)
+        )
         if len(matches) == 1:
             unpatched.append((member, data, matches[0]))
         elif matches:
@@ -344,7 +377,11 @@ def locate_oauth_member(archive: Archive) -> tuple[Member, bytes, bool]:
         return patched[0][0], patched[0][1], True
     if len(unpatched) == 1:
         member, data, match = unpatched[0]
-        replacement = patched_oauth_handler(match)
+        replacement = (
+            patched_oauth_getter(match)
+            if match.re is OAUTH_CALLBACK_GETTER
+            else patched_oauth_handler(match)
+        )
         return member, data[: match.start()] + replacement + data[match.end() :], False
     count = len(patched) + len(unpatched)
     if count == 0:

@@ -101,7 +101,7 @@ else
 fi
 
 OAUTH_MARKERS="$(LC_ALL=C /usr/bin/grep -a -o 'Doppel could not claim codex:// OAuth callback' "$TEST_ASAR" | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
-CALLBACKS="$(LC_ALL=C /usr/bin/grep -a -o 'callbackUrl:`codex://connector/oauth_callback`' "$TEST_ASAR" | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
+CALLBACKS="$(LC_ALL=C /usr/bin/grep -a -o -E 'callbackUrl:`codex://connector/oauth_callback`|return`codex://connector/oauth_callback`' "$TEST_ASAR" | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
 if [[ "$OAUTH_MARKERS" == "1" && "$CALLBACKS" == "1" ]]; then
     pass "OAuth claims the shared registered callback only when requested"
 else
@@ -145,6 +145,7 @@ spec.loader.exec_module(patcher)
 oauth = {
     "6321": b'"app-connect-oauth-callback-url":async()=>({callbackUrl:`${r.u(l.app.isPackaged)}://connector/oauth_callback`})',
     "6662": b'"app-connect-oauth-callback-url":async()=>({callbackUrl:`${r.K(l.app.isPackaged)}://connector/oauth_callback`})',
+    "51333": b'y_e=class extends u.Nt{async getCallbackUrl(){return`${_.M(O.app.isPackaged)}://connector/oauth_callback`}}',
 }
 queued = {
     "6321": b'if(i){let n=(e,t)=>{let n=XW(e);if(n){m(n),l?.(eG(n)?e:void 0),t?.preventDefault();return}let r=fG(e);r&&(h(r),t?.preventDefault())};e.on(`open-url`,(e,t)=>{n(t,e)});',
@@ -157,7 +158,7 @@ drained = {
 }
 missed = []
 for build, sample in oauth.items():
-    if len(patcher.OAUTH_CALLBACK_HANDLER.findall(sample)) != 1:
+    if len(patcher.OAUTH_CALLBACK_HANDLER.findall(sample)) + len(patcher.OAUTH_CALLBACK_GETTER.findall(sample)) != 1:
         missed.append(f"oauth {build}")
 for build, sample in queued.items():
     if len(patcher.QUEUED_OPEN_URL_HANDLER.findall(sample)) != 1:
