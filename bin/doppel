@@ -2615,6 +2615,30 @@ rebuild_instance_for_update() {
         verify_managed_instance "$dir" "$expected_version"
 }
 
+# Prove the deep-link patcher still understands a vendor bundle before anything
+# is quit, swapped or rebuilt. The vendor renames and reshapes the code the
+# patcher rewrites on its own schedule, and finding that out after the primary
+# has been replaced leaves every instance stranded on the old build. The patch
+# runs on a copy of the archive only; the app itself is never touched.
+precheck_patch_compat() {
+    local app="$1" scratch output
+    local asar="$app/Contents/Resources/app.asar"
+    [[ -f "$asar" ]] || die "ChatGPT at $app has no app.asar to check; nothing was changed"
+    scratch="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/doppel-precheck.XXXXXXXX")" || \
+        die "creating the compatibility check workspace failed; nothing was changed"
+    # An APFS clone is instant and costs no space for a 600 MB archive; fall
+    # back to a plain copy on a volume that cannot clone.
+    /bin/cp -c "$asar" "$scratch/app.asar" 2>/dev/null || /bin/cp "$asar" "$scratch/app.asar" || {
+        /bin/rm -rf "$scratch"
+        die "copying app.asar for the compatibility check failed; nothing was changed"
+    }
+    if ! output="$(/usr/bin/python3 "$ENGINE_SRC/patch-deep-link.py" patch "$scratch/app.asar" 2>&1 >/dev/null)"; then
+        /bin/rm -rf "$scratch"
+        die "this ChatGPT build is not compatible with Doppel yet (${output#patch-deep-link: }); nothing was changed and the current apps keep working"
+    fi
+    /bin/rm -rf "$scratch"
+}
+
 cmd_update_apply() {
     local version="${1:-}"
     [[ $# -le 1 ]] || die "usage: doppel update apply [build]"
@@ -2655,6 +2679,11 @@ cmd_update_apply() {
     else
         (( version > current )) || die "ChatGPT $version is older than the installed build $current"
         validate_vendor_app "$prepared" "$version" || die "ChatGPT $version has not been downloaded and verified; run 'doppel update prepare' first"
+    fi
+    if (( reconcile_only )); then
+        precheck_patch_compat "$PRIMARY_APP"
+    else
+        precheck_patch_compat "$prepared"
     fi
     target_short="$(update_metadata_value "$version" Version)"
     if [[ -z "$target_short" ]] && (( reconcile_only )); then
