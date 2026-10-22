@@ -11,7 +11,7 @@
 set -u
 setopt PIPE_FAIL
 
-readonly ENGINE_VERSION="31"
+readonly ENGINE_VERSION="32"
 
 # When this engine copy runs from inside an installed bundle, environment
 # overrides are ignored: otherwise a same-uid process could point a
@@ -901,6 +901,10 @@ exec_clone_binary() {
     codex_micro_owner_is_this_profile && export DOPPEL_CODEX_MICRO=1
     export CODEX_ELECTRON_USER_DATA_PATH="$DOPPEL_PROFILE_ROOT"
     export CODEX_HOME="$DOPPEL_CODEX_HOME"
+    # Read by the ASAR patch: each clone keeps its own Codex runtime, because
+    # accounts are pinned to different versions and would reinstall over each
+    # other in ~/.cache. The Chromium profile is the one root a clone never shares.
+    export DOPPEL_CODEX_RUNTIMES_ROOT="$DOPPEL_PROFILE_ROOT/codex-runtimes"
     export DOPPEL_URL_SCHEME
     export DOPPEL_PRIMARY_APP="$PRIMARY_APP"
     export DOPPEL_PRIMARY_BUNDLE_ID="$PRIMARY_BUNDLE_ID"

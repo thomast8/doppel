@@ -125,6 +125,18 @@ else
     fail "the clone leaves the Codex Micro pad to the primary" "found $MICRO_MARKERS Micro gates"
 fi
 
+# The runtime root moves, the plugin marketplace copy beneath it does not: the
+# Codex CLI only trusts that copy at the real ~/.cache path.
+RUNTIME_ROOTS="$(LC_ALL=C /usr/bin/grep -a -o -E '\(process\.env\.DOPPEL_CODEX_RUNTIMES_ROOT\|\|[A-Za-z_$][A-Za-z0-9_$]*\.default\.join\([A-Za-z_$][A-Za-z0-9_$]*\.default\.homedir\(\),`\.cache`,`codex-runtimes`\)\)' "$TEST_ASAR" | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
+RUNTIME_MARKERS="$(LC_ALL=C /usr/bin/grep -a -o 'DOPPEL_CODEX_RUNTIMES_ROOT' "$TEST_ASAR" | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
+PLUGIN_COPIES="$(LC_ALL=C /usr/bin/grep -a -o -E 'homedir\(\),`\.cache`,`codex-runtimes`,[A-Za-z_$][A-Za-z0-9_$.]*,`plugins`' "$TEST_ASAR" | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
+if [[ "$RUNTIME_ROOTS" == "4" && "$RUNTIME_MARKERS" == "4" && "$PLUGIN_COPIES" == "1" ]]; then
+    pass "the clone keeps its own Codex runtime but the shared plugin copy"
+else
+    fail "the clone keeps its own Codex runtime but the shared plugin copy" \
+        "found $RUNTIME_ROOTS patched roots, $RUNTIME_MARKERS markers, $PLUGIN_COPIES plugin copies"
+fi
+
 # Everything above runs against whichever vendor build happens to be installed,
 # which is the real signal but only ever covers one build at a time. These
 # shapes are the ones that actually shipped: 6321 and 6662 differ only in names
@@ -132,7 +144,7 @@ fi
 # whole open-url path into one shared handler plus a startup drain. Pinning any
 # one of them is what broke clone builds three times running. A machine on one
 # build still has to notice a patcher that has been re-pinned to another.
-SHAPES_OUT="$(/usr/bin/python3 - "$PATCHER" <<'PY'
+SHAPES_OUT="$(/usr/bin/python3 -B - "$PATCHER" <<'PY'
 import importlib.util, sys
 
 spec = importlib.util.spec_from_file_location("patcher", sys.argv[1])
@@ -156,7 +168,26 @@ drained = {
     "12404": b'function T(){if(!t)return;let n=(e,t)=>{let n=n9(e);if(n){g(n),u?.(a9(n,e)),t?.preventDefault();return}let r=d9(e);r&&(_(r),t?.preventDefault())};e.on(`open-url`,(e,t)=>{n(t,e)}),d.l(e,(e,t)=>(g(t),u?.(void 0),!0));for(let e of d.s())n(e)}',
     "31256": b'function re(){if(!t)return;let n=(e,t)=>{let n=oD(e);if(n){S(n),n.kind!==`wakeQueuedThread`&&d?.(fD(n,e)),t?.preventDefault();return}let r=ED(e);r&&(C(r),t?.preventDefault())};e.on(`open-url`,(e,t)=>{n(t,e)}),u.u(e,(e,t)=>(S(t),d?.(void 0),!0));for(let e of u.c())n(e)}',
 }
+runtime_roots = {
+    "21421": b"installRoot:n=l.default.join(u.default.homedir(),`.cache`,`codex-runtimes`),osRelease:r",
+    "21421 worker": b"function xZ(e){return e==null&&yZ!=null?yZ:g.default.join(e??g.default.join(h.default.homedir(),`.cache`,`codex-runtimes`),Jwe)}",
+    # Not shipped yet: longer minified names must not be wrapped a second time
+    # from their second letter.
+    "long names": b"installRoot:n=ab.default.join(uv.default.homedir(),`.cache`,`codex-runtimes`),osRelease:r",
+}
+not_runtime_roots = {
+    "21421 plugins": b"let n=C.default.join(T.default.homedir(),`.cache`,`codex-runtimes`,l.I,`plugins`,C.default.basename(e))",
+    "21421 language servers": b"this.cacheRoot=e.cacheRoot??C.default.join(T.default.homedir(),`.cache`,`codex-runtimes`,`language-servers`)",
+}
 missed = []
+for build, sample in runtime_roots.items():
+    if len(patcher.UNPATCHED_RUNTIME_ROOT.findall(sample)) != 1:
+        missed.append(f"runtime root {build}")
+    if len(patcher.UNPATCHED_RUNTIME_ROOT.findall(patcher.patched_runtime_roots(sample))) != 0:
+        missed.append(f"runtime root idempotence {build}")
+for build, sample in not_runtime_roots.items():
+    if patcher.UNPATCHED_RUNTIME_ROOT.findall(sample):
+        missed.append(f"runtime root overmatch {build}")
 for build, sample in oauth.items():
     if len(patcher.OAUTH_CALLBACK_HANDLER.findall(sample)) + len(patcher.OAUTH_CALLBACK_GETTER.findall(sample)) != 1:
         missed.append(f"oauth {build}")
@@ -168,7 +199,7 @@ for build, sample in drained.items():
         missed.append(f"open-url {build}")
 print(",".join(missed))
 PY
-)"
+)" || SHAPES_OUT="the shape check itself failed"
 if [[ -z "$SHAPES_OUT" ]]; then
     pass "all shipped minified shapes still match"
 else
