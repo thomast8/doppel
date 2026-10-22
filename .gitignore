@@ -2,3 +2,4 @@
 app/.build/
 qa/.build/
 dist/
+__pycache__/

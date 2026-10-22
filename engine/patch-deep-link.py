@@ -556,6 +556,45 @@ def locate_micro_member(archive: Archive) -> tuple[Member, bytes, bool] | None:
     return found[0] if found else None
 
 
+# Codex installs its 1.6 GB workspace runtime under ~/.cache/codex-runtimes
+# whatever CODEX_HOME or profile it runs with, and the version it wants comes
+# from a per-account Statsig layer. Two clones signed in to different accounts
+# therefore reinstall over each other on every hourly update check. Clones take
+# the root from DOPPEL_CODEX_RUNTIMES_ROOT instead. Only the bare root
+# expression is matched: the bundled-plugin copy beneath it stays in the real
+# home, because the Codex CLI trusts the openai-primary-runtime marketplace
+# only at $HOME/.cache/codex-runtimes/codex-primary-runtime/plugins.
+RUNTIME_ROOT_PREFIX = b"(process.env.DOPPEL_CODEX_RUNTIMES_ROOT||"
+RUNTIME_ROOT_SITES = 4
+UNPATCHED_RUNTIME_ROOT = re.compile(
+    rb"(?<![A-Za-z0-9_$.])(?<!DOPPEL_CODEX_RUNTIMES_ROOT\|\|)"
+    rb"[A-Za-z_$][A-Za-z0-9_$]*\.default\.join\("
+    rb"[A-Za-z_$][A-Za-z0-9_$]*\.default\.homedir\(\),`\.cache`,`codex-runtimes`\)"
+)
+
+
+def patched_runtime_roots(data: bytes) -> bytes:
+    return UNPATCHED_RUNTIME_ROOT.sub(lambda match: RUNTIME_ROOT_PREFIX + match.group(0) + b")", data)
+
+
+def runtime_root_members(archive: Archive) -> tuple[list[tuple[Member, bytes, bool]], int]:
+    """Return every member that computes the runtime root, and the site count."""
+    found: list[tuple[Member, bytes, bool]] = []
+    sites = 0
+    for member in members(archive):
+        if not member.path.endswith(".js") or member.size == 0:
+            continue
+        data = read_member(archive, member)
+        if b"`codex-runtimes`" not in data:
+            continue
+        patched = data.count(RUNTIME_ROOT_PREFIX)
+        unpatched = len(UNPATCHED_RUNTIME_ROOT.findall(data))
+        if patched + unpatched:
+            sites += patched + unpatched
+            found.append((member, data, unpatched == 0))
+    return found, sites
+
+
 def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -668,6 +707,14 @@ def patch(path: Path) -> str:
     micro = locate_micro_member(archive)
     if micro is not None and not micro[2]:
         rewrite_archive(archive, micro[0], micro[1])
+
+    # Rewriting one member moves every later offset, so reread between members.
+    while True:
+        archive = read_archive(path)
+        pending = [found for found in runtime_root_members(archive)[0] if not found[2]]
+        if not pending:
+            break
+        rewrite_archive(archive, pending[0][0], patched_runtime_roots(pending[0][1]))
     return verify(path)
 
 
@@ -693,6 +740,22 @@ def verify(path: Path) -> str:
         if not micro[2]:
             raise PatchError("the clone still opens the Codex Micro pad alongside the primary")
         verify_member_integrity(micro[0].entry, micro[1])
+
+    runtime_members, runtime_sites = runtime_root_members(archive)
+    # Fewer sites than expected means one moved shape and would keep reading
+    # the shared cache while the installer writes the private one. None at all
+    # only costs clones their private runtime, so that warns instead of
+    # leaving every clone unbuildable after a vendor update.
+    if 0 < runtime_sites < RUNTIME_ROOT_SITES:
+        raise PatchError(f"found {runtime_sites} of {RUNTIME_ROOT_SITES} Codex runtime roots; "
+                         "refusing a partial patch")
+    if runtime_sites == 0:
+        print("patch-deep-link: warning: no Codex runtime root found; "
+              "clones will share ~/.cache/codex-runtimes", file=sys.stderr)
+    for member, data, runtime_patched in runtime_members:
+        if not runtime_patched:
+            raise PatchError("the clone still installs its Codex runtime in the shared home cache")
+        verify_member_integrity(member.entry, data)
     return digest(archive.header_json)
 
 
