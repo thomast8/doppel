@@ -1,7 +1,7 @@
 #!/bin/zsh
 # Build and package an EdDSA-signed Doppel release, then generate its Sparkle
-# appcast. Developer ID signing and notarisation are optional; publication
-# remains a separate, reviewable step.
+# appcast. Releases are Developer ID signed and notarised; an ad-hoc release
+# needs DOPPEL_ALLOW_ADHOC=1. Publication remains a separate, reviewable step.
 
 set -eu
 setopt PIPE_FAIL
@@ -37,6 +37,14 @@ trap cleanup EXIT INT TERM
 
 "$REPO_ROOT/script/prepare-release-notes.zsh" \
     "$RELEASE_NOTES_SOURCE" /dev/null "$DOPPEL_VERSION"
+
+# Replacing a notarised install with an ad-hoc one fails Gatekeeper and resets
+# its privacy grants, so ad hoc is never the silent default.
+if [[ "$SIGN_ID" == "-" && "${DOPPEL_ALLOW_ADHOC:-0}" != 1 ]]; then
+    print -u2 -r -- "Set DOPPEL_SIGN_ID to a Developer ID Application identity and NOTARY_KEYCHAIN_PROFILE,"
+    print -u2 -r -- "or DOPPEL_ALLOW_ADHOC=1 for a deliberately ad-hoc release."
+    exit 1
+fi
 
 [[ -x "$GENERATE_APPCAST" && -x "$GENERATE_KEYS" ]] || {
     print -u2 -r -- "Sparkle's release tools were not found under $SPARKLE_TOOLS"

@@ -9,7 +9,7 @@
             <title>2.0.1</title>
             <pubDate>Wed, 21 Oct 2026 13:30:33 +0100</pubDate>
             <link>https://github.com/thomast8/doppel</link>
-            <sparkle:version>35</sparkle:version>
+            <sparkle:version>36</sparkle:version>
             <sparkle:shortVersionString>2.0.1</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <description sparkle:format="markdown"><![CDATA[# Doppel 2.0.1
@@ -18,7 +18,7 @@
 - Doppel now tests a new ChatGPT build against its patcher before closing or replacing anything. If the build is not compatible yet, the update stops with a clear message and your current apps keep working.
 - After updating Doppel, run the ChatGPT update again from the Doppel menu if you are still on 26.1013.
 ]]></description>
-            <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.1/Doppel-2.0.1-macOS.zip" length="7656344" type="application/octet-stream" sparkle:edSignature="Li0CyrUafmVfeWkRAjmVfaK9CmV3IsxDNkhYGRDvwK4iG2lusGpcqtMFaST4GAHEqbPZZRyd0mDJUmaef1iJDw=="/>
+            <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.1/Doppel-2.0.1-macOS.zip" length="7783154" type="application/octet-stream" sparkle:edSignature="ylfpfLEtKo789C1JUiuLMEbDjjaBG+FQb0N3p92zGApLmxkk7mANyEJgSmA1DODIvmfHnH0gHaZBSrL9v72SBg=="/>
         </item>
         <item>
             <title>2.0.0</title>

@@ -31,8 +31,7 @@ sparkle-key:
     swift package --package-path app resolve
     ./app/.build/artifacts/sparkle/Sparkle/bin/generate_keys --account ai.doppel.menubar
 
-# Requires release-notes/<version>.md. Defaults to an ad-hoc personal release.
-# Set DOPPEL_SIGN_ID and NOTARY_KEYCHAIN_PROFILE later to add Developer ID
-# signing and notarisation.
+# Requires release-notes/<version>.md, plus DOPPEL_SIGN_ID (Developer ID) and
+# NOTARY_KEYCHAIN_PROFILE. DOPPEL_ALLOW_ADHOC=1 builds an ad-hoc release instead.
 package-release version build:
     DOPPEL_VERSION="{{version}}" DOPPEL_BUILD="{{build}}" ./script/package-release.zsh
