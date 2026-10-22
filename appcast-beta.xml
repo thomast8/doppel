@@ -6,6 +6,21 @@
         <description>Signed Doppel releases</description>
         <language>en</language>
         <item>
+            <title>2.0.2</title>
+            <pubDate>Thu, 22 Oct 2026 23:06:58 +0100</pubDate>
+            <link>https://github.com/thomast8/doppel</link>
+            <sparkle:version>37</sparkle:version>
+            <sparkle:shortVersionString>2.0.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Doppel 2.0.2
+
+- Fixes Personal and Veridue reinstalling each other's Codex workspace runtime. ChatGPT picks the runtime version per account and keeps it in one shared folder, so each instance's hourly check unpacked about 1.6 GB over the other's copy. That disk churn could make the Mac unresponsive.
+- Each instance now keeps its own runtime inside its profile folder. Expect a one-time download of about 340 MB per instance, and about 1.6 GB of disk each.
+- Rebuild each instance once from the Doppel menu to install the fix.
+]]></description>
+            <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.2/Doppel-2.0.2-macOS.zip" length="7784893" type="application/octet-stream" sparkle:edSignature="EPJw2fIQqesOuvkdQg0STLWGhXWahtn4IDm79UekfJBM43xxKLdjNpIavR2/qEBHSJXkk98juEdUshOd2E78BA=="/>
+        </item>
+        <item>
             <title>2.0.1</title>
             <pubDate>Wed, 21 Oct 2026 13:30:33 +0100</pubDate>
             <link>https://github.com/thomast8/doppel</link>
@@ -38,23 +53,6 @@
 Remote tasks use the Mac user's filesystem permissions. The Mac must remain awake and logged in. Desktop history, Browser, Computer Use and cloud synchronization are outside this release.
 ]]></description>
             <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.0/Doppel-2.0.0-macOS.zip" length="7781905" type="application/octet-stream" sparkle:edSignature="57o74BWAWJ29oq4vylVSjqQFCP/EBT1X029SzY82OKLRYUpYcOiVykbSomeu1XJ7KCLFF9hRAem4IXLKiILeCw=="/>
-        </item>
-        <item>
-            <title>2.0.0-beta-5</title>
-            <pubDate>Fri, 16 Oct 2026 08:39:35 +0100</pubDate>
-            <link>https://github.com/thomast8/doppel</link>
-            <sparkle:version>33</sparkle:version>
-            <sparkle:shortVersionString>2.0.0-beta-5</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[# Doppel 2.0.0-beta-5
-
-- Fixes clone rebuilds on ChatGPT 26.1013. That build changed how it hands deep links to the app, so Doppel could not patch the OAuth callback routing and every instance failed to start with "Patching the instance OAuth callback routing failed".
-
-Includes [PR #56](https://github.com/thomast8/doppel/pull/56).
-
-This remains a beta. Remote Access requires the Mac to stay awake and logged in. Menu-click and physical-keypad reconnection QA remain incomplete, and macOS 14 execution, logout/login recovery, and network-loss recovery still need broader testing.
-]]></description>
-            <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.0-beta-5/Doppel-2.0.0-beta-5-macOS.zip" length="7781222" type="application/octet-stream" sparkle:edSignature="A5NehbCmh7FtipY/W+SZgoZEYywZMYibDG3IzjfaQqU8uBkLw4WXj60D40VH0k7ZdXv87HfBNgD0RStlaY0CBg=="/>
         </item>
     </channel>
 </rss>
