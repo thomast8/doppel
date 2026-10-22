@@ -455,6 +455,8 @@ Release packaging is an explicit two-step publication flow:
 ```sh
 just sparkle-key             # once; keeps the private key in your Keychain
 ${EDITOR:-open} release-notes/1.1.0.md
+export DOPPEL_SIGN_ID="Developer ID Application: Example (TEAMID)"
+export NOTARY_KEYCHAIN_PROFILE="doppel-notary"
 just package-release 1.1.0 12
 ```
 
@@ -465,9 +467,10 @@ app/.build/artifacts/sparkle/Sparkle/bin/generate_keys \
   --account ai.doppel.menubar -x /secure/backup/doppel-ed25519.key
 ```
 
-The default recipe requires non-empty Markdown notes at
-`release-notes/<version>.md`, builds a universal app, ad-hoc signs nested code
-inside-out, creates the release ZIP, and generates `dist/releases/appcast.xml`
+The recipe requires non-empty Markdown notes at
+`release-notes/<version>.md`, builds a universal app, signs nested code
+inside-out with the Developer ID identity, notarises, staples and checks the
+result with Gatekeeper, creates the release ZIP, and generates `dist/releases/appcast.xml`
 with the key stored under the `ai.doppel.menubar` Keychain account. Sparkle
 embeds the notes in the signed appcast so its update window always has a What's
 New section. The recipe does not upload or change git. Review the ZIP, notes and
@@ -476,17 +479,10 @@ the repository `appcast.xml` with the generated feed.
 Keep the EdDSA private key safe; losing it means existing ad-hoc installs cannot
 trust a replacement update key.
 
-Developer ID distribution can be added later without changing the normal
-release command:
-
-```sh
-export DOPPEL_SIGN_ID="Developer ID Application: Example (TEAMID)"
-export NOTARY_KEYCHAIN_PROFILE="doppel-notary"
-just package-release 1.2.0 13
-```
-
-With those variables set, the recipe also submits the app to Apple, staples and
-validates the notarisation ticket, and assesses the result with Gatekeeper.
+Without `DOPPEL_SIGN_ID` the recipe stops before building. Installing an
+ad-hoc release over a notarised one fails Gatekeeper and resets the app's
+privacy grants, so an ad-hoc release has to be asked for with
+`DOPPEL_ALLOW_ADHOC=1`.
 
 ## Secure signing
 

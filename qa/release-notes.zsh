@@ -33,6 +33,13 @@ print -r -- $'# Doppel 9.9.9\n\n- A visible improvement.' >"$WORK/valid.md"
 "$PREPARE" "$WORK/valid.md" "$WORK/output.md" 9.9.9
 /usr/bin/cmp "$WORK/valid.md" "$WORK/output.md"
 
+# A release without Developer ID signing must be an explicit choice: the 2.0.1
+# asset once shipped ad hoc because the signing variables were simply unset.
+expect_failure /usr/bin/env -u DOPPEL_SIGN_ID -u DOPPEL_ALLOW_ADHOC \
+    DOPPEL_VERSION=9.9.9 DOPPEL_BUILD=999 DOPPEL_RELEASE_NOTES="$WORK/valid.md" \
+    "$REPO_ROOT/script/package-release.zsh"
+/usr/bin/grep -Fq "Set DOPPEL_SIGN_ID" "$WORK/stderr"
+
 readonly APPCAST="$REPO_ROOT/appcast.xml"
 latest_version="$(/usr/bin/xmllint --xpath \
     "string(/rss/channel/item[1]/*[local-name()='shortVersionString'])" "$APPCAST")"
