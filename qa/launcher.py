@@ -52,6 +52,7 @@ managed_slug_for_this_profile() { print -r -- fixture; }
 log_message() { :; }
 fail_closed() { print -u2 -r -- "$*"; exit 1; }
 codex_micro_owner_is_this_profile() { return 1; }
+codex_micro_channel() { :; }
 source_version() { print -r -- 1; }
 ''' + functions + '''
 shift 2

@@ -45,6 +45,22 @@ with tempfile.TemporaryDirectory(prefix="doppel-micro-") as scratch:
         run("release")
         assert not (root / "state" / "codex-micro-owner").exists()
     run("status", "--bad-option", success=False)
+    channels = root / "state" / "codex-micro-channels"
+    assert run("channel") == "Creator Micro channels: none set\n"
+    run("channel", "ChatGPT Veridue", "1")
+    run("channel", "ChatGPT Personal", "3")
+    assert run("channel") == "ChatGPT Personal: 3\nChatGPT Veridue: 1\n"
+    assert (channels / "veridue").read_text() == "1\n"
+    run("channel", "ChatGPT Personal", "1", success=False)
+    for invalid in ["0", "10", "x", "../1"]:
+        run("channel", "ChatGPT Veridue", invalid, success=False)
+    run("channel", "Missing Instance", "2", success=False)
+    run("channel", "ChatGPT Veridue", "1")
+    assert run("channel") == "ChatGPT Personal: 3\nChatGPT Veridue: 1\n"
+    run("channel", "ChatGPT Personal", "any")
+    assert not (channels / "personal").exists()
+    run("channel", "ChatGPT Veridue", "any")
+    assert run("channel") == "Creator Micro channels: none set\n"
 
 print("Creator Micro CLI QA passed")
 

@@ -125,6 +125,13 @@ else
     fail "the clone leaves the Codex Micro pad to the primary" "found $MICRO_MARKERS Micro gates"
 fi
 
+CHANNEL_GATES="$(LC_ALL=C /usr/bin/grep -a -o 'process.env.DOPPEL_MICRO_CHANNEL' "$TEST_ASAR" | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
+if [[ "$CHANNEL_GATES" == "1" ]]; then
+    pass "the pad owner can be limited to one Bluetooth channel"
+else
+    fail "the pad owner can be limited to one Bluetooth channel" "found $CHANNEL_GATES channel gates"
+fi
+
 # The runtime root moves, the plugin marketplace copy beneath it does not: the
 # Codex CLI only trusts that copy at the real ~/.cache path.
 RUNTIME_ROOTS="$(LC_ALL=C /usr/bin/grep -a -o -E '\(process\.env\.DOPPEL_CODEX_RUNTIMES_ROOT\|\|[A-Za-z_$][A-Za-z0-9_$]*\.default\.join\([A-Za-z_$][A-Za-z0-9_$]*\.default\.homedir\(\),`\.cache`,`codex-runtimes`\)\)' "$TEST_ASAR" | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
