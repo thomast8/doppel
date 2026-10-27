@@ -29,8 +29,14 @@ die() { print -u2 -r -- "doppel-signing: $1"; exit 1 }
 # design (trusting it would need an admin prompt). codesign signs with it
 # regardless, so the certificate's presence is the real test.
 identity_sha1() {
-    /usr/bin/security find-certificate -c "$IDENTITY_NAME" -Z "$KEYCHAIN" 2>/dev/null | \
-        /usr/bin/awk '/^SHA-1 hash:/ {print $3; exit}'
+    local output rc
+    if output="$(/usr/bin/security find-certificate -c "$IDENTITY_NAME" -Z "$KEYCHAIN" 2>/dev/null)"; then
+        print -r -- "$output" | /usr/bin/awk '/^SHA-1 hash:/ {print $3; exit}'
+    else
+        rc=$?
+        (( rc == 44 )) && return 0
+        return "$rc"
+    fi
 }
 
 cmd_status() {
