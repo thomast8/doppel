@@ -63,6 +63,7 @@ readonly UPDATE_ROOT="${DOPPEL_UPDATE_ROOT:-$DOPPEL_HOME/updates}"
 readonly VENDOR_LOG_ROOT="${DOPPEL_VENDOR_LOG_ROOT:-$HOME/Library/Logs/com.openai.codex}"
 readonly IAB_SLOT_FILE="$DOPPEL_HOME/state/iab-engine-slot"
 readonly CODEX_MICRO_OWNER_FILE="$DOPPEL_HOME/state/codex-micro-owner"
+readonly CODEX_MICRO_CHANNELS="$DOPPEL_HOME/state/codex-micro-channels"
 readonly IAB_RUNTIME_FILE="$DOPPEL_HOME/state/iab-engine-runtime"
 readonly IAB_OPERATION_LOCK="$DOPPEL_HOME/state/IABCoordinator.lock"
 readonly CLONE_LAUNCH_ROOT="$DOPPEL_HOME/state/clone-launch"
@@ -1664,7 +1665,43 @@ cmd_micro() {
             fi
             print -r -- "Official ChatGPT also uses it whenever it is running."
             ;;
-        *) die "usage: doppel micro {assign <name>|release|status}" ;;
+        # Each Bluetooth channel of the pad is its own device ("Creator Micro 2
+        # #2"), so each clone can keep to its own and switching apps is a press
+        # of the pad's channel button. A clone with a channel uses the pad even
+        # if it is not the owner. Read at launch; USB always reaches them.
+        channel)
+            local name file other value
+            if [[ $# -eq 0 ]]; then
+                local -a lines=()
+                for file in "$CODEX_MICRO_CHANNELS"/*(N); do
+                    is_instance_dir "$INSTANCES_ROOT/${file:t}" || continue
+                    IFS= read -r value < "$file" || true
+                    [[ "$value" == [1-9] ]] || continue
+                    lines+=("$(config_value "$INSTANCES_ROOT/${file:t}" DOPPEL_DISPLAY_NAME): $value")
+                done
+                (( ${#lines} )) && print -rl -- "${lines[@]}" || print -r -- "Creator Micro channels: none set"
+                return
+            fi
+            [[ $# -eq 2 && ( "$2" == [1-9] || "$2" == any ) ]] || die "usage: doppel micro channel [<name> <1-9|any>]"
+            name="$1"
+            file="$(instance_dir_for "$name")" || exit 1
+            file="$CODEX_MICRO_CHANNELS/${file:t}"
+            if [[ "$2" == any ]]; then
+                /bin/rm -f "$file" || die "could not clear the Creator Micro channel"
+                print -r -- "$name now uses every channel; restart it to apply"
+                return
+            fi
+            # A removed instance's leftover channel is free again.
+            for other in "$CODEX_MICRO_CHANNELS"/*(N); do
+                [[ "$other" != "$file" && "$(<"$other")" == "$2" ]] || continue
+                is_instance_dir "$INSTANCES_ROOT/${other:t}" || continue
+                die "channel $2 already belongs to $(config_value "$INSTANCES_ROOT/${other:t}" DOPPEL_DISPLAY_NAME)"
+            done
+            /bin/mkdir -p "$CODEX_MICRO_CHANNELS" && print -r -- "$2" > "$file" || \
+                die "could not save the Creator Micro channel"
+            print -r -- "$name now uses Bluetooth channel $2; restart it to apply"
+            ;;
+        *) die "usage: doppel micro {assign <name>|release|status|channel [<name> <1-9|any>]}" ;;
     esac
 }
 

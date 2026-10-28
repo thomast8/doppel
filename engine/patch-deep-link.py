@@ -531,6 +531,42 @@ MICRO_PATCHED_START = (
 )
 
 
+# Each Bluetooth channel of the pad enumerates as its own device whose product
+# name ends in "#<channel>". The macOS discovery addon reports only the HID
+# path, so the owner looks the name up through the node-hid copy the device kit
+# already ships and keeps to DOPPEL_MICRO_CHANNEL, leaving the other channels
+# to another app. USB always passes, and a failed lookup keeps every device.
+MICRO_CHANNEL_MARKER = b"process.env.DOPPEL_MICRO_CHANNEL"
+MICRO_DISCOVERY = re.compile(
+    rb"this\.findDevices=([A-Za-z_$][\w$]*)\.findDevices\?\?([A-Za-z_$][\w$]*),")
+MICRO_PATCHED_DISCOVERY = (
+    rb"this.findDevices=\1.findDevices??(async()=>{let d=await \2(),c=" + MICRO_CHANNEL_MARKER +
+    rb";if(c==null)return d;try{let m=require(`node:module`),"
+    rb"r=m.createRequire(m.createRequire(m.createRequire(__filename).resolve(`@worklouder/device-kit-oai`))"
+    rb".resolve(`@worklouder/wl-device-kit`)),"
+    rb"n=new Map((await r(`node-hid`).devicesAsync()).map(x=>[x.path,x.product]));"
+    rb"return d.filter(x=>x.isUsbConnection||String(n.get(x.portPath)??``).endsWith(`#`+c))}"
+    rb"catch{return d}}),"
+)
+
+
+def patched_micro_discovery(member: Member, data: bytes) -> tuple[bytes, bool]:
+    """Return the service with its discovery kept to one channel, and whether it already was."""
+    if data.count(MICRO_CHANNEL_MARKER) == 1:
+        return data, True
+    if MICRO_CHANNEL_MARKER in data:
+        raise PatchError(f"the Codex Micro channel gate is ambiguous in {member.path}")
+    sites = len(MICRO_DISCOVERY.findall(data))
+    if sites == 0:
+        # A reshaped discovery only costs the owner its channel choice.
+        print(f"patch-deep-link: warning: Codex Micro discovery not found in {member.path}; "
+              "the pad owner will use every channel", file=sys.stderr)
+        return data, True
+    if sites > 1:
+        raise PatchError(f"the Codex Micro discovery is ambiguous in {member.path}")
+    return MICRO_DISCOVERY.sub(MICRO_PATCHED_DISCOVERY, data), False
+
+
 def locate_micro_member(archive: Archive) -> tuple[Member, bytes, bool] | None:
     """Return the Micro service member, or None when the build has no pad support."""
     found: list[tuple[Member, bytes, bool]] = []
@@ -541,9 +577,11 @@ def locate_micro_member(archive: Archive) -> tuple[Member, bytes, bool] | None:
         if MICRO_SERVICE_NEIGHBOUR not in data or b"@worklouder/device-kit-oai" not in data:
             continue
         if data.count(MICRO_PATCH_MARKER) == 1 and data.count(MICRO_PATCHED_START) == 1:
-            found.append((member, data, True))
+            data, channel_patched = patched_micro_discovery(member, data)
+            found.append((member, data, channel_patched))
         elif MICRO_PATCH_MARKER not in data and data.count(MICRO_START) == 1:
-            found.append((member, data.replace(MICRO_START, MICRO_PATCHED_START), False))
+            data, _ = patched_micro_discovery(member, data.replace(MICRO_START, MICRO_PATCHED_START))
+            found.append((member, data, False))
         elif MICRO_PATCH_MARKER not in data and MICRO_START not in data:
             # A reshaped service only costs the pad its single owner; failing
             # here would leave every clone unbuildable after a vendor update.
@@ -738,7 +776,7 @@ def verify(path: Path) -> str:
     micro = locate_micro_member(archive)
     if micro is not None:
         if not micro[2]:
-            raise PatchError("the clone still opens the Codex Micro pad alongside the primary")
+            raise PatchError("the clone lacks its Codex Micro owner or channel gate")
         verify_member_integrity(micro[0].entry, micro[1])
 
     runtime_members, runtime_sites = runtime_root_members(archive)

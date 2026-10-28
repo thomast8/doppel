@@ -176,6 +176,7 @@ bin/doppel browser status
 bin/doppel browser release
 bin/doppel micro assign "ChatGPT Personal"    # this clone answers the Creator Micro pad
 bin/doppel micro status
+bin/doppel micro channel "ChatGPT Personal" 3 # this clone uses Bluetooth channel 3
 bin/doppel rebuild "ChatGPT Personal"
 bin/doppel native-tools status
 bin/doppel native-tools repair
@@ -200,6 +201,17 @@ automatically restarts running previously assigned and newly selected instances
 to apply a change; closed instances stay closed. Save unfinished drafts before
 changing the assignment. Selecting the current owner leaves it running. Official
 ChatGPT also uses the keypad whenever it is running.
+
+Each Bluetooth channel of the pad shows up as its own device, so instances can
+share the pad by channel: `doppel micro channel "ChatGPT Veridue" 1` and
+`doppel micro channel "ChatGPT Personal" 3` give each clone its own, leaving
+channel 2 free for another app such as a Claude Code plugin. Switching is then a
+press of the pad's channel button, with every app left running. A clone with a
+channel uses the pad even when it is not the assigned instance, USB still
+reaches every clone that uses the pad, and `any` in place of the number takes the
+channel away. Channels are read when an instance starts, and `doppel micro
+channel` lists them. The assigned instance without a channel still listens on
+every channel.
 
 `rebuild` opens the rebuilt instance when it succeeds, even if the instance was
 closed before the command began. Set `DOPPEL_RELAUNCH=0` for maintenance or QA

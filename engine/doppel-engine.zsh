@@ -893,12 +893,30 @@ codex_micro_owner_is_this_profile() {
     [[ "$owner" == "$(managed_slug_for_this_profile)" ]]
 }
 
+# The Bluetooth channel `doppel micro channel` gave this clone, or nothing.
+codex_micro_channel() {
+    local doppel_home="$HOME/Library/Application Support/Doppel" channel="" file
+    if [[ "${DOPPEL_DEV:-0}" == "1" ]]; then
+        doppel_home="${DOPPEL_HOME:-$doppel_home}"
+    fi
+    file="$doppel_home/state/codex-micro-channels/$(managed_slug_for_this_profile)"
+    [[ -r "$file" ]] || return 0
+    IFS= read -r channel < "$file" || true
+    [[ "$channel" == [1-9] ]] && print -r -- "$channel"
+    return 0
+}
+
 exec_clone_binary() {
-    local app="$1"
+    local app="$1" channel
     shift
     mkdir -p "$DOPPEL_PROFILE_ROOT" "$DOPPEL_CODEX_HOME"
-    unset DOPPEL_CODEX_MICRO
-    codex_micro_owner_is_this_profile && export DOPPEL_CODEX_MICRO=1
+    unset DOPPEL_CODEX_MICRO DOPPEL_MICRO_CHANNEL
+    channel="$(codex_micro_channel)"
+    if [[ -n "$channel" ]]; then
+        export DOPPEL_CODEX_MICRO=1 DOPPEL_MICRO_CHANNEL="$channel"
+    elif codex_micro_owner_is_this_profile; then
+        export DOPPEL_CODEX_MICRO=1
+    fi
     export CODEX_ELECTRON_USER_DATA_PATH="$DOPPEL_PROFILE_ROOT"
     export CODEX_HOME="$DOPPEL_CODEX_HOME"
     # Read by the ASAR patch: each clone keeps its own Codex runtime, because

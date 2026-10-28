@@ -297,6 +297,24 @@ OUT="$(micro_cli assign "ChatGPT Engine QA")" || { print -u2 -r -- "$OUT"; exit 
     && [[ "$(micro_cli status)" == *"Creator Micro: ChatGPT Engine QA"* ]] \
     && pass "an assigned clone is opted in at launch" \
     || fail "an assigned clone is opted in at launch" "got: $OUT"
+channel_check() {
+    HOME="$FIXTURE_HOME" DOPPEL_DEV=1 DOPPEL_HOME="$MICRO_HOME" DOPPEL_BUNDLE_ID="com.openai.codex.engine-qa" \
+        /bin/zsh -c "$(/usr/bin/sed -n -e '/^managed_slug_for_this_profile()/,/^}/p' \
+            -e '/^codex_micro_channel()/,/^}/p' "$ENGINE")"$'\ncodex_micro_channel'
+}
+[[ -z "$(channel_check)" ]] \
+    && pass "a clone listens on every channel by default" \
+    || fail "a clone listens on every channel by default" "got: $(channel_check)"
+micro_cli channel "ChatGPT Engine QA" 3 >/dev/null
+[[ "$(channel_check)" == "3" ]] \
+    && pass "a clone's own channel reaches it at launch" \
+    || fail "a clone's own channel reaches it at launch" "got: $(channel_check)"
+print -r -- "3" > "$MICRO_HOME/state/codex-micro-channels/other-instance"
+print -r -- "../1" > "$MICRO_HOME/state/codex-micro-channels/engine-qa"
+[[ -z "$(channel_check)" ]] \
+    && pass "a malformed or foreign channel is ignored" \
+    || fail "a malformed or foreign channel is ignored" "got: $(channel_check)"
+/bin/rm -rf "$MICRO_HOME/state/codex-micro-channels"
 for owner in other-instance "../engine-qa" ""; do
     print -r -- "$owner" > "$MICRO_HOME/state/codex-micro-owner"
     micro_check && fail "a foreign or malformed owner is ignored" "accepted: '$owner'" && continue
