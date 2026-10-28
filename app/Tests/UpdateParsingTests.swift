@@ -117,10 +117,10 @@ final class UpdateParsingTests: XCTestCase {
         expect(ChatGPTUpdate.parse(driftWithAhead) == ChatGPTUpdate.parse(drift),
                "a further column must not change how the drift row reads")
         expect(MenuContent.updateButtonTitle(ChatGPTUpdate.parse(drift)!)
-            == "Rebuild 2 Outdated Instances…",
+            == "Rebuild 2 Outdated Instances",
             "the menu must offer the rebuild rather than installing a version already present")
         expect(MenuContent.updateButtonTitle(ChatGPTUpdate.parse(ready)!)
-            == "Restart to Install ChatGPT 26.727.51351…",
+            == "Restart to Install ChatGPT 26.727.51351",
             "a prepared vendor update should still offer the restart")
 
         // The apply result decides which completion alert is honest, so its

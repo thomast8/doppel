@@ -59,7 +59,7 @@ enum UIRenderer {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    static let screens = ["panel", "panel-attention", "panel-setup", "instance", "settings",
+    static let screens = ["panel", "panel-attention", "panel-progress", "panel-setup", "instance", "settings",
                           "settings-updates", "settings-integrations", "onboarding", "onboarding-create"]
 
     /// The newer screens are drawn from a fixed sample store rather than the
@@ -69,10 +69,17 @@ enum UIRenderer {
     /// view cache instead; that still needs no screen-capture permission.
     static func render(screen: String, to url: URL) {
         let store = sampleStore(attention: screen == "panel-attention", setup: screen == "panel-setup")
+        if screen == "panel-progress" {
+            store.busy = ["update"]
+            store.progressNote = "Installing ChatGPT 26.821.10230 and rebuilding every instance…"
+            store.lastError = "ChatGPT Work could not reopen. Launch it again from Doppel."
+        } else if screen == "panel" {
+            store.lastCheckWasCurrent = true
+        }
         let updater = DoppelUpdater(startingUpdater: false)
         let view: AnyView
         switch screen {
-        case "panel", "panel-attention", "panel-setup":
+        case "panel", "panel-attention", "panel-progress", "panel-setup":
             view = AnyView(MenuContent(store: store, updaterController: updater, doppelUpdatesEnabled: true)
                 .background(Color(nsColor: .windowBackgroundColor)))
         case "instance":

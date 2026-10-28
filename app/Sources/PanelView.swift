@@ -147,11 +147,35 @@ struct MenuContent: View {
 
     @ViewBuilder
     private var updateBanner: some View {
-        if store.busy.contains("update") {
+        if let error = store.lastError {
+            banner(tint: .red) {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Doppel could not finish that").font(.system(size: 13, weight: .semibold))
+                        Text(error)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                    Button("Dismiss") { store.lastError = nil }
+                        .buttonStyle(.borderless)
+                        .controlSize(.small)
+                }
+            }
+        }
+        // The CLI reports no steps, so the bar is indeterminate and the label
+        // names the phase rather than a percentage it cannot know.
+        if let note = store.progressNote {
             banner {
-                HStack(spacing: 10) {
-                    ProgressView().controlSize(.small)
-                    Text("Updating ChatGPT and its instances…").font(.system(size: 13, weight: .medium))
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(note).font(.system(size: 13, weight: .medium))
+                    ProgressView().progressViewStyle(.linear)
+                    Text("You can close this panel. Doppel sends a notification when it is done.")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
                 }
             }
         } else if let update = visibleUpdate {
@@ -172,8 +196,6 @@ struct MenuContent: View {
                         Spacer()
                         Button("Later") { panel.dismissedUpdateKey = update.offerKey }
                             .buttonStyle(.bordered)
-                        // The confirmation alert stays: it is where the
-                        // interruption is spelled out before anything closes.
                         Button(Self.bannerButtonTitle(update)) { store.beginKnownUpdate() }
                             .buttonStyle(.borderedProminent)
                             .disabled(store.engineOperationBusy)
@@ -185,12 +207,13 @@ struct MenuContent: View {
         }
     }
 
-    private func banner<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+    private func banner<Content: View>(tint: Color = .accentColor,
+                                       @ViewBuilder _ content: () -> Content) -> some View {
         content()
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(12)
             .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.accentColor.opacity(0.12)))
+                .fill(tint.opacity(0.12)))
             .padding(.horizontal, 12)
             .padding(.bottom, 10)
     }
@@ -332,6 +355,7 @@ struct MenuContent: View {
                 Text(chatGPTLine).lineLimit(1)
                 Spacer()
                 Button(store.checkingForUpdates ? "Checking…" : "Check now") {
+                    store.lastError = nil
                     store.checkForUpdates(userInitiated: true)
                 }
                 .buttonStyle(.link)
@@ -355,13 +379,14 @@ struct MenuContent: View {
         .padding(.bottom, 12)
     }
 
-    /// Only the installed build is claimed. "Up to date" would need a check
-    /// that answered "current", and a failed or unread check leaves this value
-    /// from an earlier one.
+    /// "Up to date" only after a check the CLI answered with "current"; a
+    /// failed or unread check leaves the installed build from an earlier one.
     private var chatGPTLine: String {
         if store.checkingForUpdates { return "Checking for ChatGPT updates…" }
         guard let installed = store.installedChatGPT else { return "ChatGPT updates not checked yet" }
-        return "ChatGPT \(installed.display)"
+        return store.lastCheckWasCurrent && store.chatGPTUpdate == nil
+            ? "ChatGPT \(installed.version) is up to date"
+            : "ChatGPT \(installed.display)"
     }
 
     @ViewBuilder
@@ -412,11 +437,11 @@ struct MenuContent: View {
     static func updateDetail(_ update: ChatGPTUpdate) -> String {
         switch update.state {
         case .ready:
-            return "Running instances close, update together and reopen."
+            return "Running instances close, update together and reopen. Save unfinished chats first, and choose Quit if an app asks."
         case .available:
-            return "Doppel downloads it from OpenAI and updates every instance together."
+            return "Doppel downloads it from OpenAI and verifies it. Nothing closes until you restart."
         case .staleInstances:
-            return "ChatGPT updated itself. A rebuild brings the instances back in line."
+            return "ChatGPT updated itself. Rebuilding closes the outdated instances and reopens them. Save unfinished chats first."
         }
     }
 
@@ -424,25 +449,26 @@ struct MenuContent: View {
     /// happens next.
     static func bannerButtonTitle(_ update: ChatGPTUpdate) -> String {
         switch update.state {
-        case .ready: return "Restart and Update…"
-        case .available: return "Download…"
-        case .staleInstances: return "Rebuild…"
+        case .ready: return "Restart and Update"
+        case .available: return "Download"
+        case .staleInstances: return "Rebuild"
         }
     }
 
-    /// What the one update button offers. A stale-instance row is not an
+    /// What the Settings update button offers. It acts at once, so it carries
+    /// no ellipsis. A stale-instance row is not an
     /// available version: nothing is downloaded and the primary is left alone,
     /// so offering to install a version the Mac already has would misdescribe
     /// the work.
     static func updateButtonTitle(_ update: ChatGPTUpdate) -> String {
         switch update.state {
         case .ready:
-            return "Restart to Install ChatGPT \(update.targetVersion)…"
+            return "Restart to Install ChatGPT \(update.targetVersion)"
         case .available:
-            return "Install ChatGPT \(update.targetVersion)…"
+            return "Download ChatGPT \(update.targetVersion)"
         case .staleInstances:
             let noun = update.staleInstanceCount == 1 ? "Instance" : "Instances"
-            return "Rebuild \(update.staleInstanceCount) Outdated \(noun)…"
+            return "Rebuild \(update.staleInstanceCount) Outdated \(noun)"
         }
     }
 

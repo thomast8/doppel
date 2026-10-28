@@ -71,9 +71,11 @@ identity cannot match OpenAI's signing Team ID, and an in-place vendor update
 would erase Doppel's launcher and account routing. Doppel disables that updater
 inside every instance and checks OpenAI's production appcast itself.
 
-The menu app checks shortly after launch and every six hours. Its native prompt
-uses the primary ChatGPT icon and the same two-stage flow as the standard updater:
-download or remind later, then restart and install or wait. The download is
+The menu app checks shortly after launch and every six hours. A new build posts
+one macOS notification and shows a banner in the panel with the same two-stage
+flow as the standard updater: download or wait, then restart and update or wait.
+While Doppel works the banner shows what it is doing, and a notification reports
+the result or the failure. The download is
 resumable, its URL has to match OpenAI's own release path, and nothing closes until
 the staged app has the expected bundle ID, build number and a signature satisfying
 the vendor app's own designated requirement: Apple-anchored, Developer ID, and
@@ -496,7 +498,7 @@ reporting a problem.
 
 `Doppel --render-ui <file.png> <screen>` draws a screen offscreen from fixed
 sample data, without a display capture permission. The screens are `panel`,
-`panel-attention`, `panel-setup`, `instance`, `settings`, `settings-updates`,
+`panel-attention`, `panel-progress`, `panel-setup`, `instance`, `settings`, `settings-updates`,
 `settings-integrations`, `onboarding` and `onboarding-create`; `edit` or no
 screen draws the New Instance window.
 

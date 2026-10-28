@@ -56,6 +56,13 @@ final class InstanceStore: ObservableObject {
     /// False until the CLI has answered once, so an empty list at launch is
     /// not mistaken for a Mac with no instances.
     @Published var listLoaded = false
+    /// True only after a check that the CLI answered with "current".
+    @Published var lastCheckWasCurrent = false
+    /// What long-running work is doing, for the panel's progress banner.
+    @Published var progressNote: String?
+    /// The most recent failure, kept in the panel until dismissed so it is
+    /// still there for someone who missed the notification.
+    @Published var lastError: String?
     /// Bundle paths of every running app, kept current from NSWorkspace so the
     /// panel can say which clones are open without asking the CLI.
     @Published var runningAppPaths: [String] = []
@@ -115,7 +122,7 @@ final class InstanceStore: ObservableObject {
     /// Prompts already raised, keyed by what was offered rather than by build
     /// number alone: the reconcile prompt targets the installed build, which a
     /// download prompt for that same build may already have claimed.
-    private var promptedUpdates: Set<String> = []
+    private var announcedUpdates: Set<String> = []
     /// Accessibility and Screen Recording expose only a boolean. After one
     /// native request in this app session, a still-inconclusive row falls back
     /// to its exact Settings pane instead of repeatedly raising the same flow.
@@ -422,6 +429,7 @@ final class InstanceStore: ObservableObject {
     func rebuild(_ instance: Instance) {
         runCLI(instance.appKind.cliPrefix + ["rebuild", instance.name], busyKey: instance.id) { [weak self] failure in
             if failure == nil {
+                Notifier.post("\(instance.name) rebuilt", "It kept its account and chats and has reopened.")
                 self?.checkPermissions()
                 self?.checkNativeTools()
             }
@@ -569,79 +577,54 @@ final class InstanceStore: ObservableObject {
                     // A background check must stay quiet when the Mac is
                     // offline. A check the user explicitly requested reports
                     // the same actionable CLI failure.
+                    self.lastCheckWasCurrent = false
                     if userInitiated { self.report(message, for: "update-check") }
                 case .success(let output):
                     self.clearReport(for: "update-check")
                     // Recorded whether or not there is an update to offer, so
-                    // the menu can show the installed build either way.
+                    // the panel can show the installed build either way.
                     self.installedChatGPT = InstalledChatGPT.parse(output)
+                    // Only the CLI saying "current" means current. A line this
+                    // version cannot read, a state word added by a newer CLI
+                    // than the app, proves nothing either way.
+                    self.lastCheckWasCurrent = Self.resultFields(output).first == "current"
                     guard let update = ChatGPTUpdate.parse(output) else {
                         self.chatGPTUpdate = nil
-                        // Only the CLI saying "current" means current. A line
-                        // this version cannot read — a state word added by a
-                        // newer CLI than the app, which the dev-mode CLI
-                        // lookup makes possible — used to be announced as
-                        // being up to date, which is the one thing it does not
-                        // prove.
-                        if userInitiated {
-                            if Self.resultFields(output).first == "current" {
-                                self.showCurrentAlert()
-                            } else {
-                                self.report(Self.unreadableUpdateCheckMessage, for: "update-check")
-                            }
+                        if userInitiated && !self.lastCheckWasCurrent {
+                            self.report(Self.unreadableUpdateCheckMessage, for: "update-check")
                         }
                         return
                     }
                     self.chatGPTUpdate = update
-                    self.promptForUpdate(update, force: userInitiated)
+                    self.announce(update)
                 }
             }
         }
     }
 
+    /// The panel's banner is the offer. Acting on it starts the work at once:
+    /// the banner already says what closes, and a second dialog repeating it
+    /// was the modal the redesign set out to remove.
     func beginKnownUpdate() {
         guard let update = chatGPTUpdate else {
             checkForUpdates(userInitiated: true)
             return
         }
-        promptForUpdate(update, force: true)
-    }
-
-    /// True the first time a given prompt is offered for a given build, and
-    /// whenever the user asked for it themselves. Keyed by the state that
-    /// produced the prompt, so a reconcile offer for the installed build is not
-    /// suppressed by an earlier download offer that happened to name the same
-    /// number.
-    private func shouldPrompt(_ update: ChatGPTUpdate, force: Bool) -> Bool {
-        let key = "\(update.state.rawValue)-\(update.targetBuild)"
-        guard force || !promptedUpdates.contains(key) else { return false }
-        promptedUpdates.insert(key)
-        return true
-    }
-
-    private func promptForUpdate(_ update: ChatGPTUpdate, force: Bool = false) {
         switch update.state {
-        case .ready:
-            promptToRestart(update, force: force)
-            return
-        case .staleInstances:
-            promptToReconcile(update, force: force)
-            return
-        case .available:
-            break
+        case .available: prepareUpdate(update)
+        case .ready, .staleInstances: applyUpdate(update)
         }
-        guard shouldPrompt(update, force: force) else { return }
-        let alert = updateAlert()
-        alert.messageText = "A new version of ChatGPT is available!"
-        alert.informativeText = """
-            ChatGPT \(update.targetVersion) is now available—you have \(update.currentVersion). Would you like to download it now?
+    }
 
-            Doppel will apply this update to the primary app and all \(instances.filter(\.installed).count) managed instances together.
-            """
-        alert.addButton(withTitle: "Install Update")
-        alert.addButton(withTitle: "Remind Me Later")
-        guard present(alert) == .alertFirstButtonReturn else { return }
-        prepareUpdate(update)
+    /// One notification per offer and build, so the six-hourly check does not
+    /// repeat itself. Keyed by the state that produced it, so a reconcile offer
+    /// for the installed build is not hidden by an earlier download offer that
+    /// named the same number.
+    private func announce(_ update: ChatGPTUpdate) {
+        guard !announcedUpdates.contains(update.offerKey) else { return }
+        announcedUpdates.insert(update.offerKey)
+        let message = StatusMessages.offer(update)
+        Notifier.post(message.title, message.body)
     }
 
     private func prepareUpdate(_ update: ChatGPTUpdate) {
@@ -650,11 +633,13 @@ final class InstanceStore: ObservableObject {
             return
         }
         busy.insert("update")
+        progressNote = StatusMessages.progress(for: update)
         Task.detached { [weak self] in
             let result = Self.runProcess(cli: cli, arguments: ["update", "prepare"])
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.busy.remove("update")
+                self.progressNote = nil
                 switch result {
                 case .failure(let message):
                     self.report(message, for: "update")
@@ -662,7 +647,7 @@ final class InstanceStore: ObservableObject {
                     self.clearReport(for: "update")
                     // `update prepare` also succeeds with "already current"
                     // when the vendor's own updater installed the build while
-                    // Doppel was downloading it. Offering "Restart and Install"
+                    // Doppel was downloading it. Offering "Restart and Update"
                     // on that would apply a build the primary already has, so
                     // the state is re-read instead of assumed.
                     guard Self.resultFields(output).first == "ready" else {
@@ -678,7 +663,7 @@ final class InstanceStore: ObservableObject {
                         targetVersion: update.targetVersion,
                         staleInstanceCount: 0)
                     self.chatGPTUpdate = ready
-                    self.promptToRestart(ready, force: true)
+                    self.announce(ready)
                 }
             }
         }
@@ -693,64 +678,25 @@ final class InstanceStore: ObservableObject {
         return last.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
     }
 
-    /// Offered when ChatGPT's own updater moved the primary on its own: the
-    /// instances are the only thing left behind, and they are rebuilt from the
-    /// app already installed.
-    private func promptToReconcile(_ update: ChatGPTUpdate, force: Bool = false) {
-        guard shouldPrompt(update, force: force) else { return }
-        let count = update.staleInstanceCount
-        let noun = count == 1 ? "instance" : "instances"
-        let alert = updateAlert()
-        alert.messageText = "Managed Instances Are Out of Date"
-        alert.informativeText = """
-            ChatGPT updated itself to \(update.targetVersion) outside Doppel, so \(count) managed \(noun) \(count == 1 ? "is" : "are") still running an older version.
-
-            Doppel will close \(count == 1 ? "that instance" : "those instances"), rebuild \(count == 1 ? "it" : "them") from the installed ChatGPT app, then reopen only the ones you were using. The primary ChatGPT app is not touched and nothing needs downloading.
-
-            Active local chats will be interrupted. If a managed app asks you to confirm quitting, choose Quit so Doppel can continue safely.
-            """
-        alert.addButton(withTitle: "Rebuild \(count == 1 ? "Instance" : "Instances")")
-        alert.addButton(withTitle: "Later")
-        guard present(alert) == .alertFirstButtonReturn else { return }
-        applyUpdate(update)
-    }
-
-    private func promptToRestart(_ update: ChatGPTUpdate, force: Bool = false) {
-        guard shouldPrompt(update, force: force) else { return }
-        let alert = updateAlert()
-        alert.messageText = "Ready to Install"
-        alert.informativeText = """
-            ChatGPT \(update.targetVersion) has been downloaded and verified.
-
-            Doppel will close every running managed instance, update the primary ChatGPT app, rebuild and verify all managed instances, then reopen only the ones you were using.
-
-            A profile using Built-in Browser is closed and reopened through the official app on that same profile. If an official ChatGPT window is open on some other profile, or more than one is open, Doppel stops before changing any app.
-
-            Active local chats will be interrupted. If a managed app asks you to confirm quitting, choose Quit so Doppel can continue safely.
-            """
-        alert.addButton(withTitle: "Restart and Install")
-        alert.addButton(withTitle: "Later")
-        guard present(alert) == .alertFirstButtonReturn else { return }
-        applyUpdate(update)
-    }
-
     private func applyUpdate(_ update: ChatGPTUpdate) {
         guard let cli = discoveredCLI else {
             report(Self.missingCLIMessage, for: "cli")
             return
         }
         busy.insert("update")
+        progressNote = StatusMessages.progress(for: update)
         Task.detached { [weak self] in
             let result = Self.runProcess(
                 cli: cli, arguments: ["update", "apply", String(update.targetBuild)])
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.busy.remove("update")
+                self.progressNote = nil
                 switch result {
                 case .failure(let message):
                     self.report(message, for: "update")
                     // The cached offer is what was just refused. Keeping it
-                    // would let the same doomed apply be retried from the menu;
+                    // would let the same doomed apply be retried from the panel;
                     // re-reading is also how a primary that moved underneath
                     // Doppel turns into the reconcile offer that fixes it.
                     self.chatGPTUpdate = nil
@@ -759,26 +705,18 @@ final class InstanceStore: ObservableObject {
                     self.clearReport(for: "update")
                     self.chatGPTUpdate = nil
                     self.reload()
-                    self.showUpdateComplete(update, output: output)
+                    let message = StatusMessages.completion(update, output: output,
+                                                            signingReady: self.signingReady)
+                    Notifier.post(message.title, message.body)
                 }
             }
         }
     }
 
-    private func updateAlert() -> NSAlert {
-        let alert = NSAlert()
-        alert.alertStyle = .informational
-        let icon = NSWorkspace.shared.icon(forFile: Self.primaryAppPath)
-        icon.size = NSSize(width: 64, height: 64)
-        alert.icon = icon
-        return alert
-    }
-
     /// Presents an alert so it is actually seen. Activation is cooperative on
     /// macOS 14+: a menu-bar app raising a modal from a timer or a finished
     /// background task can be denied, which leaves the alert behind the
-    /// frontmost app or off the user's full-screen Space — a "Ready to
-    /// Install" prompt nobody sees reads as the updater doing nothing.
+    /// frontmost app or off the user's full-screen Space.
     /// Ordering the panel front regardless and letting it join the active
     /// Space keeps it visible; it takes keyboard focus only when macOS grants
     /// activation, so it can't swallow keystrokes meant for another app.
@@ -795,54 +733,6 @@ final class InstanceStore: ObservableObject {
         window.collectionBehavior.insert([.canJoinAllSpaces, .fullScreenAuxiliary])
         window.orderFrontRegardless()
         return alert.runModal()
-    }
-
-    private func showCurrentAlert() {
-        let alert = updateAlert()
-        alert.messageText = "You're up to date!"
-        alert.informativeText = "ChatGPT and its managed Doppel instances are using the latest available version."
-        alert.addButton(withTitle: "OK")
-        present(alert)
-    }
-
-    private func showUpdateComplete(_ update: ChatGPTUpdate, output: String) {
-        let fields = Self.resultFields(output)
-        let outcome = fields.first ?? "updated"
-        let verified = fields.count > 3 ? fields[3] : "all"
-        let reopened = fields.count > 4 ? fields[4] : "all previously running"
-        let alert = updateAlert()
-        let signingNote = signingReady ? "" : """
-
-            This Mac is using ad-hoc signing, so macOS may have forgotten permissions for the rebuilt apps. Doppel will show one menu-bar warning if anything needs attention. Set up secure signing in Doppel's Settings before the next update to preserve their code identity.
-            """
-        // A reconcile installs nothing, so saying an update was installed would
-        // be a claim the run never made.
-        switch outcome {
-        case "reconciled":
-            alert.messageText = "Instances Rebuilt"
-            alert.informativeText = """
-                Doppel rebuilt \(verified) managed instance(s) from ChatGPT \(update.targetVersion) and reopened \(reopened).
-                \(signingNote)
-                """
-        case "current":
-            // Deliberately not a claim about all N instances: the count is
-            // every installed instance, and one of them can be ahead of the
-            // primary rather than matching it.
-            alert.messageText = "Nothing to Rebuild"
-            alert.informativeText = """
-                No managed instance needed rebuilding for ChatGPT \(update.targetVersion), so nothing was changed or closed.
-                """
-        default:
-            alert.messageText = "Update Complete"
-            alert.informativeText = """
-                ChatGPT \(update.targetVersion) is installed.
-
-                Doppel verified \(verified) managed instance(s) and reopened \(reopened).
-                \(signingNote)
-                """
-        }
-        alert.addButton(withTitle: "OK")
-        present(alert)
     }
 
     /// Creates an instance from just a name and a tint color; the CLI derives
@@ -921,6 +811,9 @@ final class InstanceStore: ObservableObject {
             return
         }
         busy.insert("signing")
+        progressNote = instances.isEmpty
+            ? "Setting up secure signing…"
+            : "Setting up secure signing and rebuilding every instance…"
         let rebuildCommands = instances.map { $0.appKind.cliPrefix + ["rebuild", $0.name] }
         Task.detached { [weak self] in
             let failure = SigningIdentity.setUp(cli: cli)
@@ -931,7 +824,13 @@ final class InstanceStore: ObservableObject {
             }
             await MainActor.run { [weak self] in
                 self?.busy.remove("signing")
-                if let failure { self?.report(failure, for: "signing") }
+                self?.progressNote = nil
+                if let failure {
+                    self?.report(failure, for: "signing")
+                } else {
+                    Notifier.post("Secure signing is ready",
+                                  "Instances keep their macOS permissions across updates.")
+                }
                 self?.reload()
             }
         }
@@ -952,19 +851,15 @@ final class InstanceStore: ObservableObject {
 
     static let unreadableUpdateCheckMessage = "Doppel could not understand what the doppel command-line tool reported about updates, so it cannot say whether anything needs updating. Update Doppel, or run 'doppel update check' in Terminal to see the answer directly."
 
-    /// Failures are raised as an alert when they happen. The menu stays a list
-    /// of instances and the things you can do to them — never a log of what
-    /// went wrong earlier, which outlived the problem it described and kept
-    /// describing it long after the user had moved on.
+    /// Failures are posted as a notification when they happen and stay in the
+    /// panel until dismissed. A condition that persists across reloads is
+    /// raised once rather than after every refresh.
     private func report(_ message: String, for key: String) {
         guard reported[key] != message else { return }
         reported[key] = message
-        let alert = NSAlert()
-        alert.messageText = "Doppel could not finish that"
-        alert.informativeText = CLIErrorReport.summary(message)
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "OK")
-        present(alert)
+        let summary = CLIErrorReport.summary(message)
+        lastError = summary
+        Notifier.post("Doppel could not finish that", summary)
     }
 
     private func clearReport(for key: String) {
