@@ -81,3 +81,26 @@ private final class ForegroundPresenter: NSObject, UNUserNotificationCenterDeleg
         completionHandler([.banner, .list])
     }
 }
+
+/// One step reported by the CLI or engine while it works. They print these to
+/// stderr only when the app sets DOPPEL_PROGRESS=1.
+struct CLIProgress: Equatable {
+    let fraction: Double
+    let label: String
+
+    static let prefix = "doppel-progress\t"
+
+    static func parse(_ line: String) -> CLIProgress? {
+        guard line.hasPrefix(prefix) else { return nil }
+        let fields = line.dropFirst(prefix.count).split(separator: "\t", maxSplits: 1)
+        guard fields.count == 2, let percent = Int(fields[0]) else { return nil }
+        return CLIProgress(fraction: Double(min(max(percent, 0), 100)) / 100, label: String(fields[1]))
+    }
+
+    /// stderr is also the failure message, which must not read as a list of
+    /// the steps that went well before it.
+    static func withoutProgress(_ stderr: String) -> String {
+        stderr.split(separator: "\n").filter { !$0.hasPrefix(prefix) }
+            .joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}

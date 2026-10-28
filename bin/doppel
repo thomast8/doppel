@@ -93,6 +93,41 @@ readonly QUIT_DIALOG_WAIT_SECONDS=120
 
 die() { print -u2 -r -- "doppel: $1"; exit 1 }
 
+# Progress for the menu bar app, which sets DOPPEL_PROGRESS=1 and reads one
+# line per step from stderr: "doppel-progress<TAB>percent<TAB>label". Silent
+# otherwise, so terminal output and every porcelain format are unchanged.
+progress() {
+    [[ "${DOPPEL_PROGRESS:-0}" == "1" ]] && print -u2 -r -- "doppel-progress"$'\t'"$1"$'\t'"$2"
+    return 0
+}
+
+# Downloads with curl in the background while reporting how much of the
+# expected size has arrived, mapped onto [from, to] percent. The size comes
+# from a HEAD request; when the server does not give one, the bar just holds
+# at the start of the range rather than inventing a number.
+download_with_progress() {
+    local url="$1" output="$2" label="$3" from="$4" to="$5" total size pid
+    if [[ "${DOPPEL_PROGRESS:-0}" != "1" ]]; then
+        /usr/bin/curl --fail --silent --show-error --location --retry 3 --retry-all-errors --retry-delay 2 \
+            --continue-at - --output "$output" "$url"
+        return
+    fi
+    total="$(/usr/bin/curl --fail --silent --location --head "$url" 2>/dev/null | \
+        /usr/bin/awk 'tolower($1) == "content-length:" { value = $2 } END { print value + 0 }')"
+    /usr/bin/curl --fail --silent --show-error --location --retry 3 --retry-all-errors --retry-delay 2 \
+        --continue-at - --output "$output" "$url" &
+    pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+        if (( total > 0 )) && [[ -f "$output" ]]; then
+            size="$(/usr/bin/stat -f %z "$output" 2>/dev/null || print 0)"
+            (( size > total )) && size=$total
+            progress $(( from + (to - from) * size / total )) "$label"
+        fi
+        /bin/sleep 0.5
+    done
+    wait "$pid"
+}
+
 # A rollback must remain byte-for-byte restorable, but any stored directory
 # that still has Contents/ is an app bundle to Launch Services and Computer
 # Use: with Info.plist it is a duplicate install, without it (the old mask) a
@@ -2163,10 +2198,12 @@ cmd_rebuild() {
             die "'$1' is unexpectedly running through both engine states. Quit its Doppel window before rebuilding; the official engine was left untouched."
     else
         clone_instance_is_running "$dir" && was_running=1
+        (( was_running )) && progress 5 "Closing $1"
         (( was_running )) && quit_instance "$app" "$bundle_id" "$1"
         any_chatgpt_process_uses_profile "$dir" && \
             die "'$1''s profile is still open through another ChatGPT process. Quit it before rebuilding."
     fi
+    progress 12 "Preparing the rebuild"
     prepare_rebuild_primary
     trap 'release_rebuild_primary' EXIT INT TERM
     compile_helpers
@@ -2175,6 +2212,7 @@ cmd_rebuild() {
         /bin/zsh "$dir/doppel-engine.zsh" install "$app")"
     release_rebuild_primary
     trap - EXIT INT TERM
+    progress 90 "Reopening $1"
     refresh_icon_caches "$app"
     # A rebuild selected by the user is also a request to use the rebuilt app.
     # Relaunch even when the caller had to quit a scheduled-task warning before
@@ -2622,6 +2660,7 @@ cmd_update_prepare() {
     [[ $# -eq 0 ]] || die "usage: doppel update prepare"
     validate_vendor_app "$PRIMARY_APP" || die "the primary ChatGPT app is missing or is not valid vendor-signed code"
     local current latest latest_version latest_short latest_url prepared partial archive staging extracted metadata
+    progress 2 "Checking OpenAI's update feed"
     current="$(primary_version)"
     latest="$(fetch_latest_update)"
     IFS=$'\t' read -r latest_version latest_short latest_url <<< "$latest"
@@ -2638,9 +2677,8 @@ cmd_update_prepare() {
     partial="$UPDATE_ROOT/Downloads/ChatGPT-$latest_version.zip.partial"
     archive="$UPDATE_ROOT/Downloads/ChatGPT-$latest_version.zip"
     if [[ ! -f "$archive" ]]; then
-        print -u2 -r -- "Downloading ChatGPT $latest_short…"
-        /usr/bin/curl --fail --silent --show-error --location --retry 3 --retry-all-errors --retry-delay 2 \
-            --continue-at - --output "$partial" "$latest_url" || \
+        [[ "${DOPPEL_PROGRESS:-0}" == "1" ]] || print -u2 -r -- "Downloading ChatGPT $latest_short…"
+        download_with_progress "$latest_url" "$partial" "Downloading ChatGPT $latest_short" 5 80 || \
             die "downloading ChatGPT $latest_short failed; the partial download was kept for retry"
         /bin/mv "$partial" "$archive" || die "finishing the ChatGPT download failed"
     fi
@@ -2648,6 +2686,7 @@ cmd_update_prepare() {
     staging="$UPDATE_ROOT/Staging/$latest_version.$$"
     [[ ! -e "$staging" ]] || die "the update staging path already exists: $staging"
     /bin/mkdir "$staging" || die "creating the update staging directory failed"
+    progress 82 "Unpacking ChatGPT $latest_short"
     if ! /usr/bin/ditto -x -k "$archive" "$staging"; then
         /bin/rm -rf "$staging"
         die "unpacking ChatGPT $latest_short failed"
@@ -2659,6 +2698,7 @@ cmd_update_prepare() {
         die "the ChatGPT update contained ${#apps} top-level app bundles instead of one"
     fi
     extracted="${apps[1]}"
+    progress 92 "Verifying OpenAI's signature"
     if ! validate_vendor_app "$extracted" "$latest_version"; then
         /bin/rm -rf "$staging"
         die "the downloaded ChatGPT app failed its bundle ID, version, Team ID, or strict signature check"
@@ -2950,6 +2990,7 @@ cmd_update_apply() {
         (( version > current )) || die "ChatGPT $version is older than the installed build $current"
         validate_vendor_app "$prepared" "$version" || die "ChatGPT $version has not been downloaded and verified; run 'doppel update prepare' first"
     fi
+    progress 3 "Checking that this ChatGPT build can be patched"
     if (( reconcile_only )); then
         precheck_patch_compat "$PRIMARY_APP"
     else
@@ -3035,6 +3076,7 @@ cmd_update_apply() {
     # All destructive work starts only after the download, vendor signature,
     # instance inventory, helper compilation, and restart manifest are ready.
     local index
+    progress 15 "Closing running instances"
     if [[ "$vendor_kind" != "none" ]]; then
         quit_instance "$PRIMARY_APP" "$PRIMARY_BUNDLE_ID" "ChatGPT"
     fi
@@ -3054,6 +3096,7 @@ cmd_update_apply() {
         /bin/mkdir -p "$UPDATE_ROOT/.Backups"
         backup="$UPDATE_ROOT/.Backups/ChatGPT.$current.$stamp.app"
         [[ ! -e "$backup" ]] || die "the primary rollback path already exists: $backup"
+        progress 22 "Installing ChatGPT $target_short"
         "$LSREGISTER" -u "$PRIMARY_APP" >/dev/null 2>&1 || true
         /bin/mv "$PRIMARY_APP" "$backup" || die "moving the current primary ChatGPT app into rollback storage failed"
         if ! /bin/mv "$prepared" "$PRIMARY_APP"; then
@@ -3075,6 +3118,7 @@ cmd_update_apply() {
     # them concurrently, keeping process IDs in the same order as the instance
     # arrays so results are still reported deterministically.
     local -a rebuild_pids
+    progress 30 "Rebuilding ${#dirs} of ${#dirs} instances"
     for (( index = 1; index <= ${#dirs}; index++ )); do
         rebuild_instance_for_update "${dirs[$index]}" "$version" &
         rebuild_pids+=("$!")
@@ -3086,7 +3130,11 @@ cmd_update_apply() {
         else
             failures+=("$name did not rebuild or verify")
         fi
+        # Waited in order, so this counts the ones known finished; the rest
+        # may already be done too, which the bar catches up on.
+        progress $(( 30 + 58 * index / ${#dirs} )) "Rebuilt $index of ${#dirs} instances"
     done
+    progress 90 "Reopening instances"
 
     local reopened=0 was_running verified reopen_dir
     for was_running in $running_apps; do

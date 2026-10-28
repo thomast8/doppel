@@ -166,13 +166,16 @@ struct MenuContent: View {
                 }
             }
         }
-        // The CLI reports no steps, so the bar is indeterminate and the label
-        // names the phase rather than a percentage it cannot know.
+        // The bar fills from the steps the CLI reports. Until the first one
+        // arrives it is indeterminate under the name of the work started.
         if let note = store.progressNote {
             banner {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(note).font(.system(size: 13, weight: .medium))
-                    ProgressView().progressViewStyle(.linear)
+                    if let step = store.progress {
+                        Text(step.label).font(.system(size: 12)).foregroundStyle(.secondary)
+                    }
+                    progressBar(store.progress)
                     Text("You can close this panel. Doppel sends a notification when it is done.")
                         .font(.system(size: 11.5))
                         .foregroundStyle(.secondary)
@@ -262,9 +265,11 @@ struct MenuContent: View {
     private func statusLine(_ instance: Instance, activity: InstanceActivity) -> some View {
         switch activity {
         case .working:
+            let step = store.instanceProgress[instance.id]
             VStack(alignment: .leading, spacing: 4) {
-                Text("Working…").font(.system(size: 11.5)).foregroundStyle(.secondary)
-                ProgressView().progressViewStyle(.linear).controlSize(.small)
+                Text(step.map { "\($0.label)…" } ?? "Working…")
+                    .font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
+                progressBar(step).controlSize(.small)
             }
         case .checkerOutdated:
             Label("Permission checker needs a rebuild", systemImage: "exclamationmark.triangle.fill")
@@ -311,6 +316,22 @@ struct MenuContent: View {
         case .stopped:
             pill("Open") { PanelWindow.close(); store.launch(instance) }
                 .disabled(store.engineOperationBusy)
+        }
+    }
+
+    @ViewBuilder
+    private func progressBar(_ step: CLIProgress?) -> some View {
+        if let step {
+            HStack(spacing: 8) {
+                ProgressView(value: step.fraction).progressViewStyle(.linear)
+                Text("\(Int((step.fraction * 100).rounded()))%")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(step.label), \(Int((step.fraction * 100).rounded())) percent")
+        } else {
+            ProgressView().progressViewStyle(.linear)
         }
     }
 

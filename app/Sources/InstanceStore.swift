@@ -60,6 +60,10 @@ final class InstanceStore: ObservableObject {
     @Published var lastCheckWasCurrent = false
     /// What long-running work is doing, for the panel's progress banner.
     @Published var progressNote: String?
+    /// The latest step the CLI reported for that work, when it reports any.
+    @Published var progress: CLIProgress?
+    /// The same for single-instance work such as a rebuild, keyed by slug.
+    @Published var instanceProgress: [String: CLIProgress] = [:]
     /// The most recent failure, kept in the panel until dismissed so it is
     /// still there for someone who missed the notification.
     @Published var lastError: String?
@@ -426,8 +430,18 @@ final class InstanceStore: ObservableObject {
         }
     }
 
+    nonisolated private func globalProgressSink() -> @Sendable (CLIProgress) -> Void {
+        { [weak self] step in Task { @MainActor in self?.progress = step } }
+    }
+
+    nonisolated private func instanceProgressSink(_ id: String) -> @Sendable (CLIProgress) -> Void {
+        { [weak self] step in Task { @MainActor in self?.instanceProgress[id] = step } }
+    }
+
     func rebuild(_ instance: Instance) {
-        runCLI(instance.appKind.cliPrefix + ["rebuild", instance.name], busyKey: instance.id) { [weak self] failure in
+        runCLI(instance.appKind.cliPrefix + ["rebuild", instance.name], busyKey: instance.id,
+               onProgress: instanceProgressSink(instance.id)) { [weak self] failure in
+            self?.instanceProgress[instance.id] = nil
             if failure == nil {
                 Notifier.post("\(instance.name) rebuilt", "It kept its account and chats and has reopened.")
                 self?.checkPermissions()
@@ -635,11 +649,13 @@ final class InstanceStore: ObservableObject {
         busy.insert("update")
         progressNote = StatusMessages.progress(for: update)
         Task.detached { [weak self] in
-            let result = Self.runProcess(cli: cli, arguments: ["update", "prepare"])
+            let result = Self.runProcess(cli: cli, arguments: ["update", "prepare"],
+                                         onProgress: self?.globalProgressSink())
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.busy.remove("update")
                 self.progressNote = nil
+                self.progress = nil
                 switch result {
                 case .failure(let message):
                     self.report(message, for: "update")
@@ -687,11 +703,13 @@ final class InstanceStore: ObservableObject {
         progressNote = StatusMessages.progress(for: update)
         Task.detached { [weak self] in
             let result = Self.runProcess(
-                cli: cli, arguments: ["update", "apply", String(update.targetBuild)])
+                cli: cli, arguments: ["update", "apply", String(update.targetBuild)],
+                onProgress: self?.globalProgressSink())
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.busy.remove("update")
                 self.progressNote = nil
+                self.progress = nil
                 switch result {
                 case .failure(let message):
                     self.report(message, for: "update")
@@ -818,13 +836,17 @@ final class InstanceStore: ObservableObject {
         Task.detached { [weak self] in
             let failure = SigningIdentity.setUp(cli: cli)
             if failure == nil {
-                for arguments in rebuildCommands {
+                for (index, arguments) in rebuildCommands.enumerated() {
+                    let step = CLIProgress(fraction: Double(index) / Double(rebuildCommands.count),
+                                           label: "Rebuilding \(arguments.last ?? ""), \(index + 1) of \(rebuildCommands.count)")
+                    await MainActor.run { [weak self] in self?.progress = step }
                     _ = Self.runProcess(cli: cli, arguments: arguments)
                 }
             }
             await MainActor.run { [weak self] in
                 self?.busy.remove("signing")
                 self?.progressNote = nil
+                self?.progress = nil
                 if let failure {
                     self?.report(failure, for: "signing")
                 } else {
@@ -893,7 +915,10 @@ final class InstanceStore: ObservableObject {
         return String(fields[1])
     }
 
-    nonisolated private static func runProcess(cli: URL, arguments: [String]) -> ProcessResult {
+    /// With onProgress, the CLI is asked for its progress lines and they are
+    /// delivered as they arrive, on whatever thread reads the pipe.
+    nonisolated private static func runProcess(cli: URL, arguments: [String],
+                                               onProgress: (@Sendable (CLIProgress) -> Void)? = nil) -> ProcessResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = [cli.path] + arguments
@@ -901,15 +926,25 @@ final class InstanceStore: ObservableObject {
         let stderrPipe = Pipe()
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
+        let stderrBuffer = ProgressStream(onProgress: onProgress)
+        if onProgress != nil {
+            var environment = ProcessInfo.processInfo.environment
+            environment["DOPPEL_PROGRESS"] = "1"
+            process.environment = environment
+            stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+                stderrBuffer.append(handle.availableData)
+            }
+        }
         do {
             try process.run()
             process.waitUntilExit()
             let stdout = String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            stderrPipe.fileHandleForReading.readabilityHandler = nil
+            stderrBuffer.append(stderrPipe.fileHandleForReading.readDataToEndOfFile())
             if process.terminationStatus != 0 {
                 // Fall back through stderr, then stdout: a bare "exited 1" tells
                 // the user nothing about what actually went wrong.
-                let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let stderr = CLIProgress.withoutProgress(stderrBuffer.text)
                 let detail = !stderr.isEmpty
                     ? stderr
                     : stdout.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -928,6 +963,7 @@ final class InstanceStore: ObservableObject {
     private func runCLI(_ arguments: [String], busyKey: String,
                         reportFailure: Bool = true,
                         successTitle: String? = nil,
+                        onProgress: (@Sendable (CLIProgress) -> Void)? = nil,
                         completion: (@MainActor (String?) -> Void)? = nil) {
         guard let cli = discoveredCLI else {
             if reportFailure { report(Self.missingCLIMessage, for: "cli") }
@@ -936,7 +972,7 @@ final class InstanceStore: ObservableObject {
         }
         busy.insert(busyKey)
         Task.detached { [weak self] in
-            let result = Self.runProcess(cli: cli, arguments: arguments)
+            let result = Self.runProcess(cli: cli, arguments: arguments, onProgress: onProgress)
             let failure: String?
             if case .failure(let message) = result { failure = message } else { failure = nil }
             await MainActor.run { [weak self] in
@@ -957,6 +993,34 @@ final class InstanceStore: ObservableObject {
                 completion?(failure)
             }
         }
+    }
+}
+
+/// Collects a child's stderr while it runs, handing each complete progress
+/// line on as it arrives and keeping everything for the failure message.
+private final class ProgressStream: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+    private var pending = ""
+    private let onProgress: (@Sendable (CLIProgress) -> Void)?
+
+    init(onProgress: (@Sendable (CLIProgress) -> Void)?) { self.onProgress = onProgress }
+
+    func append(_ chunk: Data) {
+        guard !chunk.isEmpty else { return }
+        lock.lock()
+        data.append(chunk)
+        pending += String(decoding: chunk, as: UTF8.self)
+        var lines = pending.components(separatedBy: "\n")
+        pending = lines.removeLast()
+        lock.unlock()
+        guard let onProgress else { return }
+        for line in lines { if let step = CLIProgress.parse(line) { onProgress(step) } }
+    }
+
+    var text: String {
+        lock.lock(); defer { lock.unlock() }
+        return String(decoding: data, as: UTF8.self)
     }
 }
 

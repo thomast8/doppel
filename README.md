@@ -483,6 +483,8 @@ with the Command Line Tools, and a Mac can have Xcode installed while
 toolchain that has XCTest instead of asking you to change that global setting.
 The `qa/` suites need nothing beyond macOS.
 
+With `DOPPEL_PROGRESS=1` set, `update prepare`, `update apply`, `rebuild` and `create` print one `doppel-progress<TAB>percent<TAB>step` line to stderr per step, which is what fills the app's progress bars. Without it their output is unchanged.
+
 Failed actions show a short message instead of command output. When the disk is writable, the original CLI diagnostics are saved locally to `~/Library/Logs/Doppel/cli-errors.log`, readable only by your account.
 
 A menu-bar-only front end (`LSUIElement`, so no Dock icon). The panel lists

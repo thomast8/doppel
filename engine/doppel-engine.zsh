@@ -110,6 +110,14 @@ log_message() {
     print -r -- "$(/bin/date '+%Y-%m-%d %H:%M:%S') [$DOPPEL_DISPLAY_NAME] $message" >> "$LOG_FILE"
 }
 
+# Steps for the menu bar app's progress bar, the same line format as the
+# CLI's progress(). Percentages are of a whole rebuild, which this build is
+# the bulk of. Silent unless the app asked for them.
+progress() {
+    [[ "${DOPPEL_PROGRESS:-0}" == "1" ]] && print -u2 -r -- "doppel-progress"$'\t'"$1"$'\t'"$2"
+    return 0
+}
+
 fail_closed() {
     local message="$1"
     log_message "ERROR: $message"
@@ -473,6 +481,7 @@ build_instance() {
     [[ ! -e "$target" ]] || fail_closed "Refusing to overwrite an existing staging path: $target"
     mkdir -p "${target:h}"
     log_message "Building instance $version at $target"
+    progress 25 "Copying ChatGPT"
     # APFS can clone the 1+ GB source bundle copy-on-write in seconds. Each
     # instance then gets private copies only for the files Doppel changes.
     # Keep ditto as the fallback for non-APFS volumes or older macOS.
@@ -539,6 +548,7 @@ build_instance() {
     # registered codex:// OAuth callback. The ASAR patch claims codex:// only
     # when this instance actually starts connector authorization.
     local asar_hash
+    progress 45 "Patching account routing"
     asar_hash="$(/usr/bin/python3 "$DEEP_LINK_PATCHER" --app "$DOPPEL_APP_KIND" patch \
         "$target/Contents/Resources/app.asar")" || \
         fail_closed "Patching the instance OAuth callback routing failed."
@@ -584,6 +594,7 @@ build_instance() {
     verify_filtered_entitlements "$entitlements" || \
         fail_closed "The entitlements plist changed after filtering; refusing to sign."
 
+    progress 60 "Signing"
     # -i pins the code-signing identifier to this instance, so each instance has
     # its own code identity: keychain ACLs and TCC grants no longer transfer
     # from one instance to another.
@@ -601,6 +612,7 @@ build_instance() {
         "$target" >/dev/null || fail_closed "Signing the instance bundle failed."
     /bin/rm -rf "$entitlements_dir"
     /usr/bin/xattr -cr "$target" || fail_closed "Removing post-signing Finder metadata failed."
+    progress 80 "Verifying the signature"
     /usr/bin/codesign --verify --deep --strict "$target" >/dev/null 2>&1 || \
         fail_closed "The staged instance bundle failed signature verification."
     instance_is_healthy "$target" "$version" "$executable_hash" || \

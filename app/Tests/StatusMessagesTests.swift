@@ -46,3 +46,22 @@ final class StatusMessagesTests: XCTestCase {
         XCTAssertEqual(bare.body, "Doppel verified all instances and reopened the ones that were running.")
     }
 }
+
+final class CLIProgressTests: XCTestCase {
+    func testParsesAProgressLine() {
+        XCTAssertEqual(CLIProgress.parse("doppel-progress\t42\tDownloading ChatGPT 1.1"),
+                       CLIProgress(fraction: 0.42, label: "Downloading ChatGPT 1.1"))
+    }
+
+    func testClampsAndRejectsMalformedLines() {
+        XCTAssertEqual(CLIProgress.parse("doppel-progress\t140\tDone")?.fraction, 1)
+        XCTAssertNil(CLIProgress.parse("doppel-progress\tabc\tDone"))
+        XCTAssertNil(CLIProgress.parse("doppel: something failed"))
+        XCTAssertNil(CLIProgress.parse("doppel-progress\t10"))
+    }
+
+    func testErrorTextLeavesProgressLinesOut() {
+        let stderr = "doppel-progress\t10\tPreparing\ndoppel: the rebuild failed\ndoppel-progress\t20\tSigning\n"
+        XCTAssertEqual(CLIProgress.withoutProgress(stderr), "doppel: the rebuild failed")
+    }
+}

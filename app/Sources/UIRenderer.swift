@@ -72,6 +72,7 @@ enum UIRenderer {
         if screen == "panel-progress" {
             store.busy = ["update"]
             store.progressNote = "Installing ChatGPT 26.821.10230 and rebuilding every instance…"
+            store.progress = CLIProgress(fraction: 0.59, label: "Rebuilt 2 of 3 instances")
             store.lastError = "ChatGPT Work could not reopen. Launch it again from Doppel."
         } else if screen == "panel" {
             store.lastCheckWasCurrent = true
@@ -152,6 +153,7 @@ enum UIRenderer {
         }
         if attention {
             store.busy = ["work"]
+            store.instanceProgress["work"] = CLIProgress(fraction: 0.6, label: "Signing")
             store.chatGPTUpdate = ChatGPTUpdate(state: .ready, currentBuild: 6662, currentVersion: "26.810.52044",
                                                 targetBuild: 6700, targetVersion: "26.821.10230",
                                                 staleInstanceCount: 0)
