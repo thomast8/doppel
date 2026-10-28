@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Exercise Creator Micro assignment through the real CLI in isolated state."""
+import json
 import os
 import re
 from pathlib import Path
@@ -10,7 +11,8 @@ import tempfile
 cli = Path(__file__).resolve().parents[1] / "bin/doppel"
 with tempfile.TemporaryDirectory(prefix="doppel-micro-") as scratch:
     root = Path(scratch)
-    environment = {**os.environ, "DOPPEL_HOME": scratch, "DOPPEL_DEV": "1"}
+    environment = {**os.environ, "DOPPEL_HOME": scratch, "DOPPEL_DEV": "1",
+                   "CLAUDE_CONFIG_DIR": f"{scratch}/claude", "XDG_CONFIG_HOME": f"{scratch}/xdg"}
     for slug, name in [("personal", "ChatGPT Personal"), ("veridue", "ChatGPT Veridue")]:
         instance = root / "instances" / slug
         instance.mkdir(parents=True)
@@ -64,6 +66,82 @@ with tempfile.TemporaryDirectory(prefix="doppel-micro-") as scratch:
     assert not (channels / "personal").exists()
     run("channel", "ChatGPT Veridue", "any")
     assert run("channel") == "Creator Micro channels: none set\n"
+
+    # Claude Code setup, against a stand-in claude CLI that records each call
+    # and edits the throwaway settings the way the real one would.
+    claude_home, xdg = root / "claude", root / "xdg"
+    claude_home.mkdir()
+    settings = claude_home / "settings.json"
+    settings.write_text(json.dumps({"env": {"KEEP": "1"}, "theme": "dark"}))
+    (xdg / "codex-micro").mkdir(parents=True)
+    pad_config = xdg / "codex-micro" / "config.toml"
+    pad_config.write_text('[keys]\nfast = "approve"\n')
+    calls = root / "claude-calls"
+    stub = root / "claude-stub"
+    stub.write_text(f'''#!/usr/bin/python3
+import json, sys
+args = " ".join(sys.argv[1:])
+open({str(calls)!r}, "a").write(args + "\\n")
+path = {str(settings)!r}
+data = json.load(open(path))
+if args == "--version":
+    print("2.1.252 (Claude Code)")
+elif args.startswith("plugin marketplace add "):
+    data.setdefault("extraKnownMarketplaces", {{}})["codex-micro"] = {{
+        "source": {{"source": "github", "repo": sys.argv[4]}}}}
+elif args == "plugin marketplace remove codex-micro":
+    data["extraKnownMarketplaces"].pop("codex-micro")
+    data.get("enabledPlugins", {{}}).pop("codex-micro@codex-micro", None)
+elif args == "plugin install codex-micro@codex-micro":
+    data.setdefault("enabledPlugins", {{}})["codex-micro@codex-micro"] = True
+else:
+    sys.exit("unexpected: " + args)
+json.dump(data, open(path, "w"))
+''')
+    stub.chmod(0o755)
+    environment.update(CLAUDE_CONFIG_DIR=str(claude_home), XDG_CONFIG_HOME=str(xdg),
+                       DOPPEL_CLAUDE_CLI=str(stub))
+    called = lambda: calls.read_text().splitlines() if calls.exists() else []
+
+    assert run("claude") == "Claude Code: not set up\n"
+    run("channel", "ChatGPT Veridue", "1")
+    run("claude", "1", "--yes", success=False)
+    plan = run("claude", "2", "--plan")
+    for step in ["add the codex-micro marketplace from thomast8/codex-micro-for-claude-code",
+                 "install the codex-micro plugin",
+                 "turn on CLAUDE_CODE_ENABLE_FUNCTION_HOOKS",
+                 "keep the plugin to Bluetooth channel 2",
+                 "older than 2.1.303"]:
+        assert step in plan, (step, plan)
+    assert called() == ["--version"]
+    assert pad_config.read_text() == '[keys]\nfast = "approve"\n'
+    run("claude", "2", success=False)
+    assert called() == ["--version", "--version"]
+    run("claude", "2", "--yes")
+    assert called()[2:] == ["--version", "plugin marketplace add thomast8/codex-micro-for-claude-code",
+                            "plugin install codex-micro@codex-micro"], called()
+    data = json.loads(settings.read_text())
+    assert data["env"] == {"KEEP": "1", "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1"}
+    assert data["theme"] == "dark"
+    assert pad_config.read_text() == '[keys]\nfast = "approve"\n\n[pad]\nchannel = 2\n'
+    assert run("claude") == "Claude Code: channel 2\n"
+    assert "nothing to change" in run("claude", "2", "--plan")
+    assert run("channel") == "ChatGPT Veridue: 1\nClaude Code: 2\n"
+    run("channel", "ChatGPT Personal", "2", success=False)
+    run("claude", "3", "--yes")
+    assert pad_config.read_text() == '[keys]\nfast = "approve"\n\n[pad]\nchannel = 3\n'
+    data["extraKnownMarketplaces"]["codex-micro"]["source"]["repo"] = "dustinwdev/codex-micro-for-claude-code"
+    settings.write_text(json.dumps(data))
+    calls.unlink()
+    assert "point the codex-micro marketplace at thomast8/codex-micro-for-claude-code" in run("claude", "3", "--plan")
+    run("claude", "3", "--yes")
+    assert called()[1:] == ["--version", "plugin marketplace remove codex-micro",
+                            "plugin marketplace add thomast8/codex-micro-for-claude-code",
+                            "plugin install codex-micro@codex-micro"], called()
+    run("claude", "any", "--yes")
+    assert "channel" not in pad_config.read_text()
+    assert run("claude") == "Claude Code: every channel\n"
+    run("channel", "ChatGPT Veridue", "any")
 
 print("Creator Micro CLI QA passed")
 

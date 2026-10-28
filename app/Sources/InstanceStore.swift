@@ -38,6 +38,7 @@ final class InstanceStore: ObservableObject {
     @Published var creatorMicroOwnerID: String?
     @Published var checkingCreatorMicro = false
     @Published var creatorMicroStatusAvailable = false
+    @Published var claudeMicroStatus: String?
     private var remoteProcesses: [UUID: RemoteCLIProcess] = [:]
 
     var permissionIssues: [PermissionIssue] { permissionStatuses.filter(\.needsAttention) }
@@ -264,9 +265,15 @@ final class InstanceStore: ObservableObject {
         checkingCreatorMicro = true
         Task.detached { [weak self] in
             let result = Self.runProcess(cli: cli, arguments: ["micro", "status", "--porcelain"])
+            let claude = Self.runProcess(cli: cli, arguments: ["micro", "claude"])
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.checkingCreatorMicro = false
+                if case .success(let output) = claude {
+                    self.claudeMicroStatus = output.trimmingCharacters(in: .whitespacesAndNewlines)
+                } else {
+                    self.claudeMicroStatus = nil
+                }
                 switch result {
                 case .failure(let message):
                     self.creatorMicroStatusAvailable = false
@@ -278,6 +285,47 @@ final class InstanceStore: ObservableObject {
                     self.creatorMicroOwnerID = Self.parseCreatorMicroOwner(output)
                 }
             }
+        }
+    }
+
+    /// Asks the CLI what setting up Claude Code would change, shows that, and
+    /// applies it only once confirmed.
+    func setUpClaudeMicro(channel: String) {
+        guard let cli = discoveredCLI else {
+            report(Self.missingCLIMessage, for: "cli")
+            return
+        }
+        busy.insert("creator-micro")
+        Task.detached { [weak self] in
+            let plan = Self.runProcess(cli: cli, arguments: ["micro", "claude", channel, "--plan"])
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.busy.remove("creator-micro")
+                switch plan {
+                case .failure(let message):
+                    self.report(message, for: "creator-micro")
+                case .success(let output):
+                    self.confirmClaudeMicro(channel: channel, plan: output)
+                }
+            }
+        }
+    }
+
+    private func confirmClaudeMicro(channel: String, plan: String) {
+        let alert = NSAlert()
+        let nothingToDo = plan.contains("nothing to change")
+        alert.messageText = nothingToDo ? "Claude Code is already set up" : "Set up Claude Code for the Creator Micro?"
+        alert.informativeText = plan.trimmingCharacters(in: .whitespacesAndNewlines)
+        if nothingToDo {
+            alert.addButton(withTitle: "OK")
+            present(alert)
+            return
+        }
+        alert.addButton(withTitle: "Set Up")
+        alert.addButton(withTitle: "Cancel")
+        guard present(alert) == .alertFirstButtonReturn else { return }
+        runCLI(["micro", "claude", channel, "--yes"], busyKey: "creator-micro") { [weak self] _ in
+            self?.checkCreatorMicro()
         }
     }
 

@@ -348,6 +348,18 @@ struct MenuContent: View {
             Button("Release Assignment") { store.releaseCreatorMicro() }
                 .disabled(store.checkingCreatorMicro || store.engineOperationBusy)
             Divider()
+            Menu("Use with Claude Code") {
+                if let status = store.claudeMicroStatus {
+                    Text(status)
+                    Divider()
+                }
+                ForEach(1...9, id: \.self) { channel in
+                    Button("Bluetooth Channel \(channel)…") { store.setUpClaudeMicro(channel: String(channel)) }
+                }
+                Button("Every Channel…") { store.setUpClaudeMicro(channel: "any") }
+            }
+            .disabled(store.checkingCreatorMicro || store.engineOperationBusy)
+            Divider()
             Text("Running affected instances restart automatically.")
             Text("Official ChatGPT also uses the keypad when running.")
         }
