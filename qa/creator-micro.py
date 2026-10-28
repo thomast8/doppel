@@ -55,6 +55,9 @@ with tempfile.TemporaryDirectory(prefix="doppel-micro-") as scratch:
     for invalid in ["0", "10", "x", "../1"]:
         run("channel", "ChatGPT Veridue", invalid, success=False)
     run("channel", "Missing Instance", "2", success=False)
+    (channels / "removed-instance").write_text("2\n")
+    run("channel", "ChatGPT Personal", "2")
+    run("channel", "ChatGPT Personal", "3")
     run("channel", "ChatGPT Veridue", "1")
     assert run("channel") == "ChatGPT Personal: 3\nChatGPT Veridue: 1\n"
     run("channel", "ChatGPT Personal", "any")

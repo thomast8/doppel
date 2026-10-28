@@ -1670,14 +1670,14 @@ cmd_micro() {
         # of the pad's channel button. A clone with a channel uses the pad even
         # if it is not the owner. Read at launch; USB always reaches them.
         channel)
-            local name file
+            local name file other value
             if [[ $# -eq 0 ]]; then
                 local -a lines=()
                 for file in "$CODEX_MICRO_CHANNELS"/*(N); do
                     is_instance_dir "$INSTANCES_ROOT/${file:t}" || continue
-                    IFS= read -r slug < "$file" || true
-                    [[ "$slug" == [1-9] ]] || continue
-                    lines+=("$(config_value "$INSTANCES_ROOT/${file:t}" DOPPEL_DISPLAY_NAME): $slug")
+                    IFS= read -r value < "$file" || true
+                    [[ "$value" == [1-9] ]] || continue
+                    lines+=("$(config_value "$INSTANCES_ROOT/${file:t}" DOPPEL_DISPLAY_NAME): $value")
                 done
                 (( ${#lines} )) && print -rl -- "${lines[@]}" || print -r -- "Creator Micro channels: none set"
                 return
@@ -1691,9 +1691,11 @@ cmd_micro() {
                 print -r -- "$name now uses every channel; restart it to apply"
                 return
             fi
-            for slug in "$CODEX_MICRO_CHANNELS"/*(N); do
-                [[ "$slug" != "$file" && "$(<"$slug")" == "$2" ]] && \
-                    die "channel $2 already belongs to $(config_value "$INSTANCES_ROOT/${slug:t}" DOPPEL_DISPLAY_NAME)"
+            # A removed instance's leftover channel is free again.
+            for other in "$CODEX_MICRO_CHANNELS"/*(N); do
+                [[ "$other" != "$file" && "$(<"$other")" == "$2" ]] || continue
+                is_instance_dir "$INSTANCES_ROOT/${other:t}" || continue
+                die "channel $2 already belongs to $(config_value "$INSTANCES_ROOT/${other:t}" DOPPEL_DISPLAY_NAME)"
             done
             /bin/mkdir -p "$CODEX_MICRO_CHANNELS" && print -r -- "$2" > "$file" || \
                 die "could not save the Creator Micro channel"
