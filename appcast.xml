@@ -6,6 +6,22 @@
         <description>Signed Doppel releases</description>
         <language>en</language>
         <item>
+            <title>2.0.5</title>
+            <pubDate>Wed, 28 Oct 2026 19:08:33 +0000</pubDate>
+            <link>https://github.com/thomast8/doppel</link>
+            <sparkle:version>40</sparkle:version>
+            <sparkle:shortVersionString>2.0.5</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Doppel 2.0.5
+
+- Doppel no longer keeps every ChatGPT update it has ever downloaded. After an update it keeps the newest download, the newest two rollback copies and only a prepared build that is still waiting to install. On one Mac these leftovers had grown to 31 GB.
+- The rollback copy for the ChatGPT build you are running is never removed, so rolling back still works.
+- QA builds and builds that fail or are interrupted no longer leave 1.7 GB app copies behind in their staging folders.
+- `doppel prune` with no name now tidies the updates folder too and includes it in the size it reports. Run it once after updating to clear what earlier versions left behind.
+]]></description>
+            <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.5/Doppel-2.0.5-macOS.zip" length="7802352" type="application/octet-stream" sparkle:edSignature="Pmc0GdecbeVqGcy6pLHDzM5NyTvc4dKHqNaZXOkqzHGaRTaoh0jIrTSkYFZ8nYWiWHMq1fGp6j8BVPSPyLN1Cg=="/>
+        </item>
+        <item>
             <title>2.0.4</title>
             <pubDate>Wed, 28 Oct 2026 12:20:11 +0000</pubDate>
             <link>https://github.com/thomast8/doppel</link>
@@ -34,21 +50,6 @@
 - Rebuild each instance once from the Doppel menu to install the change, then pair each channel you use with this Mac.
 ]]></description>
             <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.3/Doppel-2.0.3-macOS.zip" length="7785397" type="application/octet-stream" sparkle:edSignature="A8tPKCPehD0GpmE8gJsfrYoJNV11TGs+RtFbrVXWjgi37TtDGb8YqOSoSUtccrAk7qSMGLaRwQHG9ORsmFybCQ=="/>
-        </item>
-        <item>
-            <title>2.0.2</title>
-            <pubDate>Thu, 22 Oct 2026 23:06:58 +0100</pubDate>
-            <link>https://github.com/thomast8/doppel</link>
-            <sparkle:version>37</sparkle:version>
-            <sparkle:shortVersionString>2.0.2</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[# Doppel 2.0.2
-
-- Fixes Personal and Veridue reinstalling each other's Codex workspace runtime. ChatGPT picks the runtime version per account and keeps it in one shared folder, so each instance's hourly check unpacked about 1.6 GB over the other's copy. That disk churn could make the Mac unresponsive.
-- Each instance now keeps its own runtime inside its profile folder. Expect a one-time download of about 340 MB per instance, and about 1.6 GB of disk each.
-- Rebuild each instance once from the Doppel menu to install the fix.
-]]></description>
-            <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.2/Doppel-2.0.2-macOS.zip" length="7784893" type="application/octet-stream" sparkle:edSignature="EPJw2fIQqesOuvkdQg0STLWGhXWahtn4IDm79UekfJBM43xxKLdjNpIavR2/qEBHSJXkk98juEdUshOd2E78BA=="/>
         </item>
     </channel>
 </rss>
