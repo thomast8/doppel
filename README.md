@@ -177,6 +177,7 @@ bin/doppel browser release
 bin/doppel micro assign "ChatGPT Personal"    # this clone answers the Creator Micro pad
 bin/doppel micro status
 bin/doppel micro channel "ChatGPT Personal" 3 # this clone uses Bluetooth channel 3
+bin/doppel micro claude 2                     # Claude Code uses channel 2
 bin/doppel rebuild "ChatGPT Personal"
 bin/doppel native-tools status
 bin/doppel native-tools repair
@@ -212,6 +213,15 @@ reaches every clone that uses the pad, and `any` in place of the number takes th
 channel away. Channels are read when an instance starts, and `doppel micro
 channel` lists them. The assigned instance without a channel still listens on
 every channel.
+
+`doppel micro claude 2`, or **Use with Claude Code** in the Creator Micro menu,
+sets up Claude Code on a channel of its own. It lists what it will change and
+waits for a yes: adding the codex-micro marketplace (currently
+`thomast8/codex-micro-for-claude-code`, which has the channel setting),
+installing the plugin, turning on `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` for the
+Claude app's Code tab, and setting the channel in the plugin's config.toml. The
+plugin needs Claude Code 2.1.303 or newer, and new Claude Code sessions pick it
+up.
 
 `rebuild` opens the rebuilt instance when it succeeds, even if the instance was
 closed before the command began. Set `DOPPEL_RELAUNCH=0` for maintenance or QA
