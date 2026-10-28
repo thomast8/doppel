@@ -291,8 +291,9 @@ struct IconTile: View {
     let name: String
     let radius: CGFloat
     var renderingDocumentation = false
+    var size: CGFloat = 58
 
-    private var initials: String {
+    static func initials(for name: String) -> String {
         let letters = name.split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined()
         return letters.isEmpty ? "C" : letters.uppercased()
     }
@@ -305,12 +306,12 @@ struct IconTile: View {
             } else {
                 GlassBackground(cornerRadius: radius, tint: color, interactive: true)
             }
-            Text(initials)
-                .font(.system(size: 21, weight: .semibold, design: .rounded))
+            Text(Self.initials(for: name))
+                .font(.system(size: size * 0.36, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white)
                 .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
         }
-        .frame(width: 58, height: 58)
+        .frame(width: size, height: size)
     }
 }
 

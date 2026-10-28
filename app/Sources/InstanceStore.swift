@@ -53,9 +53,60 @@ final class InstanceStore: ObservableObject {
     @Published var checkingCreatorMicro = false
     @Published var creatorMicroStatusAvailable = false
     @Published var claudeMicroStatus: String?
+    /// False until the CLI has answered once, so an empty list at launch is
+    /// not mistaken for a Mac with no instances.
+    @Published var listLoaded = false
+    /// Bundle paths of every running app, kept current from NSWorkspace so the
+    /// panel can say which clones are open without asking the CLI.
+    @Published var runningAppPaths: [String] = []
     private var remoteProcesses: [UUID: RemoteCLIProcess] = [:]
+    private var workspaceObservers: [NSObjectProtocol] = []
 
     var permissionIssues: [PermissionIssue] { permissionStatuses.filter(\.needsAttention) }
+
+    var setupProgress: SetupProgress {
+        SetupProgress(chatGPTFound: primaryInstalled, signingReady: signingReady,
+                      hasInstance: !instances.isEmpty)
+    }
+
+    /// A vendor-engine instance runs inside official ChatGPT, whose bundle path
+    /// says nothing about the profile; the native-tools receipt does.
+    func isRunning(_ instance: Instance) -> Bool {
+        if instance.usesBuiltInBrowser {
+            guard let status = nativeToolsStatus else { return false }
+            return status.inAppBrowserRunning && status.inAppBrowserInstanceID == instance.id
+        }
+        return runningAppPaths.contains { Self.pathsMatch($0, instance.appPath) }
+    }
+
+    func activity(for instance: Instance) -> InstanceActivity {
+        InstanceActivity.derive(
+            installed: instance.installed,
+            busy: busy.contains(instance.id),
+            issues: permissionStatuses.filter { $0.instanceID == instance.id },
+            running: isRunning(instance))
+    }
+
+    nonisolated static func pathsMatch(_ lhs: String, _ rhs: String) -> Bool {
+        guard !lhs.isEmpty, !rhs.isEmpty else { return false }
+        return URL(fileURLWithPath: lhs).standardizedFileURL.path
+            == URL(fileURLWithPath: rhs).standardizedFileURL.path
+    }
+
+    private func refreshRunningApps() {
+        runningAppPaths = NSWorkspace.shared.runningApplications.compactMap { $0.bundleURL?.path }
+    }
+
+    private func observeRunningApps() {
+        refreshRunningApps()
+        let center = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didLaunchApplicationNotification,
+                     NSWorkspace.didTerminateApplicationNotification] {
+            workspaceObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.refreshRunningApps() }
+            })
+        }
+    }
 
     /// The last failure already reported for a given piece of work, so a
     /// condition that persists across reloads is raised once rather than after
@@ -152,6 +203,7 @@ final class InstanceStore: ObservableObject {
 
     init(testingWithoutStartup: Bool) {
         guard !testingWithoutStartup else { return }
+        observeRunningApps()
         reload()
         // Check shortly after launch, then every six hours while Doppel is
         // running. The CLI performs the official-feed and signature checks;
@@ -200,6 +252,7 @@ final class InstanceStore: ObservableObject {
                     self.clearReport(for: "list")
                     self.instances = (Self.parsePorcelain(stdout) + Self.parsePorcelain(claudeOutput, appKind: .claude))
                         .sorted { $0.name < $1.name }
+                    self.listLoaded = true
                     self.checkPermissions()
                     self.checkNativeTools()
                     self.checkCreatorMicro()
@@ -212,6 +265,20 @@ final class InstanceStore: ObservableObject {
         runCLI(instance.appKind.cliPrefix + ["launch", instance.name], busyKey: instance.id) { [weak self] failure in
             if failure == nil { self?.checkNativeTools() }
         }
+    }
+
+    /// Brings an open clone forward without a CLI round trip. Anything this
+    /// cannot find running, including a profile on the official engine, goes
+    /// through launch, which activates what is already open.
+    func show(_ instance: Instance) {
+        if !instance.usesBuiltInBrowser,
+           let app = NSWorkspace.shared.runningApplications.first(where: {
+               Self.pathsMatch($0.bundleURL?.path ?? "", instance.appPath)
+           }) {
+            app.activate()
+            return
+        }
+        launch(instance)
     }
 
     func assignBuiltInBrowser(to instance: Instance) {
@@ -452,33 +519,6 @@ final class InstanceStore: ObservableObject {
                 }
             }
         }
-    }
-
-    func showPermissionIssues() {
-        guard !permissionIssues.isEmpty else { return }
-        showPermissionIssues(permissionIssues)
-    }
-
-    private func showPermissionIssues(_ issues: [PermissionIssue]) {
-        let grouped = Dictionary(grouping: issues, by: \.instanceName)
-        let details = grouped.keys.sorted().map { name in
-            let labels = grouped[name, default: []].map(\.label).sorted().joined(separator: ", ")
-            return "• \(name): \(labels)"
-        }.joined(separator: "\n")
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = issues.count == 1
-            ? "A managed app permission needs attention"
-            : "Managed app permissions need attention"
-        alert.informativeText = """
-            macOS reports an explicit denial or an outdated permission checker for:
-
-            \(details)
-
-            Open the exact permission from an instance's Privacy Permissions submenu. Doppel no longer treats unused or unconfirmable capabilities as errors.
-            """
-        alert.addButton(withTitle: "OK")
-        present(alert)
     }
 
     func handlePermission(_ permission: PermissionIssue) {
@@ -773,7 +813,7 @@ final class InstanceStore: ObservableObject {
         let alert = updateAlert()
         let signingNote = signingReady ? "" : """
 
-            This Mac is using ad-hoc signing, so macOS may have forgotten permissions for the rebuilt apps. Doppel will show one menu-bar warning if anything needs attention. Set Up Secure Signing before the next update to preserve their code identity.
+            This Mac is using ad-hoc signing, so macOS may have forgotten permissions for the rebuilt apps. Doppel will show one menu-bar warning if anything needs attention. Set up secure signing in Doppel's Settings before the next update to preserve their code identity.
             """
         // A reconcile installs nothing, so saying an update was installed would
         // be a claim the run never made.
@@ -834,6 +874,33 @@ final class InstanceStore: ObservableObject {
             if failure == nil { self?.reload() }
             completion(failure)
         }
+    }
+
+    /// Removal moves the app to the Trash and keeps account data unless the
+    /// user explicitly opts into deleting it, so the dialog states both.
+    func confirmRemove(_ instance: Instance) {
+        let alert = NSAlert()
+        alert.messageText = "Remove “\(instance.name)”?"
+        alert.informativeText = """
+            The app moves to the Trash and can be rebuilt at any time.
+            Its account data (chats and login) is kept unless you tick below.
+            Remote Access is disabled first, interrupting any remote tasks.
+            """
+        alert.alertStyle = .warning
+        let purge = NSButton(checkboxWithTitle: "Also move this account's data to the Trash", target: nil, action: nil)
+        purge.state = .off
+        alert.accessoryView = purge
+        alert.addButton(withTitle: "Remove")
+        alert.addButton(withTitle: "Cancel")
+        // Keep Remove where a destructive action belongs, on the right, but
+        // move the Return key to Cancel: a dialog that appears over whatever
+        // else you were doing should not delete an account because you were
+        // mid-keystroke.
+        alert.buttons[0].keyEquivalent = ""
+        alert.buttons[0].hasDestructiveAction = true
+        alert.buttons[1].keyEquivalent = "\r"
+        guard present(alert) == .alertFirstButtonReturn else { return }
+        remove(instance, purgeData: purge.state == .on)
     }
 
     /// Removes an instance. The CLI moves the app to the Trash and keeps the

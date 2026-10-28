@@ -47,8 +47,8 @@ Micro assignment and iPhone Remote Access remain ChatGPT-specific. Claude's own
 restrictions on browser pairing with relocated profiles remain in effect.
 
 <p align="center">
-  <img src="docs/images/menu-permissions.png" width="820"
-       alt="Doppel's menu bar menu with a managed instance's Privacy Permissions submenu open, showing granted microphone access">
+  <img src="docs/images/panel.png" width="360"
+       alt="Doppel's menu bar panel listing three instances with their running state, the installed ChatGPT build and permission health">
 </p>
 
 ## Why not just a launcher script?
@@ -137,7 +137,7 @@ the official window, so it never asks.
 
 Doppel 2.1.0 is available on the [stable release page](https://github.com/thomast8/doppel/releases/tag/v2.1.0). Download the ZIP, quit Doppel and install its `Doppel.app` in place of your existing menu app. Your profile data and remote connections are retained. Existing installations can also use Check for Updates. Choose Claude in New Instance to add a Claude desktop profile.
 
-Open a profile's **Remote Access…** menu item. Choose an assigned private Mac
+Open an instance from the menu bar panel and choose **Open…** under Remote Access. Choose an assigned private Mac
 address, save the network, and sign in to the intended ChatGPT account using the
 temporary device code. Confirm the displayed email and workspace before choosing
 **Enable Remote Access**. Each profile gets its own stable port, phone key and
@@ -186,8 +186,10 @@ Ordinary results are versioned JSON. Login emits temporary device-code and
 completion events. Only `export-key` returns private key material. Disable an
 enabled connection before replacing its key or updating its runtime.
 
-The menu bar app covers the everyday flows; **New Instance…** asks for a name
-and a colour and derives everything else:
+The first launch on a Mac with no instances opens a short setup guide: it finds
+ChatGPT, sets up secure signing, creates a first instance and walks through its
+permissions. After that the menu bar panel covers the everyday flows. Its **+**
+button asks for a name and a colour and derives everything else:
 
 <p align="center">
   <img src="docs/images/new-instance.png" width="440"
@@ -230,8 +232,8 @@ bin/doppel prune                                     # drop old rollback copies
 bin/doppel prune "ChatGPT Personal"                  # just this instance's
 ```
 
-The menu-bar app's **Creator Micro** submenu assigns the keypad to a Doppel
-instance and shows the current selection. **Release Assignment** stops managed
+**Settings › Integrations › Creator Micro keypad** assigns the keypad to a Doppel
+instance and shows the current selection. Choosing **Nobody** stops managed
 clones from using it, including when the assigned instance was removed. Doppel
 automatically restarts running previously assigned and newly selected instances
 to apply a change; closed instances stay closed. Save unfinished drafts before
@@ -260,8 +262,8 @@ up.
 
 `rebuild` opens the rebuilt instance when it succeeds, even if the instance was
 closed before the command began. Set `DOPPEL_RELAUNCH=0` for maintenance or QA
-that should rebuild without opening the app. The menu labels this action
-**Rebuild & Reopen**.
+that should rebuild without opening the app. The instance window labels this action
+**Rebuild and reopen**.
 
 If a current OpenAI release validates only inside its notarized disk image and
 the byte-identical `/Applications/ChatGPT.app` fails the older standalone
@@ -341,7 +343,7 @@ bin/doppel launch "ChatGPT Personal"
 ```
 
 Assignment does not close an app by default. If a conflicting engine is open,
-the menu offers **Quit and Assign** with a warning about unfinished drafts; the
+the app offers **Restart and Assign** with a warning about unfinished drafts; the
 equivalent explicit CLI form is `browser assign --quit-running <name>`. Other
 Doppel clones stay open. When the untouched official app is already using the
 target managed profile, Doppel adopts that exact PID and start identity without
@@ -376,16 +378,16 @@ assignment mismatch rather than being reported as the stored owner.
 
 macOS grants privacy permissions to each app identity separately. A new Doppel
 instance therefore does not inherit access from ChatGPT or from another managed
-instance. Each instance's **Privacy Permissions** submenu shows the status of
-**Microphone**, **Camera**, **Accessibility**, **Screen & System Audio
-Recording**, and **Notifications**. Clicking a row opens that exact System
-Settings category when access was denied or is already granted. If the app has
-not asked yet, clicking the row first runs Apple's native request as that one
+instance. Each instance's window lists the status of **Microphone**,
+**Camera**, **Accessibility**, **Screen & System Audio Recording**, and
+**Notifications**, with one button per row. **Open Settings** opens that exact
+System Settings category when access was denied or is already granted. If the
+app has not asked yet, **Allow** first runs Apple's native request as that one
 managed instance. That request is what registers an otherwise absent app in
 the Microphone, Camera, Screen Recording, or Accessibility list. Doppel then
 refreshes the status; it never requests unrelated permissions at the same time.
-When a profile is assigned Built-in Browser, this submenu is labelled
-**Fallback Doppel Permissions**: official ChatGPT has its own macOS permission
+When a profile is assigned Built-in Browser, the section is labelled
+**Privacy permissions for the Doppel engine**: official ChatGPT has its own macOS permission
 identity and these grants apply only after the profile returns to its clone.
 
 Camera and microphone are optional until that account uses the relevant feature,
@@ -393,7 +395,8 @@ so `Not requested` is informational and never raises a warning. The public
 Accessibility and Screen Recording checks expose only a boolean and can lag or
 disagree with the visible System Settings row; Doppel labels an inconclusive
 result `Check in Settings` instead of claiming the permission is missing. Only an explicit
-denial, restriction, or outdated checker changes the menu-bar icon to a warning.
+denial, restriction, or outdated checker changes the menu-bar icon to a warning
+and marks the instance's row in the panel.
 
 Permissions that macOS grants only in the context of a specific action or
 target—such as Files and Folders, Calendar, Reminders, Location, and Apple
@@ -409,7 +412,7 @@ in Doppel.
 
 ### Native tools
 
-The menu's **Native Tools** section reports whether the shared Computer Use
+**Settings › Integrations** reports whether the shared Computer Use
 service is ready, which running app currently owns Chronicle's shared recorder,
 the age of its latest screen frame, and whether an old rollback is still being
 discovered as a duplicate app.
@@ -440,7 +443,7 @@ it points at a stale runtime, every instance uses that older host.
 `native-tools claim-browser <name>` moves it, changing only the path inside the
 vendor's existing registration and leaving its host name and allowed origins
 untouched. Reconnect the extension afterwards. Each browser is separate, so
-`--browser <name>` moves one without disturbing the rest; the menu lists every
+`--browser <name>` moves one without disturbing the rest; Settings lists every
 registration with its current owner and assigns them the same way. A claim holds
 until another managed app launches and takes it back, which `status` will show. `doppel native-tools status --porcelain` exposes
 the same evidence plus each managed instance's exact installed path and bundle
@@ -480,12 +483,22 @@ The `qa/` suites need nothing beyond macOS.
 
 Failed actions show a short message instead of command output. When the disk is writable, the original CLI diagnostics are saved locally to `~/Library/Logs/Doppel/cli-errors.log`, readable only by your account.
 
-A menu-bar-only front end (`LSUIElement`, so no Dock icon): list instances,
-launch, rebuild, rename, recolour or remove them, coordinate ChatGPT updates,
-create a new one from a name plus a colour picker, toggle **Start at Login**, or
-choose **Check for Doppel Updates…**. Enable **Receive Beta Updates** in the Doppel menu to opt into beta releases. Turning it off returns future checks to the stable feed; it does not downgrade an installed beta.
-The foot of the menu shows Doppel's own version and the ChatGPT build it is
-managing, which is what you want to hand over when reporting a problem.
+A menu-bar-only front end (`LSUIElement`, so no Dock icon). The panel lists
+instances with their state and one action each, and offers ChatGPT updates as
+a banner. Each instance's window covers permissions, the engine, Remote Access,
+rebuild and removal. Settings holds **Start at login**, the setup guide, secure
+signing, Doppel's own updates and the once-per-Mac integrations. Enable
+**Receive beta updates** in Settings › Updates to opt into beta releases.
+Turning it off returns future checks to the stable feed; it does not downgrade
+an installed beta. The foot of the panel shows Doppel's own version and the
+ChatGPT build it is managing, which is what you want to hand over when
+reporting a problem.
+
+`Doppel --render-ui <file.png> <screen>` draws a screen offscreen from fixed
+sample data, without a display capture permission. The screens are `panel`,
+`panel-attention`, `panel-setup`, `instance`, `settings`, `settings-updates`,
+`settings-integrations`, `onboarding` and `onboarding-create`; `edit` or no
+screen draws the New Instance window.
 
 The app is self-contained. The CLI, the engine and the compiled helpers all ship
 inside `Contents/Resources/doppel`, sealed by the app's own signature, so a
@@ -506,7 +519,7 @@ don't have. Turning the toggle off boots the job out and removes the plist.
 
 Sparkle checks the signed `appcast.xml` on GitHub and verifies every update with
 the EdDSA public key sealed into the installed app. Automatic checks are enabled;
-the menu item provides an immediate manual check. Doppel's own updater is
+**Check Now** in Settings › Updates provides an immediate manual check. Doppel's own updater is
 separate from the coordinated ChatGPT update flow described above.
 Ad-hoc builds without a public key keep both automatic and manual update checks
 disabled rather than accepting an unsigned feed.
@@ -554,8 +567,8 @@ privacy grants, so an ad-hoc release has to be asked for with
 
 ## Secure signing
 
-Doppel can create its own local code-signing identity — in the menu bar, **Set
-Up Secure Signing**, or from the CLI:
+Doppel can create its own local code-signing identity from the setup guide,
+from **Settings › General › Secure signing**, or from the CLI:
 
 ```sh
 bin/doppel-signing status
@@ -563,7 +576,7 @@ bin/doppel-signing setup     # creates the identity, no Keychain Access needed
 bin/doppel-signing remove
 ```
 
-The menu-bar route also rebuilds every instance afterwards, which is the step
+The app route also rebuilds every instance afterwards, which is the step
 that actually makes them adopt the identity.
 
 ### Why it matters
