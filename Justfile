@@ -13,6 +13,7 @@ qa:
     ./qa/edge.zsh
     ./qa/engine-launch.zsh
     ./qa/update-reconcile.zsh
+    ./qa/retention.zsh
 
 # A local build is ad hoc and carries no Sparkle public key, so build-app.zsh
 # leaves the feed URL out and disables update checks entirely. Installing one
