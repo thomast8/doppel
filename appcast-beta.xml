@@ -6,6 +6,21 @@
         <description>Signed Doppel releases</description>
         <language>en</language>
         <item>
+            <title>2.0.4</title>
+            <pubDate>Wed, 28 Oct 2026 12:20:11 +0000</pubDate>
+            <link>https://github.com/thomast8/doppel</link>
+            <sparkle:version>39</sparkle:version>
+            <sparkle:shortVersionString>2.0.4</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Doppel 2.0.4
+
+- New **Use with Claude Code** in the Creator Micro menu, and `doppel micro claude <channel>` on the command line. Doppel installs the codex-micro Claude Code plugin, turns on the setting the Claude app's Code tab needs, and keeps the plugin to its own Bluetooth channel, so ChatGPT and Claude Code share the pad by channel.
+- Doppel shows everything it will change and only goes ahead once you confirm.
+- A ChatGPT instance and Claude Code can no longer be given the same channel, and `doppel micro channel` now lists Claude Code too.
+]]></description>
+            <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.4/Doppel-2.0.4-macOS.zip" length="7801126" type="application/octet-stream" sparkle:edSignature="wiHZN/5J/JMBZQwhPRTvkVOrM3MDOnJ9kWdbCdu+/fGcOpvAbOpEUT721dE1bRiKgZj5LyJprJ60uKsth3hjAQ=="/>
+        </item>
+        <item>
             <title>2.0.3</title>
             <pubDate>Wed, 28 Oct 2026 10:58:56 +0000</pubDate>
             <link>https://github.com/thomast8/doppel</link>
@@ -34,21 +49,6 @@
 - Rebuild each instance once from the Doppel menu to install the fix.
 ]]></description>
             <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.2/Doppel-2.0.2-macOS.zip" length="7784893" type="application/octet-stream" sparkle:edSignature="EPJw2fIQqesOuvkdQg0STLWGhXWahtn4IDm79UekfJBM43xxKLdjNpIavR2/qEBHSJXkk98juEdUshOd2E78BA=="/>
-        </item>
-        <item>
-            <title>2.0.1</title>
-            <pubDate>Wed, 21 Oct 2026 13:30:33 +0100</pubDate>
-            <link>https://github.com/thomast8/doppel</link>
-            <sparkle:version>36</sparkle:version>
-            <sparkle:shortVersionString>2.0.1</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[# Doppel 2.0.1
-
-- Fixes ChatGPT updates that left Personal and Veridue stuck on the old build. ChatGPT 26.1016 changed how it reports its OAuth callback, and Doppel could not patch it.
-- Doppel now tests a new ChatGPT build against its patcher before closing or replacing anything. If the build is not compatible yet, the update stops with a clear message and your current apps keep working.
-- After updating Doppel, run the ChatGPT update again from the Doppel menu if you are still on 26.1013.
-]]></description>
-            <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.1/Doppel-2.0.1-macOS.zip" length="7783154" type="application/octet-stream" sparkle:edSignature="ylfpfLEtKo789C1JUiuLMEbDjjaBG+FQb0N3p92zGApLmxkk7mANyEJgSmA1DODIvmfHnH0gHaZBSrL9v72SBg=="/>
         </item>
     </channel>
 </rss>
