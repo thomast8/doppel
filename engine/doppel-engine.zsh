@@ -1019,6 +1019,9 @@ launch_instance() {
     lock="$(acquire_rebuild_lock)" || exit 1
     timestamp="$(/bin/date '+%Y%m%d-%H%M%S')"
     staging="$STATE_ROOT/Staging/$DOPPEL_DISPLAY_NAME.$version.$timestamp.$$.app"
+    # A failed or interrupted build must not leave a 1.7GB copy behind. After a
+    # successful install the path has been moved into place, so this is a no-op.
+    trap '/bin/rm -rf "$staging"' EXIT
     if [[ "${DOPPEL_INSTALL_ONLY:-0}" != "1" ]]; then
         # Keep the app directory macOS launched; stage on its filesystem so
         # replacing Contents cannot turn into a cross-volume copy and removal.
@@ -1064,6 +1067,7 @@ launch_instance() {
         fail_closed "Installing the rebuilt instance failed."
     fi
 
+    trap - EXIT
     "$LSREGISTER" -f "$app" >/dev/null 2>&1 || true
     # A pre-fix clone may have left an explicit preference claiming the
     # vendor's codex:// scheme. New clones declare that scheme for OAuth but do

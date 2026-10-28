@@ -84,6 +84,11 @@ If official ChatGPT was holding an unassigned managed profile, which happens
 when it is opened on the vendor's default data root, that profile comes back
 through its own clone rather than through official ChatGPT.
 
+Updates do not accumulate on disk. Once one succeeds, `updates/` keeps the
+newest download, the newest two primary rollbacks (always including the one for
+the installed build) and the one prepared build still waiting to be installed;
+see the rollback notes under `prune` for the details and the knob.
+
 The profile assigned the built-in browser is running through the untouched
 official app rather than through a clone, so the restart manifest records it as
 that profile rather than as the bare primary. Doppel quits it with everything
@@ -273,6 +278,17 @@ without editing it, so macOS sees a plain folder rather than a damaged app;
 restoration moves it back before verification.
 The untouched vendor-primary rollback stays whole under a hidden `.Backups`
 directory because macOS App Management can prohibit changes inside vendor code.
+
+Update storage is bounded the same way. After a successful `update prepare` or
+`update apply`, and on a whole-machine `doppel prune`, `updates/` keeps only the
+newest downloaded `ChatGPT-<build>.zip`, the newest two primary rollbacks under
+`.Backups` (`DOPPEL_KEEP_UPDATE_BACKUPS` to change that), and the one prepared
+build that is still newer than the installed app. A rollback made from the
+installed build is never removed, even when it is older than the limit would
+allow, so stepping the primary back always has something to restore. A failed or
+interrupted instance build removes its own staging copy, and `prune` and
+`remove` sweep any left by one that was killed, skipping an instance whose
+rebuild lock is held by a live process. `prune <name>` leaves `updates/` alone.
 `native-tools repair` applies those reversible migrations to rollbacks created
 by older Doppel versions; it does not change active apps or account data.
 

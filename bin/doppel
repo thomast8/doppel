@@ -1922,6 +1922,8 @@ cmd_remove() {
         clear_iab_slot
     fi
 
+    [[ -n "$bundle_id" ]] && sweep_staging "$DOPPEL_HOME/state/$bundle_id/Staging"
+
     local stamp="$(/bin/date '+%Y%m%d-%H%M%S')"
     local trash="$HOME/.Trash"
     mkdir -p "$trash"
@@ -2599,6 +2601,7 @@ cmd_update_prepare() {
     /usr/bin/plutil -insert Version -string "$latest_short" "$metadata"
     /usr/bin/plutil -insert URL -string "$latest_url" "$metadata"
     /bin/rm -rf "$staging"
+    prune_update_storage "$current"
     release_update_lock
     trap - EXIT INT TERM
     print -r -- "ready\t$latest_version\t$latest_short"
@@ -3082,6 +3085,7 @@ cmd_update_apply() {
         /bin/rm -f "$prepared_root/update.plist"
         /bin/rmdir "$prepared_root" 2>/dev/null || true
     fi
+    prune_update_storage "$version"
     release_update_lock
     trap - EXIT INT TERM
     printf '%s\t%s\t%s\t%s\t%s\n' "$outcome" "$current" "$version" "${#verified_apps}" "$reopened"
@@ -3710,6 +3714,79 @@ cmd_native_tools() {
     esac
 }
 
+# Every update leaves ~750MB of download, ~1.7GB of prepared app and a whole
+# rollback of the old primary behind. Retention, as a named default that the
+# environment can override:
+#   DOPPEL_KEEP_UPDATE_BACKUPS  primary rollbacks kept under updates/.Backups (2)
+# Only the newest download and the newest still-pending prepared build are kept.
+readonly DEFAULT_KEEP_UPDATE_BACKUPS=2
+
+# $1 is the installed build. A primary rollback made from that build is never
+# removed (a downgraded primary needs exactly that one to go back) and counts
+# toward the limit; the rest of the limit is filled with the newest by stamp.
+prune_update_storage() {
+    local current="$1" keep="${DOPPEL_KEEP_UPDATE_BACKUPS:-$DEFAULT_KEEP_UPDATE_BACKUPS}"
+    local entry build newest=0 name row
+    [[ "$keep" == <1-> ]] || keep="$DEFAULT_KEEP_UPDATE_BACKUPS"
+
+    for entry in "$UPDATE_ROOT/Downloads"/ChatGPT-<->.zip(N); do
+        build="${${entry:t:r}#ChatGPT-}"
+        (( build > newest )) && newest="$build"
+    done
+    for entry in "$UPDATE_ROOT/Downloads"/ChatGPT-<->.zip(N); do
+        build="${${entry:t:r}#ChatGPT-}"
+        (( build == newest )) || /bin/rm -f "$entry"
+    done
+
+    # A prepared build is only useful while it is newer than what is installed,
+    # and apply only ever installs the newest of those.
+    if valid_build_number "$current"; then
+        newest=0
+        for entry in "$UPDATE_ROOT/Prepared"/<->(N/); do
+            (( ${entry:t} > current && ${entry:t} > newest )) && newest="${entry:t}"
+        done
+        for entry in "$UPDATE_ROOT/Prepared"/<->(N/); do
+            (( ${entry:t} == newest )) || /bin/rm -rf "$entry"
+        done
+    fi
+
+    local -a rows keepers
+    for entry in "$UPDATE_ROOT/.Backups"/ChatGPT.<->.*.app(N/); do
+        name="${entry:t:r}"
+        rows+=("${name##*.} $entry")
+    done
+    rows=(${(On)rows})
+    if valid_build_number "$current"; then
+        for row in $rows; do
+            entry="${row#* }"; build="${${entry:t}#ChatGPT.}"
+            [[ "${build%%.*}" == "$current" ]] && (( ${#keepers} < keep )) && keepers+=("$entry")
+        done
+    fi
+    for row in $rows; do
+        entry="${row#* }"
+        (( ${keepers[(Ie)$entry]} || ${#keepers} >= keep )) && continue
+        keepers+=("$entry")
+    done
+    for row in $rows; do
+        entry="${row#* }"
+        (( ${keepers[(Ie)$entry]} )) && continue
+        "$LSREGISTER" -u "$entry" >/dev/null 2>&1 || true
+        /bin/rm -rf "$entry"
+    done
+    return 0
+}
+
+# Staging only ever holds a build in flight. The build that owns it holds the
+# instance's rebuild lock, so a live lock owner means hands off.
+sweep_staging() {
+    local staging_root="$1" owner staged
+    owner="$(cat "${staging_root:h}/Rebuild.lock/owner-pid" 2>/dev/null || true)"
+    [[ "$owner" == <-> ]] && /bin/kill -0 "$owner" 2>/dev/null && return 0
+    for staged in "$staging_root"/*(N/); do
+        /bin/rm -rf "$staged"
+    done
+}
+
 # Rollback copies are whole app bundles, about 1.4GB each, and one is kept
 # every time an instance is rebuilt — which a vendor update does on its own.
 # Nothing used to remove them, so they simply accumulated.
@@ -3717,7 +3794,7 @@ cmd_prune() {
     # Declared once: `local x` on a name that is already local in the same
     # scope makes zsh print it, which turned a loop into pages of debug output.
     local keep="${DOPPEL_KEEP_BACKUPS:-1}"
-    local state_root="$DOPPEL_HOME/state" before after instance_state staged index only=""
+    local state_root="$DOPPEL_HOME/state" before after instance_state index only=""
     local -a targets rollbacks
 
     # With a name, only that instance's copies are touched. Without one,
@@ -3731,13 +3808,24 @@ cmd_prune() {
         [[ -n "$only" ]] || die "'$1' has no bundle identifier to prune"
     fi
 
-    [[ -d "$state_root" ]] || { print -r -- "nothing to prune"; return 0 }
+    [[ -d "$state_root" || -d "$UPDATE_ROOT" ]] || { print -r -- "nothing to prune"; return 0 }
+    before="$(/usr/bin/du -sk "$state_root" "$UPDATE_ROOT" 2>/dev/null | /usr/bin/awk '{s+=$1} END {print s+0}' || true)"
+    # Whole-machine prune also trims updates/, unless an update is mid-flight
+    # and owns it.
+    if [[ -z "$only" ]]; then
+        local update_owner
+        update_owner="$(cat "$UPDATE_ROOT/Coordinator.lock/pid" 2>/dev/null || true)"
+        if [[ "$update_owner" == <-> ]] && /bin/kill -0 "$update_owner" 2>/dev/null; then
+            print -u2 -r -- "an update is in progress; leaving updates/ for the next prune"
+        else
+            prune_update_storage "$(primary_version)"
+        fi
+    fi
     if [[ -n "$only" ]]; then
         targets=("$state_root/$only"(N/))
     else
         targets=("$state_root"/*(N/))
     fi
-    before="$(/usr/bin/du -sk "$state_root" 2>/dev/null | /usr/bin/awk '{print $1}')"
     for instance_state in $targets; do
         [[ "${instance_state:t}" != "Removed" ]] || continue
         rollbacks=("$instance_state/Backups"/*.rollback(N/om))
@@ -3745,13 +3833,9 @@ cmd_prune() {
             "$LSREGISTER" -u "${rollbacks[$index]}" >/dev/null 2>&1 || true
             /bin/rm -rf "${rollbacks[$index]}"
         done
-        # Staging only ever holds a build in flight; anything left is debris
-        # from one that failed.
-        for staged in "$instance_state/Staging"/*(N/); do
-            /bin/rm -rf "$staged"
-        done
+        sweep_staging "$instance_state/Staging"
     done
-    after="$(/usr/bin/du -sk "$state_root" 2>/dev/null | /usr/bin/awk '{print $1}')"
+    after="$(/usr/bin/du -sk "$state_root" "$UPDATE_ROOT" 2>/dev/null | /usr/bin/awk '{s+=$1} END {print s+0}' || true)"
     printf 'pruned: %s -> %s (keeping %s rollback(s) per instance)\n' \
         "$(format_size "$before")" "$(format_size "$after")" "$keep"
 }
