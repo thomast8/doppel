@@ -100,7 +100,7 @@ the official window, so it never asks.
 
 ### iPhone Remote Access
 
-Doppel 2.0.2 is available on the [stable release page](https://github.com/thomast8/doppel/releases/tag/v2.0.2). Download the ZIP, quit Doppel and install its `Doppel.app` in place of your existing menu app. Your profile data and remote connections are retained. Existing installations can also use Check for Updates. Rebuild each instance once to install the Dock handoff fix.
+Doppel 2.0.3 is available on the [stable release page](https://github.com/thomast8/doppel/releases/tag/v2.0.3). Download the ZIP, quit Doppel and install its `Doppel.app` in place of your existing menu app. Your profile data and remote connections are retained. Existing installations can also use Check for Updates. Rebuild each instance once to install the Creator Micro channel support.
 
 Open a profile's **Remote Access…** menu item. Choose an assigned private Mac
 address, save the network, and sign in to the intended ChatGPT account using the
