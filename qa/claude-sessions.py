@@ -1,6 +1,8 @@
 """Test account-scoped history copying against real files, without vendor accounts."""
 import importlib.util
 import json
+import os
+import subprocess
 import shutil
 from pathlib import Path
 import tempfile
@@ -132,4 +134,23 @@ with tempfile.TemporaryDirectory(prefix='doppel-history-qa-') as temporary:
     assert module.auto_import(*roots, state, active=set()).startswith('imported 0')
     assert (state / 'auto-import.json').exists()
 
-print('Claude history QA passed: account isolation, existing work, credentials, sidecars, idempotence, active sessions, missing history, symlinks, source changes, collisions and automatic import')
+    # Slugs are reused when an instance is recreated under the same name, so
+    # removing one must take its import marker along with its definition.
+    home = root / 'remove-home'
+    instance = home / 'instances/qa-claude'
+    instance.mkdir(parents=True)
+    (instance / 'instance-config.zsh').write_text(
+        f"DOPPEL_APP_KIND=claude\nDOPPEL_DISPLAY_NAME='QA Claude'\nDOPPEL_BUNDLE_ID=ai.doppel.qa.removed\n"
+        f"DOPPEL_PROFILE_ROOT='{root / 'remove-profile'}'\nDOPPEL_CLAUDE_CONFIG_DIR='{root / 'remove-code'}'\n")
+    (instance / 'install-root').write_text(str(root / 'remove-apps') + '\n')
+    imports = home / 'state/imports/qa-claude'
+    imports.mkdir(parents=True)
+    (imports / 'auto-import.json').write_text('{}')
+    env = dict(os.environ, DOPPEL_DEV='1', DOPPEL_IAB_DRY_RUN='1', DOPPEL_HOME=str(home))
+    removed = subprocess.run([str(Path(__file__).resolve().parents[1] / 'bin/doppel'), '--app', 'claude', 'remove', 'QA Claude'],
+                             env=env, capture_output=True, text=True)
+    assert removed.returncode == 0, removed.stderr
+    assert not imports.exists(), 'A removed instance left its import marker for the next instance with that name'
+    assert list((home / 'state/Removed').glob('qa-claude.*/imports/auto-import.json')), 'The import record was not kept with the removed definition'
+
+print('Claude history QA passed: account isolation, existing work, credentials, sidecars, idempotence, active sessions, missing history, symlinks, source changes, collisions, automatic import and removal')
