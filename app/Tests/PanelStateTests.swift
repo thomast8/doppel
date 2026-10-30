@@ -46,15 +46,15 @@ final class PanelStateTests: XCTestCase {
     }
 
     func testSetupProgressResumesAtTheFirstMissingStep() {
-        XCTAssertEqual(SetupProgress(chatGPTFound: false, signingReady: false, hasInstance: false).resumeStep,
-                       .chatGPT)
-        XCTAssertEqual(SetupProgress(chatGPTFound: true, signingReady: false, hasInstance: true).resumeStep,
+        XCTAssertEqual(SetupProgress(appFound: false, signingReady: false, hasInstance: false).resumeStep,
+                       .findApp)
+        XCTAssertEqual(SetupProgress(appFound: true, signingReady: false, hasInstance: true).resumeStep,
                        .signing)
-        XCTAssertEqual(SetupProgress(chatGPTFound: true, signingReady: true, hasInstance: false).resumeStep,
+        XCTAssertEqual(SetupProgress(appFound: true, signingReady: true, hasInstance: false).resumeStep,
                        .create)
-        let done = SetupProgress(chatGPTFound: true, signingReady: true, hasInstance: true)
+        let done = SetupProgress(appFound: true, signingReady: true, hasInstance: true)
         XCTAssertTrue(done.isComplete)
-        XCTAssertFalse(SetupProgress(chatGPTFound: true, signingReady: false, hasInstance: true).isComplete)
+        XCTAssertFalse(SetupProgress(appFound: true, signingReady: false, hasInstance: true).isComplete)
     }
 
     func testOnboardingOnlyOpensItselfOnceForAnEmptyMac() {

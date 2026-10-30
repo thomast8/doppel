@@ -481,7 +481,7 @@ build_instance() {
     [[ ! -e "$target" ]] || fail_closed "Refusing to overwrite an existing staging path: $target"
     mkdir -p "${target:h}"
     log_message "Building instance $version at $target"
-    progress 25 "Copying ChatGPT"
+    progress 25 "Copying the original app"
     # APFS can clone the 1+ GB source bundle copy-on-write in seconds. Each
     # instance then gets private copies only for the files Doppel changes.
     # Keep ditto as the fallback for non-APFS volumes or older macOS.

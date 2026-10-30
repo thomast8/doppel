@@ -65,36 +65,41 @@ struct InstanceDetailView: View {
                          : "Each instance asks macOS on its own. Optional ones can wait until a feature needs them.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                Section("Engine") {
-                    Picker("Engine", selection: Binding(
-                        get: { instance.engine },
-                        set: { engine in
-                            guard engine != instance.engine else { return }
-                            if engine == .vendor {
-                                store.assignBuiltInBrowser(to: instance)
-                            } else {
-                                store.releaseBuiltInBrowser()
-                            }
-                        })) {
-                        engineOption("Doppel engine",
-                                     detail: "Recommended. Its own app, icon and data.")
-                            .tag(InstanceEngine.clone)
-                        engineOption("Official ChatGPT (fallback)",
-                                     detail: "Only if a ChatGPT update breaks this clone. Same account and chats.")
-                            .tag(InstanceEngine.vendor)
+                // The fallback engine and Remote Access are built on
+                // ChatGPT's own runtime; a Claude instance has neither.
+                if instance.appKind == .chatgpt {
+                    Section("Engine") {
+                        Picker("Engine", selection: Binding(
+                            get: { instance.engine },
+                            set: { engine in
+                                guard engine != instance.engine else { return }
+                                if engine == .vendor {
+                                    store.assignBuiltInBrowser(to: instance)
+                                } else {
+                                    store.releaseBuiltInBrowser()
+                                }
+                            })) {
+                            engineOption("Doppel engine",
+                                         detail: "Recommended. Its own app, icon and data.")
+                                .tag(InstanceEngine.clone)
+                            engineOption("Official ChatGPT (fallback)",
+                                         detail: "Only if a ChatGPT update breaks this clone. Same account and chats.")
+                                .tag(InstanceEngine.vendor)
+                        }
+                        .pickerStyle(.radioGroup)
+                        .labelsHidden()
+                        .disabled(busy || (!instance.usesBuiltInBrowser && !store.primaryInstalled))
                     }
-                    .pickerStyle(.radioGroup)
-                    .labelsHidden()
-                    .disabled(busy || (!instance.usesBuiltInBrowser && !store.primaryInstalled))
-                }
 
-                Section("Remote Access") {
-                    row("Let another device run tasks in this account.", detail: nil) {
-                        Button("Open…") { openWindow(id: "remote-access", value: instance.id) }
-                            .disabled(busy)
+                    Section("Remote Access") {
+                        row("Let another device run tasks in this account.", detail: nil) {
+                            Button("Open…") { openWindow(id: "remote-access", value: instance.id) }
+                                .disabled(busy)
+                        }
                     }
                 }
 

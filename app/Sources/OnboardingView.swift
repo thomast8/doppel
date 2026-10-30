@@ -5,6 +5,7 @@ import AppKit
 /// the @State macro is unavailable under a Command Line Tools-only toolchain.
 final class OnboardingModel: ObservableObject {
     @Published var step: OnboardingStep = .welcome
+    @Published var appKind = InstanceApp.chatgpt
     @Published var started = false
     @Published var name = ""
     @Published var color = Color(hex: "3B82F6")
@@ -30,9 +31,13 @@ struct OnboardingView: View {
     @Environment(\.dismiss) private var dismiss
 
     private var trimmedName: String { model.name.trimmingCharacters(in: .whitespaces) }
-    private var shownName: String { model.createdName ?? (trimmedName.isEmpty ? "ChatGPT Work" : trimmedName) }
+    private var shownName: String {
+        model.createdName ?? (trimmedName.isEmpty ? "\(model.appKind.label) Work" : trimmedName)
+    }
     private var createdInstance: Instance? {
-        model.createdName.flatMap { name in store.instances.first { $0.name == name } }
+        model.createdName.flatMap { name in
+            store.instances.first { $0.name == name && $0.appKind == model.appKind }
+        }
     }
 
     var body: some View {
@@ -41,7 +46,7 @@ struct OnboardingView: View {
             Group {
                 switch model.step {
                 case .welcome: welcome
-                case .chatGPT: findChatGPT
+                case .findApp: findApps
                 case .signing: signing
                 case .create: create
                 case .permissions: permissions
@@ -60,6 +65,7 @@ struct OnboardingView: View {
             // their setup is unfinished the guide resumes at the missing step.
             guard !model.started else { return }
             model.started = true
+            if !store.primaryInstalled && store.claudeInstalled { model.appKind = .claude }
             if let initialStep {
                 model.step = initialStep
             } else if !store.instances.isEmpty, !store.setupProgress.isComplete {
@@ -80,8 +86,8 @@ struct OnboardingView: View {
             .frame(height: 100)
             .padding(.top, 18)
             .accessibilityHidden(true)
-            Text("One ChatGPT per account").font(.system(size: 24, weight: .semibold)).padding(.top, 22)
-            Text("Doppel turns your installed ChatGPT into separate apps, each with its own login, chats, name and Dock icon.")
+            Text("One app per account").font(.system(size: 24, weight: .semibold)).padding(.top, 22)
+            Text("Doppel turns your installed ChatGPT or Claude into separate apps, each with its own login, chats, name and Dock icon.")
                 .lead()
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 460)
@@ -95,38 +101,42 @@ struct OnboardingView: View {
         .frame(maxWidth: .infinity)
     }
 
-    private var findChatGPT: some View {
+    private var findApps: some View {
         VStack(alignment: .leading, spacing: 0) {
-            title("Find ChatGPT")
-            Text("Instances are built from the copy already on this Mac. Nothing is downloaded from anywhere else.")
+            title("Find your apps")
+            Text("Instances are built from the copies already on this Mac. Nothing is downloaded from anywhere else. One of the two is enough.")
                 .lead()
             card {
-                HStack(spacing: 12) {
-                    Image(nsImage: NSWorkspace.shared.icon(forFile: InstanceStore.primaryAppPath))
-                        .resizable()
-                        .frame(width: 44, height: 44)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(store.installedChatGPT.map { "ChatGPT \($0.version)" } ?? "ChatGPT")
-                            .font(.system(size: 14, weight: .semibold))
-                        Text(InstanceStore.primaryAppPath).font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if store.primaryInstalled {
-                        Text("Found").foregroundStyle(.green).font(.system(size: 13, weight: .medium))
-                    } else {
-                        Text("Not installed").foregroundStyle(.orange).font(.system(size: 13, weight: .medium))
-                    }
+                VStack(spacing: 12) {
+                    appRow(.chatgpt, version: store.installedChatGPT.map(\.version))
+                    Divider()
+                    appRow(.claude, version: nil)
                 }
             }
             .padding(.top, 22)
-            if !store.primaryInstalled {
-                HStack(spacing: 10) {
-                    Button("Get ChatGPT") { NSWorkspace.shared.open(InstanceStore.primaryDownloadURL) }
-                    Button("Check Again") { store.reload() }
-                }
-                .padding(.top, 14)
-                Text("Install it from OpenAI into Applications, then check again.")
-                    .font(.caption).foregroundStyle(.secondary).padding(.top, 8)
+            if !store.anyAppInstalled {
+                Text("Install one into Applications, then check again.")
+                    .font(.caption).foregroundStyle(.secondary).padding(.top, 10)
+            }
+        }
+    }
+
+    private func appRow(_ kind: InstanceApp, version: String?) -> some View {
+        HStack(spacing: 12) {
+            Image(nsImage: NSWorkspace.shared.icon(forFile: kind.path))
+                .resizable()
+                .frame(width: 40, height: 40)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(version.map { "\(kind.label) \($0)" } ?? kind.label)
+                    .font(.system(size: 14, weight: .semibold))
+                Text(kind.path).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if store.isInstalled(kind) {
+                Text("Found").foregroundStyle(.green).font(.system(size: 13, weight: .medium))
+            } else {
+                Button("Get \(kind.label)") { NSWorkspace.shared.open(kind.downloadURL) }
+                Button("Check Again") { store.reload() }
             }
         }
     }
@@ -172,8 +182,18 @@ struct OnboardingView: View {
             VStack(alignment: .leading, spacing: 0) {
                 title(store.instances.isEmpty ? "Create your first instance" : "Create an instance")
                 Text("Give it a name you will recognise in the Dock. You can change both later.").lead()
+                if store.primaryInstalled && store.claudeInstalled {
+                    Picker("App", selection: $model.appKind) {
+                        ForEach(InstanceApp.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 220)
+                    .padding(.top, 18)
+                    .disabled(model.creating)
+                }
                 Text("Name").fieldLabel().padding(.top, 20)
-                TextField("", text: $model.name, prompt: Text("ChatGPT Work"))
+                TextField("", text: $model.name, prompt: Text("\(model.appKind.label) Work"))
                     .textFieldStyle(.roundedBorder)
                     .controlSize(.large)
                     .onSubmit { if canCreate { createInstance() } }
@@ -241,7 +261,7 @@ struct OnboardingView: View {
     // MARK: - Footer
 
     private var canCreate: Bool {
-        !trimmedName.isEmpty && !model.creating && !store.engineOperationBusy && store.primaryInstalled
+        !trimmedName.isEmpty && !model.creating && !store.engineOperationBusy && store.isInstalled(model.appKind)
     }
 
     private var footer: some View {
@@ -255,8 +275,8 @@ struct OnboardingView: View {
             switch model.step {
             case .welcome:
                 primary("Get Started") { move(1) }
-            case .chatGPT:
-                primary("Continue") { move(1) }.disabled(!store.primaryInstalled)
+            case .findApp:
+                primary("Continue") { move(1) }.disabled(!store.anyAppInstalled)
             case .signing:
                 if !store.signingReady {
                     Button("Skip for Now") { move(1) }.buttonStyle(.link)
@@ -306,7 +326,8 @@ struct OnboardingView: View {
         model.creating = true
         model.errorMessage = nil
         let name = trimmedName
-        store.create(name: name, tintHex: model.useOriginal ? "original" : model.color.rgbHex) { [model] failure in
+        store.create(name: name, tintHex: model.useOriginal ? "original" : model.color.rgbHex,
+                     appKind: model.appKind) { [model] failure in
             model.creating = false
             if let failure {
                 model.errorMessage = failure

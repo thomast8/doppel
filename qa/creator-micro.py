@@ -49,9 +49,12 @@ with tempfile.TemporaryDirectory(prefix="doppel-micro-") as scratch:
     run("status", "--bad-option", success=False)
     channels = root / "state" / "codex-micro-channels"
     assert run("channel") == "Creator Micro channels: none set\n"
+    # The menu bar app reads channels by slug, not by display name.
+    assert run("channel", "--porcelain") == "claude\toff\n"
     run("channel", "ChatGPT Veridue", "1")
     run("channel", "ChatGPT Personal", "3")
     assert run("channel") == "ChatGPT Personal: 3\nChatGPT Veridue: 1\n"
+    assert run("channel", "--porcelain") == "instance\tpersonal\t3\ninstance\tveridue\t1\nclaude\toff\n"
     assert (channels / "veridue").read_text() == "1\n"
     run("channel", "ChatGPT Personal", "1", success=False)
     for invalid in ["0", "10", "x", "../1"]:
@@ -125,6 +128,7 @@ json.dump(data, open(path, "w"))
     assert data["theme"] == "dark"
     assert pad_config.read_text() == '[keys]\nfast = "approve"\n\n[pad]\nchannel = 2\n'
     assert run("claude") == "Claude Code: channel 2\n"
+    assert run("channel", "--porcelain") == "instance\tveridue\t1\nclaude\t2\n"
     assert "nothing to change" in run("claude", "2", "--plan")
     assert run("channel") == "ChatGPT Veridue: 1\nClaude Code: 2\n"
     run("channel", "ChatGPT Personal", "2", success=False)

@@ -234,8 +234,9 @@ bin/doppel prune                                     # drop old rollback copies
 bin/doppel prune "ChatGPT Personal"                  # just this instance's
 ```
 
-**Settings › Integrations › Creator Micro keypad** assigns the keypad to a Doppel
-instance and shows the current selection. Choosing **Nobody** stops managed
+**Settings › Codex Micro** shows the pad with who holds each channel. Its
+**Answers the pad** menu assigns the keypad to a Doppel instance and shows the
+current selection. Choosing **Nobody** stops managed
 clones from using it, including when the assigned instance was removed. Doppel
 automatically restarts running previously assigned and newly selected instances
 to apply a change; closed instances stay closed. Save unfinished drafts before
@@ -250,12 +251,13 @@ press of the pad's channel button, with every app left running. A clone with a
 channel uses the pad even when it is not the assigned instance, USB still
 reaches every clone that uses the pad, and `any` in place of the number takes the
 channel away. Channels are read when an instance starts, and `doppel micro
-channel` lists them. The assigned instance without a channel still listens on
+channel` lists them (`--porcelain` lists them by slug for scripts). The nine
+tiles under **Bluetooth channels** in Settings do the same with a click. The assigned instance without a channel still listens on
 every channel.
 
-`doppel micro claude 2`, or **Use with Claude Code** in the Creator Micro menu,
-sets up Claude Code on a channel of its own. It lists what it will change and
-waits for a yes: adding the codex-micro marketplace (currently
+`doppel micro claude 2`, or choosing Claude Code for a channel in
+**Settings › Codex Micro**, sets up Claude Code on a channel of its own. It lists
+what it will change and waits for a yes: adding the codex-micro marketplace (currently
 `thomast8/codex-micro-for-claude-code`, which has the channel setting),
 installing the plugin, turning on `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` for the
 Claude app's Code tab, and setting the channel in the plugin's config.toml. The
@@ -501,7 +503,7 @@ reporting a problem.
 `Doppel --render-ui <file.png> <screen>` draws a screen offscreen from fixed
 sample data, without a display capture permission. The screens are `panel`,
 `panel-attention`, `panel-progress`, `panel-setup`, `instance`, `settings`, `settings-updates`,
-`settings-integrations`, `onboarding` and `onboarding-create`; `edit` or no
+`settings-integrations`, `settings-micro`, `onboarding` and `onboarding-create`; `edit` or no
 screen draws the New Instance window.
 
 The app is self-contained. The CLI, the engine and the compiled helpers all ship

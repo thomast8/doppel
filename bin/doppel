@@ -1875,6 +1875,24 @@ cmd_micro() {
         # if it is not the owner. Read at launch; USB always reaches them.
         channel)
             local name file other value
+            # By slug for the menu bar app, which cannot rely on display names.
+            # Claude Code reads "off" until its plugin is installed.
+            if [[ $# -eq 1 && "$1" == "--porcelain" ]]; then
+                for file in "$CODEX_MICRO_CHANNELS"/*(N); do
+                    is_instance_dir "$INSTANCES_ROOT/${file:t}" || continue
+                    IFS= read -r value < "$file" || true
+                    [[ "$value" == [1-9] ]] && printf 'instance\t%s\t%s\n' "${file:t}" "$value"
+                done
+                local -a pad_state=("${(@f)$(claude_pad state)}")
+                if [[ "${pad_state[2]}" != 1 ]]; then
+                    value=off
+                else
+                    value="$(claude_pad channel-get)"
+                    [[ -n "$value" ]] || value=any
+                fi
+                printf 'claude\t%s\n' "$value"
+                return
+            fi
             if [[ $# -eq 0 ]]; then
                 local -a lines=()
                 for file in "$CODEX_MICRO_CHANNELS"/*(N); do
@@ -1888,7 +1906,7 @@ cmd_micro() {
                 (( ${#lines} )) && print -rl -- "${lines[@]}" || print -r -- "Creator Micro channels: none set"
                 return
             fi
-            [[ $# -eq 2 && ( "$2" == [1-9] || "$2" == any ) ]] || die "usage: doppel micro channel [<name> <1-9|any>]"
+            [[ $# -eq 2 && ( "$2" == [1-9] || "$2" == any ) ]] || die "usage: doppel micro channel [--porcelain | <name> <1-9|any>]"
             name="$1"
             file="$(instance_dir_for "$name")" || exit 1
             file="$CODEX_MICRO_CHANNELS/${file:t}"

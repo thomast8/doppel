@@ -23,8 +23,9 @@ struct SettingsView: View {
             general.tabItem { Label("General", systemImage: "gearshape") }.tag(0)
             updates.tabItem { Label("Updates", systemImage: "arrow.down.circle") }.tag(1)
             integrations.tabItem { Label("Integrations", systemImage: "puzzlepiece.extension") }.tag(2)
+            CodexMicroView(store: store).tabItem { Label("Codex Micro", systemImage: "keyboard") }.tag(3)
         }
-        .frame(width: 560, height: 500)
+        .frame(width: 600, height: 620)
     }
 
     // MARK: - General
@@ -91,7 +92,6 @@ struct SettingsView: View {
             Section {
                 browserExtension
                 builtInBrowser
-                creatorMicro
             } header: {
                 Text("Some ChatGPT features exist once per Mac. Pick which instance gets each.")
                     .textCase(nil)
@@ -135,10 +135,10 @@ struct SettingsView: View {
                 // own are offered: the CLI refuses the rest rather than
                 // pointing the registration at a path that is not there.
                 let eligible = store.instances.filter {
-                    $0.installed && status.instancesWithBrowserHost.contains($0.name)
+                    $0.appKind == .chatgpt && $0.installed && status.instancesWithBrowserHost.contains($0.name)
                 }
                 let waiting = store.instances.filter {
-                    $0.installed && !status.instancesWithBrowserHost.contains($0.name)
+                    $0.appKind == .chatgpt && $0.installed && !status.instancesWithBrowserHost.contains($0.name)
                 }
                 // Each browser has its own registration, so two instances can
                 // browse at the same time in two different browsers.
@@ -238,37 +238,6 @@ struct SettingsView: View {
         return "Runs on the official app, sharing its profile."
     }
 
-    private var creatorMicro: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Creator Micro keypad")
-                Text("Running instances restart when this changes. Official ChatGPT also uses the keypad when running.")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text("doppel micro assign")
-                    .font(.system(size: 10.5, design: .monospaced)).foregroundStyle(.secondary)
-            }
-            Spacer()
-            if store.checkingCreatorMicro {
-                ProgressView().controlSize(.small)
-            } else if !store.creatorMicroStatusAvailable {
-                Text("Unavailable").foregroundStyle(.secondary)
-            } else {
-                Menu(store.instances.first { $0.id == store.creatorMicroOwnerID }?.name ?? "Nobody") {
-                    ForEach(store.instances) { instance in
-                        Button(instance.name) { store.assignCreatorMicro(to: instance) }
-                            .disabled(store.creatorMicroOwnerID == instance.id)
-                    }
-                    Divider()
-                    Button("Nobody") { store.releaseCreatorMicro() }
-                        .disabled(store.creatorMicroOwnerID == nil)
-                }
-                .fixedSize()
-                .disabled(store.engineOperationBusy)
-            }
-        }
-    }
-
     private func chronicleRow(_ status: NativeToolsStatus) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
@@ -324,7 +293,7 @@ private struct SettingsGeneral: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Setup guide")
-                        Text("Walks through ChatGPT, signing, a first instance and permissions.")
+                        Text("Walks through finding ChatGPT or Claude, signing, a first instance and permissions.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()

@@ -32,6 +32,15 @@ struct Instance: Identifiable {
     var usesBuiltInBrowser: Bool { engine == .vendor }
 }
 
+extension InstanceStore {
+    /// Whether the app an instance is built from is on this Mac.
+    func isInstalled(_ kind: InstanceApp) -> Bool {
+        kind == .chatgpt ? primaryInstalled : claudeInstalled
+    }
+
+    var anyAppInstalled: Bool { primaryInstalled || claudeInstalled }
+}
+
 /// All instance knowledge comes from the CLI (`doppel list --porcelain`), so
 /// the menu-bar app and the CLI cannot drift apart on config parsing.
 @MainActor
@@ -52,7 +61,11 @@ final class InstanceStore: ObservableObject {
     @Published var creatorMicroOwnerID: String?
     @Published var checkingCreatorMicro = false
     @Published var creatorMicroStatusAvailable = false
-    @Published var claudeMicroStatus: String?
+    /// Who holds each of the pad's Bluetooth channels.
+    @Published var microChannels = MicroChannels()
+    /// What setting up Claude Code on a channel would change, shown on the
+    /// Codex Micro page until it is applied or cancelled.
+    @Published var claudeMicroPlan: ClaudeMicroPlan?
     /// False until the CLI has answered once, so an empty list at launch is
     /// not mistaken for a Mac with no instances.
     @Published var listLoaded = false
@@ -76,7 +89,7 @@ final class InstanceStore: ObservableObject {
     var permissionIssues: [PermissionIssue] { permissionStatuses.filter(\.needsAttention) }
 
     var setupProgress: SetupProgress {
-        SetupProgress(chatGPTFound: primaryInstalled, signingReady: signingReady,
+        SetupProgress(appFound: primaryInstalled || claudeInstalled, signingReady: signingReady,
                       hasInstance: !instances.isEmpty)
     }
 
@@ -366,14 +379,12 @@ final class InstanceStore: ObservableObject {
         checkingCreatorMicro = true
         Task.detached { [weak self] in
             let result = Self.runProcess(cli: cli, arguments: ["micro", "status", "--porcelain"])
-            let claude = Self.runProcess(cli: cli, arguments: ["micro", "claude"])
+            let channels = Self.runProcess(cli: cli, arguments: ["micro", "channel", "--porcelain"])
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.checkingCreatorMicro = false
-                if case .success(let output) = claude {
-                    self.claudeMicroStatus = output.trimmingCharacters(in: .whitespacesAndNewlines)
-                } else {
-                    self.claudeMicroStatus = nil
+                if case .success(let output) = channels {
+                    self.microChannels = MicroChannels.parse(output)
                 }
                 switch result {
                 case .failure(let message):
@@ -389,9 +400,19 @@ final class InstanceStore: ObservableObject {
         }
     }
 
-    /// Asks the CLI what setting up Claude Code would change, shows that, and
-    /// applies it only once confirmed.
-    func setUpClaudeMicro(channel: String) {
+    /// Gives an instance one Bluetooth channel of the pad, or with nil lets it
+    /// listen on every channel again. Instances read it when they start.
+    func setMicroChannel(_ channel: Int?, for instance: Instance) {
+        guard instance.appKind == .chatgpt else { return }
+        runCLI(["micro", "channel", instance.name, channel.map(String.init) ?? "any"],
+               busyKey: "creator-micro") { [weak self] _ in
+            self?.checkCreatorMicro()
+        }
+    }
+
+    /// Asks the CLI what setting up Claude Code would change. The Codex Micro
+    /// page shows the plan and applies it only when the user confirms there.
+    func planClaudeMicro(channel: String) {
         guard let cli = discoveredCLI else {
             report(Self.missingCLIMessage, for: "cli")
             return
@@ -406,26 +427,21 @@ final class InstanceStore: ObservableObject {
                 case .failure(let message):
                     self.report(message, for: "creator-micro")
                 case .success(let output):
-                    self.confirmClaudeMicro(channel: channel, plan: output)
+                    self.claudeMicroPlan = ClaudeMicroPlan(channel: channel, output: output)
                 }
             }
         }
     }
 
-    private func confirmClaudeMicro(channel: String, plan: String) {
-        let alert = NSAlert()
-        let nothingToDo = plan.contains("nothing to change")
-        alert.messageText = nothingToDo ? "Claude Code is already set up" : "Set up Claude Code for the Creator Micro?"
-        alert.informativeText = plan.trimmingCharacters(in: .whitespacesAndNewlines)
-        if nothingToDo {
-            alert.addButton(withTitle: "OK")
-            present(alert)
-            return
-        }
-        alert.addButton(withTitle: "Set Up")
-        alert.addButton(withTitle: "Cancel")
-        guard present(alert) == .alertFirstButtonReturn else { return }
-        runCLI(["micro", "claude", channel, "--yes"], busyKey: "creator-micro") { [weak self] _ in
+    func applyClaudeMicroPlan() {
+        guard let plan = claudeMicroPlan else { return }
+        claudeMicroPlan = nil
+        guard !plan.nothingToChange else { return }
+        runCLI(["micro", "claude", plan.channel, "--yes"], busyKey: "creator-micro") { [weak self] failure in
+            if failure == nil {
+                Notifier.post("Claude Code is set up for the pad",
+                              "New Claude Code sessions pick it up.")
+            }
             self?.checkCreatorMicro()
         }
     }
@@ -792,8 +808,10 @@ final class InstanceStore: ObservableObject {
         alert.informativeText = """
             The app moves to the Trash and can be rebuilt at any time.
             Its account data (chats and login) is kept unless you tick below.
-            Remote Access is disabled first, interrupting any remote tasks.
             """
+        if instance.appKind == .chatgpt {
+            alert.informativeText += "\nRemote Access is disabled first, interrupting any remote tasks."
+        }
         alert.alertStyle = .warning
         let purge = NSButton(checkboxWithTitle: "Also move this account's data to the Trash", target: nil, action: nil)
         purge.state = .off

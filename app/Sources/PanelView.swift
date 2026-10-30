@@ -82,7 +82,7 @@ struct MenuContent: View {
             Text("Doppel").font(.system(size: 15, weight: .semibold))
             Spacer()
             iconButton("plus", label: "New instance") { open("create-instance") }
-                .disabled(store.engineOperationBusy || !store.primaryInstalled)
+                .disabled(store.engineOperationBusy || !store.anyAppInstalled)
             iconButton("arrow.clockwise", label: "Refresh") { store.reload() }
             iconButton("gearshape", label: "Settings") { open("settings") }
         }
@@ -111,7 +111,10 @@ struct MenuContent: View {
         let progress = store.setupProgress
         return VStack(alignment: .leading, spacing: 8) {
             Text("Finish setting up").font(.system(size: 13, weight: .semibold))
-            checklistRow(progress.chatGPTFound, done: "ChatGPT found", todo: "ChatGPT is not installed")
+            checklistRow(progress.appFound, done: store.primaryInstalled && store.claudeInstalled
+                         ? "ChatGPT and Claude found"
+                         : (store.primaryInstalled ? "ChatGPT found" : "Claude found"),
+                         todo: "Neither ChatGPT nor Claude is installed")
             checklistRow(progress.signingReady, done: "Secure signing ready", todo: "Secure signing not set up")
             checklistRow(progress.hasInstance, done: "First instance created", todo: "No instance yet")
             HStack {
@@ -290,6 +293,14 @@ struct MenuContent: View {
                      : (activity == .stopped ? "Not running" : "App missing, rebuild it"))
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
+                if instance.appKind == .claude {
+                    Text("Claude")
+                        .font(.system(size: 10.5, weight: .medium))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Color.orange.opacity(0.16)))
+                        .foregroundStyle(Color(hex: "B4541C"))
+                }
                 if instance.usesBuiltInBrowser {
                     Text("Official engine")
                         .font(.system(size: 10.5, weight: .medium))
@@ -354,12 +365,12 @@ struct MenuContent: View {
             }
             .accessibilityHidden(true)
             Text("No instances yet").font(.system(size: 14, weight: .semibold))
-            Text("Each instance is its own ChatGPT app with its own account.")
+            Text("Each instance is its own ChatGPT or Claude app with its own account.")
                 .font(.system(size: 12.5))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             pill("New instance") { open("create-instance") }
-                .disabled(!store.primaryInstalled || store.engineOperationBusy)
+                .disabled(!store.anyAppInstalled || store.engineOperationBusy)
                 .padding(.top, 4)
         }
         .frame(maxWidth: .infinity)

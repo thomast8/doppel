@@ -31,21 +31,21 @@ enum InstanceActivity: Equatable {
 }
 
 enum OnboardingStep: Int, CaseIterable {
-    case welcome, chatGPT, signing, create, permissions, done
+    case welcome, findApp, signing, create, permissions, done
 }
 
 /// The three things a Mac needs before Doppel is useful. The panel shows them
 /// as a checklist until all three hold, and the setup guide resumes at the
 /// first one missing.
 struct SetupProgress: Equatable {
-    let chatGPTFound: Bool
+    let appFound: Bool
     let signingReady: Bool
     let hasInstance: Bool
 
-    var isComplete: Bool { chatGPTFound && signingReady && hasInstance }
+    var isComplete: Bool { appFound && signingReady && hasInstance }
 
     var resumeStep: OnboardingStep {
-        if !chatGPTFound { return .chatGPT }
+        if !appFound { return .findApp }
         if !signingReady { return .signing }
         if !hasInstance { return .create }
         return .done

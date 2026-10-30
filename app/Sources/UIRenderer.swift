@@ -60,7 +60,7 @@ enum UIRenderer {
     }
 
     static let screens = ["panel", "panel-attention", "panel-progress", "panel-setup", "instance", "settings",
-                          "settings-updates", "settings-integrations", "onboarding", "onboarding-create"]
+                          "settings-updates", "settings-integrations", "settings-micro", "onboarding", "onboarding-create"]
 
     /// The newer screens are drawn from a fixed sample store rather than the
     /// Mac's real instances, so a render shows every state on any machine and
@@ -85,9 +85,10 @@ enum UIRenderer {
                 .background(Color(nsColor: .windowBackgroundColor)))
         case "instance":
             view = AnyView(InstanceDetailView(store: store, slug: "personal"))
-        case "settings", "settings-updates", "settings-integrations":
+        case "settings", "settings-updates", "settings-integrations", "settings-micro":
             view = AnyView(SettingsView(store: store, updaterController: updater, doppelUpdatesEnabled: true,
-                                        initialTab: screen == "settings" ? 0 : (screen == "settings-updates" ? 1 : 2)))
+                                        initialTab: ["settings", "settings-updates", "settings-integrations", "settings-micro"]
+                                            .firstIndex(of: screen) ?? 0))
         case "onboarding":
             view = AnyView(OnboardingView(store: store, initialStep: .welcome, renderingDocumentation: true))
         case "onboarding-create":
@@ -121,12 +122,15 @@ enum UIRenderer {
         store.instances = [
             Instance(id: "personal", name: "ChatGPT Personal", appPath: "/Applications/ChatGPT Personal.app",
                      installed: true, tint: "F28C28", engine: .clone),
+            Instance(id: "claude/research", name: "Claude Research", appPath: "/Applications/Claude Research.app",
+                     installed: true, tint: "14B8A6", engine: .clone, appKind: .claude),
             Instance(id: "veridue", name: "ChatGPT Veridue", appPath: "/Applications/ChatGPT Veridue.app",
                      installed: true, tint: "A855F7", engine: .vendor),
             Instance(id: "work", name: "ChatGPT Work", appPath: "/Applications/ChatGPT Work.app",
                      installed: true, tint: "3B82F6", engine: .clone),
         ]
-        store.runningAppPaths = ["/Applications/ChatGPT Personal.app"]
+        store.runningAppPaths = ["/Applications/ChatGPT Personal.app", "/Applications/Claude Research.app"]
+        store.claudeInstalled = true
         var tools = NativeToolsStatus()
         tools.computerUse = .ready
         tools.chronicle = .running
@@ -141,6 +145,7 @@ enum UIRenderer {
         store.nativeToolsStatus = tools
         store.creatorMicroStatusAvailable = true
         store.creatorMicroOwnerID = "work"
+        store.microChannels = MicroChannels(instances: ["work": 1, "personal": 3], claude: .channel(2))
         let statuses: [(String, String)] = [
             ("microphone", attention ? "denied" : "granted"), ("screen-recording", "granted"),
             ("notifications", "granted"), ("camera", "not-requested"), ("accessibility", "unconfirmed"),
