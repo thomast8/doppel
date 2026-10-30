@@ -1958,6 +1958,13 @@ cmd_remove() {
     local removed_root="$DOPPEL_HOME/state/Removed"
     mkdir -p "$removed_root"
     /bin/mv "$dir" "$removed_root/${dir:t}.$stamp" || die "preserving the instance definition failed"
+    # The import record goes with the definition: a new instance can reuse this
+    # slug, and an inherited marker would stop it ever importing its own history.
+    local imports="$DOPPEL_HOME/state/imports/${dir:t}"
+    if [[ -d "$imports" ]]; then
+        /bin/mv "$imports" "$removed_root/${dir:t}.$stamp/imports" || \
+            die "moving the history import record failed; the instance definition is at $removed_root/${dir:t}.$stamp"
+    fi
     print -r -- "instance definition kept at: $removed_root/${dir:t}.$stamp"
 
     if (( purge )); then
