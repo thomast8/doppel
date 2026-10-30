@@ -22,23 +22,126 @@ struct InstanceDetailView: View {
     }
 
     private func content(_ instance: Instance) -> some View {
+        let busy = store.engineOperationBusy
+        return Form {
+            Section {
+                PermissionRows(store: store, instanceID: instance.id)
+            } header: {
+                VStack(alignment: .leading, spacing: 18) {
+                    hero(instance).heroHeader()
+                    Text(instance.usesBuiltInBrowser ? "Privacy permissions for the Doppel engine"
+                                                     : "Privacy permissions")
+                }
+            } footer: {
+                footnote(instance.usesBuiltInBrowser
+                         ? "Official ChatGPT uses its own macOS permissions. These apply after switching back to the Doppel engine."
+                         : "Each instance asks macOS on its own. Optional ones can wait until a feature needs them.")
+            }
+
+            // The fallback engine and Remote Access are built on
+            // ChatGPT's own runtime; a Claude instance has neither.
+            if instance.appKind == .chatgpt {
+                Section {
+                    let locked = busy || (!instance.usesBuiltInBrowser && !store.primaryInstalled)
+                    HStack(spacing: 8) {
+                        ChoiceTile(badge: StatusBadge(symbol: "square.on.square", color: instance.tileColor),
+                                   title: "Doppel engine",
+                                   detail: "Recommended. Its own app, icon and data.",
+                                   color: instance.tileColor, selected: !instance.usesBuiltInBrowser) {
+                            if instance.usesBuiltInBrowser { store.releaseBuiltInBrowser() }
+                        }
+                        ChoiceTile(badge: StatusBadge(symbol: "lifepreserver", color: .purple),
+                                   title: "Official ChatGPT",
+                                   detail: "Fallback if an update breaks this clone. Same account and chats.",
+                                   color: .purple, selected: instance.usesBuiltInBrowser) {
+                            if !instance.usesBuiltInBrowser { store.assignBuiltInBrowser(to: instance) }
+                        }
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.vertical, 4)
+                    .disabled(locked)
+                } header: {
+                    Text("Engine")
+                }
+
+                Section("Remote Access") {
+                    BadgeRow(badge: StatusBadge(symbol: "iphone.and.arrow.forward", color: .blue),
+                             title: "Remote Access",
+                             detail: "Let another device run tasks in this account.") {
+                        Button("Open…") { openWindow(id: "remote-access", value: instance.id) }
+                            .disabled(busy)
+                    }
+                }
+            }
+
+            Section("Maintenance") {
+                BadgeRow(badge: StatusBadge(symbol: "hammer.fill", color: .gray),
+                         title: "Rebuild and reopen",
+                         detail: "Fixes a broken clone. Keeps the account and chats.") {
+                    Button("Rebuild") { store.rebuild(instance) }.disabled(busy)
+                }
+                if instance.appKind == .claude {
+                    BadgeRow(badge: StatusBadge(symbol: "clock.arrow.circlepath", color: Design.claude),
+                             title: "Import Code history",
+                             detail: "Copies matching local Code sessions from the original Claude app.") {
+                        Button("Import…") { store.importClaudeSessions(instance) }.disabled(busy)
+                    }
+                }
+                BadgeRow(badge: StatusBadge(symbol: "trash.fill", color: .red),
+                         title: "Remove instance",
+                         detail: "The app goes to the Trash. Account data is kept unless you choose otherwise.") {
+                    Button("Remove…", role: .destructive) { store.confirmRemove(instance) }
+                        .disabled(busy)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: 580, height: 680)
+        .navigationTitle(instance.name)
+    }
+
+    // MARK: - Hero
+
+    /// The instance's own tile on the dark slab, lit in its colour while it
+    /// runs, with what it is and how it is doing beside it.
+    private func hero(_ instance: Instance) -> some View {
         let activity = store.activity(for: instance)
         let busy = store.engineOperationBusy
-        return VStack(spacing: 0) {
-            HStack(spacing: 14) {
-                IconTile(color: instance.tileColor, name: instance.name, radius: 14,
-                         renderingDocumentation: true, size: 56)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(instance.name).font(.system(size: 19, weight: .semibold))
-                    Text(Self.statusText(activity))
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(.secondary)
+        let lit = activity == .running || activity == .working
+        let permissions = store.permissionStatuses.filter { $0.instanceID == instance.id && $0.permission != "permission-check" }
+        let allowed = permissions.filter { $0.status == "granted" }.count
+        let denied = permissions.contains { $0.needsAttention }
+        var legend = [
+            HeroLegend(color: Self.statusColor(activity), label: "Status", value: Self.statusText(activity)),
+            HeroLegend(color: instance.appKind == .claude ? Design.claude : .white.opacity(0.7),
+                       label: "App", value: instance.appKind.label),
+        ]
+        if instance.appKind == .chatgpt {
+            legend.append(HeroLegend(color: instance.usesBuiltInBrowser ? .purple : instance.tileColor,
+                                     label: "Engine",
+                                     value: instance.usesBuiltInBrowser ? "Official ChatGPT" : "Doppel"))
+        }
+        if !permissions.isEmpty {
+            legend.append(HeroLegend(color: denied ? .red : (allowed == permissions.count ? .green : Design.idle),
+                                     label: "Permissions",
+                                     value: "\(allowed) of \(permissions.count) allowed"))
+        }
+        return HeroCard(title: instance.name,
+                        subtitle: (instance.appPath as NSString).abbreviatingWithTildeInPath,
+                        legend: legend) {
+            IconTile(color: instance.tileColor, name: instance.name, radius: 18,
+                     renderingDocumentation: true, size: 76)
+                .shadow(color: instance.tileColor.opacity(lit ? 0.75 : 0.0), radius: 14)
+                .overlay(alignment: .bottomTrailing) {
+                    Circle()
+                        .fill(Self.statusColor(activity))
+                        .frame(width: 14, height: 14)
+                        .overlay(Circle().strokeBorder(Color(white: 0.08), lineWidth: 3))
+                        .offset(x: 4, y: 4)
                 }
-                Spacer()
-                Button("Rename or Recolour…") {
-                    openWindow(id: "edit-instance", value: instance.id)
-                }
-                .disabled(busy)
+                .padding(6)
+        } accessory: {
+            VStack(alignment: .trailing, spacing: 8) {
                 if activity == .running {
                     Button("Show") { store.show(instance) }
                         .buttonStyle(.borderedProminent)
@@ -47,103 +150,28 @@ struct InstanceDetailView: View {
                         .buttonStyle(.borderedProminent)
                         .disabled(busy || !instance.installed)
                 }
+                Button("Rename…") { openWindow(id: "edit-instance", value: instance.id) }
+                    .disabled(busy)
             }
             .buttonBorderShape(.capsule)
-            .padding(.horizontal, 24)
-            .padding(.top, 18)
-            .padding(.bottom, 4)
-
-            Form {
-                Section {
-                    PermissionRows(store: store, instanceID: instance.id)
-                } header: {
-                    Text(instance.usesBuiltInBrowser ? "Privacy permissions for the Doppel engine"
-                                                     : "Privacy permissions")
-                } footer: {
-                    Text(instance.usesBuiltInBrowser
-                         ? "Official ChatGPT uses its own macOS permissions. These apply after switching back to the Doppel engine."
-                         : "Each instance asks macOS on its own. Optional ones can wait until a feature needs them.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.leading)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                // The fallback engine and Remote Access are built on
-                // ChatGPT's own runtime; a Claude instance has neither.
-                if instance.appKind == .chatgpt {
-                    Section("Engine") {
-                        Picker("Engine", selection: Binding(
-                            get: { instance.engine },
-                            set: { engine in
-                                guard engine != instance.engine else { return }
-                                if engine == .vendor {
-                                    store.assignBuiltInBrowser(to: instance)
-                                } else {
-                                    store.releaseBuiltInBrowser()
-                                }
-                            })) {
-                            engineOption("Doppel engine",
-                                         detail: "Recommended. Its own app, icon and data.")
-                                .tag(InstanceEngine.clone)
-                            engineOption("Official ChatGPT (fallback)",
-                                         detail: "Only if a ChatGPT update breaks this clone. Same account and chats.")
-                                .tag(InstanceEngine.vendor)
-                        }
-                        .pickerStyle(.radioGroup)
-                        .labelsHidden()
-                        .disabled(busy || (!instance.usesBuiltInBrowser && !store.primaryInstalled))
-                    }
-
-                    Section("Remote Access") {
-                        row("Let another device run tasks in this account.", detail: nil) {
-                            Button("Open…") { openWindow(id: "remote-access", value: instance.id) }
-                                .disabled(busy)
-                        }
-                    }
-                }
-
-                Section("Maintenance") {
-                    row("Rebuild and reopen",
-                        detail: "Fixes a broken clone. Keeps the account and chats.") {
-                        Button("Rebuild") { store.rebuild(instance) }.disabled(busy)
-                    }
-                    if instance.appKind == .claude {
-                        row("Import Code history",
-                            detail: "Copies matching local Code sessions from the original Claude app.") {
-                            Button("Import…") { store.importClaudeSessions(instance) }.disabled(busy)
-                        }
-                    }
-                    row("Remove instance",
-                        detail: "The app goes to the Trash. Account data is kept unless you choose otherwise.") {
-                        Button("Remove…", role: .destructive) { store.confirmRemove(instance) }
-                            .disabled(busy)
-                    }
-                }
-            }
-            .formStyle(.grouped)
+            .frame(maxHeight: .infinity, alignment: .top)
         }
-        .frame(width: 560, height: 640)
-        .navigationTitle(instance.name)
     }
 
-    private func engineOption(_ title: String, detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-            Text(detail).font(.caption).foregroundStyle(.secondary)
-        }
-        .padding(.vertical, 2)
+    private func footnote(_ text: String) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func row<Trailing: View>(_ title: String, detail: String?,
-                                    @ViewBuilder trailing: () -> Trailing) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                if let detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
-            }
-            Spacer()
-            trailing()
+    static func statusColor(_ activity: InstanceActivity) -> Color {
+        switch activity {
+        case .running: return .green
+        case .working: return .blue
+        case .attention, .checkerOutdated, .notInstalled: return .red
+        case .stopped: return Design.idle
         }
     }
 
@@ -172,17 +200,11 @@ struct PermissionRows: View {
                 .foregroundStyle(.secondary)
         } else {
             ForEach(permissions) { permission in
-                HStack(spacing: 10) {
-                    Image(systemName: permission.systemImage)
-                        .foregroundStyle(Self.color(permission))
-                        .frame(width: 20)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(permission.label)
-                        Text(Self.explanation(permission))
-                            .font(.caption)
-                            .foregroundStyle(permission.needsAttention ? Color.red : Color.secondary)
-                    }
-                    Spacer()
+                BadgeRow(badge: StatusBadge(symbol: permission.kindSymbol, color: Self.color(permission),
+                                            muted: permission.status == "not-requested"),
+                         title: permission.label,
+                         detail: Self.explanation(permission),
+                         detailColor: permission.needsAttention ? .red : .secondary) {
                     if let title = Self.actionTitle(permission) {
                         Button(title) { store.handlePermission(permission) }
                             .disabled(store.busy.contains("permissions"))

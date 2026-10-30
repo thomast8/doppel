@@ -83,13 +83,15 @@ struct OnboardingView: View {
 
     private var welcome: some View {
         VStack(spacing: 0) {
-            ZStack {
-                tile(Color(hex: "A855F7"), "P", size: 66).rotationEffect(.degrees(-8)).offset(x: -60, y: 10)
-                tile(Color(hex: "F28C28"), "O", size: 66).rotationEffect(.degrees(8)).offset(x: 60, y: 10)
-                tile(Color(hex: "3B82F6"), "W", size: 76)
+            stage {
+                ZStack {
+                    tile(Color(hex: "A855F7"), "P", size: 66).rotationEffect(.degrees(-8)).offset(x: -64, y: 8)
+                    tile(Color(hex: "F28C28"), "O", size: 66).rotationEffect(.degrees(8)).offset(x: 64, y: 8)
+                    tile(Color(hex: "3B82F6"), "W", size: 76)
+                }
+                .frame(height: 100)
+                .padding(.vertical, 22)
             }
-            .frame(height: 100)
-            .padding(.top, 18)
             .accessibilityHidden(true)
             Text("One app per account").font(.system(size: 24, weight: .semibold)).padding(.top, 22)
             Text("Doppel turns your installed ChatGPT or Claude into separate apps, each with its own login, chats, name and Dock icon.")
@@ -97,11 +99,11 @@ struct OnboardingView: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 460)
             HStack(alignment: .top, spacing: 26) {
-                feature("person.2", "Separate accounts and data")
-                feature("dock.rectangle", "Its own icon in the Dock and Cmd-Tab")
-                feature("checkmark.seal", "Updated together and verified")
+                feature("person.2.fill", .blue, "Separate accounts and data")
+                feature("dock.rectangle", .purple, "Its own icon in the Dock and Cmd-Tab")
+                feature("checkmark.seal.fill", .green, "Updated together and verified")
             }
-            .padding(.top, 26)
+            .padding(.top, 22)
         }
         .frame(maxWidth: .infinity)
     }
@@ -128,13 +130,17 @@ struct OnboardingView: View {
 
     private func appRow(_ kind: InstanceApp, version: String?) -> some View {
         HStack(spacing: 12) {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: kind.path))
-                .resizable()
-                .frame(width: 40, height: 40)
+            HeroKey(glow: store.isInstalled(kind) ? .green : Design.idle, size: 48) {
+                Image(nsImage: NSWorkspace.shared.icon(forFile: kind.path))
+                    .resizable()
+                    .frame(width: 34, height: 34)
+                    .opacity(store.isInstalled(kind) ? 1 : 0.4)
+            }
+            .padding(.trailing, 4)
             VStack(alignment: .leading, spacing: 2) {
                 Text(version.map { "\(kind.label) \($0)" } ?? kind.label)
                     .font(.system(size: 14, weight: .semibold))
-                Text(kind.path).font(.caption).foregroundStyle(.secondary)
+                Text(kind.path).font(.system(size: 11.5, design: .monospaced)).foregroundStyle(.secondary)
             }
             Spacer()
             if store.isInstalled(kind) {
@@ -153,10 +159,10 @@ struct OnboardingView: View {
                 .lead()
             card {
                 HStack(spacing: 12) {
-                    Image(systemName: "lock")
-                        .font(.system(size: 20))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 44)
+                    HeroKey(glow: store.signingReady ? .green : .orange, size: 44) {
+                        Image(systemName: "key.fill").font(.system(size: 17, weight: .medium))
+                    }
+                    .padding(.trailing, 4)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Local signing key").font(.system(size: 14))
                         Text(store.signingReady ? "Created and stored in your login keychain." : "Not set up yet.")
@@ -211,14 +217,20 @@ struct OnboardingView: View {
                         .padding(.top, 12)
                 }
             }
-            VStack(spacing: 10) {
-                IconTile(color: model.useOriginal ? Color(white: 0.97) : model.color,
-                         name: shownName, radius: 22,
-                         renderingDocumentation: renderingDocumentation, size: 96)
-                Text(shownName).font(.system(size: 12.5)).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
+            stage {
+                VStack(spacing: 12) {
+                    IconTile(color: model.useOriginal ? Color(white: 0.97) : model.color,
+                             name: shownName, radius: 22,
+                             renderingDocumentation: renderingDocumentation, size: 96)
+                        .shadow(color: (model.useOriginal ? Color.white : model.color).opacity(0.6), radius: 16)
+                    Text(shownName).font(.system(size: 12.5, weight: .medium)).foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                    Text(model.appKind.label).font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.55))
+                }
+                .padding(.vertical, 24)
             }
-            .frame(width: 130)
+            .frame(width: 170)
             .padding(.top, 50)
         }
     }
@@ -244,9 +256,13 @@ struct OnboardingView: View {
     private var done: some View {
         VStack(spacing: 0) {
             if let instance = createdInstance ?? store.instances.first {
-                IconTile(color: instance.tileColor, name: instance.name, radius: 22,
-                         renderingDocumentation: true, size: 96)
-                    .padding(.top, 20)
+                stage {
+                    IconTile(color: instance.tileColor, name: instance.name, radius: 22,
+                             renderingDocumentation: true, size: 96)
+                        .shadow(color: instance.tileColor.opacity(0.7), radius: 18)
+                        .padding(.vertical, 26)
+                }
+                .padding(.top, 8)
                 Text("\(instance.name) is ready").font(.system(size: 24, weight: .semibold)).padding(.top, 20)
             } else {
                 Text("Doppel is set up").font(.system(size: 24, weight: .semibold)).padding(.top, 60)
@@ -367,13 +383,22 @@ struct OnboardingView: View {
         Text(text).font(.system(size: 24, weight: .semibold))
     }
 
+    /// The dark slab of the Codex Micro page, holding what a step is about.
     private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         content()
-            .padding(14)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor)))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(.separator, lineWidth: 0.5))
+            .padding(16)
+            .background(Design.heroGradient)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .environment(\.colorScheme, .dark)
+    }
+
+    /// The same slab for a step's picture, centred and full width.
+    private func stage<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        content()
+            .frame(maxWidth: .infinity)
+            .background(Design.heroGradient)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .environment(\.colorScheme, .dark)
     }
 
     private func tile(_ color: Color, _ letter: String, size: CGFloat) -> some View {
@@ -382,13 +407,12 @@ struct OnboardingView: View {
             .frame(width: size, height: size)
             .overlay(Text(letter).font(.system(size: size * 0.36, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white))
-            .shadow(color: .black.opacity(0.18), radius: 8, y: 4)
+            .shadow(color: color.opacity(0.55), radius: 12)
     }
 
-    private func feature(_ symbol: String, _ text: String) -> some View {
+    private func feature(_ symbol: String, _ color: Color, _ text: String) -> some View {
         VStack(spacing: 8) {
-            Image(systemName: symbol).font(.system(size: 20)).foregroundStyle(Color.accentColor)
-                .frame(height: 26)
+            StatusBadge(symbol: symbol, color: color)
             Text(text).font(.system(size: 12.5)).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }

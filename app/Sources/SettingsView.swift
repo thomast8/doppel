@@ -67,6 +67,7 @@ struct SettingsView: View {
         }
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     // MARK: - General
@@ -79,19 +80,17 @@ struct SettingsView: View {
 
     private var updates: some View {
         Form {
-            Section("ChatGPT") {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(store.installedChatGPT.map { "ChatGPT \($0.display)" } ?? "ChatGPT")
-                        Text(store.chatGPTUpdate.map(MenuContent.updateHeadline)
-                             ?? "Doppel checks every six hours and updates every instance together.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
+            Section {
+                BadgeRow(badge: StatusBadge(symbol: "arrow.down", color: .blue,
+                                            muted: store.chatGPTUpdate == nil),
+                         title: store.installedChatGPT.map { "ChatGPT \($0.display)" } ?? "ChatGPT",
+                         detail: store.chatGPTUpdate.map(MenuContent.updateHeadline)
+                             ?? "Doppel checks every six hours and updates every instance together.") {
                     if store.busy.contains("update") {
                         ProgressView().controlSize(.small)
                     } else if let update = store.chatGPTUpdate {
                         Button(MenuContent.bannerButtonTitle(update)) { store.beginKnownUpdate() }
+                            .buttonStyle(.borderedProminent)
                             .disabled(store.engineOperationBusy)
                     } else {
                         Button(store.checkingForUpdates ? "Checking…" : "Check Now") {
@@ -100,31 +99,82 @@ struct SettingsView: View {
                         .disabled(store.checkingForUpdates)
                     }
                 }
+            } header: {
+                VStack(alignment: .leading, spacing: 18) {
+                    updatesHero.heroHeader()
+                    Text("ChatGPT")
+                }
             }
             Section("Doppel") {
-                HStack {
-                    Text(MenuContent.doppelVersionLabel)
-                    Spacer()
+                BadgeRow(badge: StatusBadge(symbol: "square.on.square", color: .indigo,
+                                            muted: !doppelUpdatesEnabled),
+                         title: MenuContent.doppelVersionLabel,
+                         detail: doppelUpdatesEnabled ? nil
+                             : "This build was made locally, so it does not update itself.") {
                     Button("Check Now") { updaterController.checkForUpdates() }
                         .disabled(!doppelUpdatesEnabled)
                 }
-                Toggle(isOn: Binding(
-                    get: { updaterController.receivesBetaUpdates },
-                    set: { updaterController.setReceivesBetaUpdates($0) })) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Receive beta updates")
-                        Text("Less tested. Turning this off waits for a newer stable release; it does not downgrade.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
+                BadgeRow(badge: StatusBadge(symbol: "flask.fill", color: .orange,
+                                            muted: !updaterController.receivesBetaUpdates),
+                         title: "Receive beta updates",
+                         detail: "Less tested. Turning this off waits for a newer stable release; it does not downgrade.") {
+                    Toggle("Receive beta updates", isOn: Binding(
+                        get: { updaterController.receivesBetaUpdates },
+                        set: { updaterController.setReceivesBetaUpdates($0) }))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
                 }
                 .disabled(!doppelUpdatesEnabled)
-                if !doppelUpdatesEnabled {
-                    Text("This build was made locally, so it does not update itself.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// The installed ChatGPT and the one waiting, as two keys with a lit path
+    /// between them when there is somewhere to go.
+    private var updatesHero: some View {
+        let installed = store.installedChatGPT
+        let update = store.chatGPTUpdate
+        let current = store.instances.filter { $0.appKind == .chatgpt }
+        let stale = update?.state == .staleInstances ? update?.staleInstanceCount ?? 0 : 0
+        var legend = [
+            HeroLegend(color: installed == nil ? Design.idle : .green,
+                       label: "Installed", value: installed?.version ?? "Not found"),
+            HeroLegend(color: update == nil ? Design.idle : .blue, label: "Next",
+                       value: update.map { $0.state == .staleInstances ? "Rebuild only" : $0.targetVersion }
+                           ?? (store.lastCheckWasCurrent ? "Up to date" : "Nothing waiting")),
+        ]
+        if !current.isEmpty {
+            legend.append(HeroLegend(color: stale > 0 ? .orange : .green, label: "Instances",
+                                     value: "\(current.count - stale) of \(current.count) current"))
+        }
+        legend.append(HeroLegend(color: .indigo, label: "Doppel", value: MenuContent.doppelVersionLabel))
+        return HeroCard(title: "Updates", subtitle: "ChatGPT is checked every six hours", legend: legend) {
+            HStack(spacing: 10) {
+                versionKey(installed.map { Self.shortVersion($0.version) } ?? "–",
+                           glow: installed == nil ? Design.idle : .green)
+                Image(systemName: "chevron.right.2")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(update == nil ? Design.idle : .blue)
+                versionKey(update.map { Self.shortVersion($0.targetVersion) } ?? "–",
+                           glow: update == nil ? Design.idle : .blue)
+            }
+            .heroPlate()
+        }
+    }
+
+    private func versionKey(_ label: String, glow: Color) -> some View {
+        HeroKey(glow: glow, size: 64) {
+            Text(label).font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                .minimumScaleFactor(0.7)
+                .padding(4)
+        }
+    }
+
+    /// "26.1023.51421" reads as "26.1023" on a key; the full version is in
+    /// the legend and the rows.
+    static func shortVersion(_ version: String) -> String {
+        version.split(separator: ".").prefix(2).joined(separator: ".")
     }
 
     // MARK: - Integrations
@@ -135,22 +185,25 @@ struct SettingsView: View {
                 browserExtension
                 builtInBrowser
             } header: {
-                Text("Some ChatGPT features exist once per Mac. Pick which instance gets each.")
-                    .textCase(nil)
+                VStack(alignment: .leading, spacing: 18) {
+                    integrationsHero.heroHeader()
+                    Text("Some ChatGPT features exist once per Mac. Pick which instance gets each.")
+                        .textCase(nil)
+                }
             }
             if let status = store.nativeToolsStatus {
                 Section("Status") {
-                    statusRow("Computer Use",
-                              value: status.computerUse == .ready ? "Ready" : "Available on demand",
-                              good: true)
+                    BadgeRow(badge: StatusBadge(symbol: "cursorarrow.rays", color: .green,
+                                                muted: status.computerUse != .ready),
+                             title: "Computer Use", detail: nil) {
+                        Text(status.computerUse == .ready ? "Ready" : "Available on demand")
+                            .foregroundStyle(status.computerUse == .ready ? Color.green : Color.secondary)
+                    }
                     chronicleRow(status)
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("App discovery")
-                            Text("Managed instances are resolved by exact installed path.")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
+                    BadgeRow(badge: StatusBadge(symbol: "magnifyingglass", color: .teal,
+                                                muted: status.discoverableRollbacks == 0),
+                             title: "App discovery",
+                             detail: "Managed instances are resolved by exact installed path.") {
                         if status.discoverableRollbacks > 0 {
                             let noun = status.discoverableRollbacks == 1 ? "Entry" : "Entries"
                             Button("Repair \(status.discoverableRollbacks) Duplicate \(noun)") {
@@ -167,11 +220,57 @@ struct SettingsView: View {
         .formStyle(.grouped)
     }
 
+    /// The four once-per-Mac features as keys, each lit in the colour of the
+    /// instance that holds it.
+    private var integrationsHero: some View {
+        let status = store.nativeToolsStatus
+        let browserOwner = status?.browserHosts.first?.owner ?? ""
+        let builtIn = status?.inAppBrowserInstanceName ?? ""
+        let chronicleHost = status?.chronicleHost ?? ""
+        let computerUseReady = status?.computerUse == .ready
+        let chronicleOn = status?.chronicle == .running
+        return HeroCard(title: "Integrations", subtitle: "Once per Mac, handed to one instance", legend: [
+            HeroLegend(color: tint(of: browserOwner), label: "Extension",
+                       value: browserOwner.isEmpty ? "Nobody" : browserOwner),
+            HeroLegend(color: builtIn.isEmpty ? Design.idle : tint(of: builtIn), label: "Built-in browser",
+                       value: builtIn.isEmpty ? "None" : builtIn),
+            HeroLegend(color: computerUseReady ? .green : Design.idle, label: "Computer Use",
+                       value: computerUseReady ? "Ready" : "On demand"),
+            HeroLegend(color: chronicleOn ? tint(of: chronicleHost) : Design.idle, label: "Chronicle",
+                       value: chronicleOn ? chronicleHost : "Off"),
+        ]) {
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(44), spacing: 8), count: 2), spacing: 8) {
+                featureKey("puzzlepiece.extension.fill", glow: tint(of: browserOwner))
+                featureKey("safari.fill", glow: builtIn.isEmpty ? Design.idle : tint(of: builtIn))
+                featureKey("cursorarrow.rays", glow: computerUseReady ? .green : Design.idle)
+                featureKey("clock.fill", glow: chronicleOn ? tint(of: chronicleHost) : Design.idle)
+            }
+            .fixedSize()
+            .heroPlate()
+        }
+    }
+
+    private func featureKey(_ symbol: String, glow: Color) -> some View {
+        HeroKey(glow: glow, size: 44) {
+            Image(systemName: symbol).font(.system(size: 17, weight: .medium))
+        }
+    }
+
+    /// An instance's tile colour by display name, which is how the native
+    /// tools report their holders. Nobody, or a name Doppel does not manage,
+    /// stays unlit.
+    private func tint(of name: String, fallback: Color = Design.idle) -> Color {
+        store.instances.first { $0.name == name }?.tileColor ?? fallback
+    }
+
     @ViewBuilder
     private var browserExtension: some View {
         if let status = store.nativeToolsStatus {
             if status.browserHosts.isEmpty {
-                statusRow("Browser extension", value: "Not installed", good: false)
+                BadgeRow(badge: StatusBadge(symbol: "puzzlepiece.extension.fill", color: .gray, muted: true),
+                         title: "Browser extension", detail: nil) {
+                    Text("Not installed").foregroundStyle(.secondary)
+                }
             } else {
                 // Only instances that already have an extension host of their
                 // own are offered: the CLI refuses the rest rather than
@@ -185,13 +284,10 @@ struct SettingsView: View {
                 // Each browser has its own registration, so two instances can
                 // browse at the same time in two different browsers.
                 ForEach(status.browserHosts, id: \.browser) { host in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("\(host.browser) extension")
-                            Text("Any instance can use a running one; this picks whose starts it.")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
+                    BadgeRow(badge: StatusBadge(symbol: "puzzlepiece.extension.fill", color: tint(of: host.owner, fallback: .gray),
+                                                muted: host.owner.isEmpty),
+                             title: "\(host.browser) extension",
+                             detail: "Any instance can use a running one; this picks whose starts it.") {
                         if eligible.isEmpty {
                             Text(host.owner).foregroundStyle(.secondary)
                         } else {
@@ -238,20 +334,13 @@ struct SettingsView: View {
     @ViewBuilder
     private var builtInBrowser: some View {
         if let status = store.nativeToolsStatus {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Built-in browser")
-                    Text(builtInBrowserDetail(status))
-                        .font(.caption)
-                        .foregroundStyle(status.inAppBrowserAssignmentConflicted
-                                         || (!status.inAppBrowserInstanceName.isEmpty
-                                             && !status.inAppBrowserVendorValid)
-                                         ? Color.red : Color.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text("Change it from an instance's Engine setting.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
+            let failing = status.inAppBrowserAssignmentConflicted
+                || (!status.inAppBrowserInstanceName.isEmpty && !status.inAppBrowserVendorValid)
+            BadgeRow(badge: StatusBadge(symbol: "safari.fill", color: tint(of: status.inAppBrowserInstanceName, fallback: .gray),
+                                        muted: status.inAppBrowserInstanceName.isEmpty),
+                     title: "Built-in browser",
+                     detail: builtInBrowserDetail(status) + " Change it from an instance's Engine setting.",
+                     detailColor: failing ? .red : .secondary) {
                 Text(status.inAppBrowserInstanceName.isEmpty ? "None" : status.inAppBrowserInstanceName)
                     .foregroundStyle(.secondary)
             }
@@ -279,29 +368,18 @@ struct SettingsView: View {
     }
 
     private func chronicleRow(_ status: NativeToolsStatus) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Chronicle screen history")
-                Text(status.chronicleHost.isEmpty
+        BadgeRow(badge: StatusBadge(symbol: "clock.fill", color: tint(of: status.chronicleHost, fallback: .gray),
+                                    muted: status.chronicle != .running),
+                 title: "Chronicle screen history",
+                 detail: status.chronicleHost.isEmpty
                      ? "One recorder per Mac."
-                     : "One recorder per Mac, held by \(status.chronicleHost).")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer()
+                     : "One recorder per Mac, held by \(status.chronicleHost).") {
             if status.chronicle == .running {
                 Text(status.chronicleIsFresh ? "Recording" : "Recording is stale")
                     .foregroundStyle(status.chronicleIsFresh ? Color.green : Color.orange)
             } else {
                 Text("Not running").foregroundStyle(.secondary)
             }
-        }
-    }
-
-    private func statusRow(_ title: String, value: String, good: Bool) -> some View {
-        HStack {
-            Text(title)
-            Spacer()
-            Text(value).foregroundStyle(good ? Color.green : Color.secondary)
         }
     }
 }
@@ -322,33 +400,26 @@ private struct SettingsGeneral: View {
     var body: some View {
         Form {
             Section {
-                Toggle(isOn: Binding(get: { store.loginItemEnabled },
-                                     set: { store.setLoginItem($0) })) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Start Doppel at login")
-                        Text("Keeps update and permission checks running.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
+                BadgeRow(badge: StatusBadge(symbol: "power", color: .green, muted: !store.loginItemEnabled),
+                         title: "Start Doppel at login",
+                         detail: "Keeps update and permission checks running.") {
+                    Toggle("Start Doppel at login", isOn: Binding(get: { store.loginItemEnabled },
+                                                                  set: { store.setLoginItem($0) }))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
                 }
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Setup guide")
-                        Text("Walks through finding ChatGPT or Claude, signing, a first instance and permissions.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
+                BadgeRow(badge: StatusBadge(symbol: "sparkles", color: .blue),
+                         title: "Setup guide",
+                         detail: "Walks through finding ChatGPT or Claude, signing, a first instance and permissions.") {
                     Button("Open") { openWindow(id: "onboarding") }
                 }
+            } header: {
+                hero.heroHeader()
             }
-            Section {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Secure signing")
-                        Text("A local key in your login keychain signs every instance, so macOS keeps their permissions across rebuilds.")
-                            .font(.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer()
+            Section("Signing") {
+                BadgeRow(badge: StatusBadge(symbol: "key.fill", color: store.signingReady ? .green : .orange),
+                         title: "Secure signing",
+                         detail: "A local key in your login keychain signs every instance, so macOS keeps their permissions across rebuilds.") {
                     if store.signingReady {
                         Text("Ready").foregroundStyle(.green)
                     } else if store.busy.contains("signing") {
@@ -361,5 +432,46 @@ private struct SettingsGeneral: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// Doppel's whole idea in one picture: the instances fanned out like
+    /// cards, each in its own colour, lit while it runs.
+    private var hero: some View {
+        let instances = store.instances
+        let running = instances.filter { store.isRunning($0) }.count
+        let apps = [store.primaryInstalled ? "ChatGPT" : nil, store.claudeInstalled ? "Claude" : nil]
+            .compactMap { $0 }
+        return HeroCard(title: "Doppel", subtitle: MenuContent.doppelVersionLabel, legend: [
+            HeroLegend(color: running > 0 ? .green : Design.idle, label: "Instances",
+                       value: instances.isEmpty ? "None yet" : "\(instances.count), \(running) running"),
+            HeroLegend(color: apps.isEmpty ? .orange : .white.opacity(0.7), label: "Apps",
+                       value: apps.isEmpty ? "None found" : apps.joined(separator: " and ")),
+            HeroLegend(color: store.signingReady ? .green : .orange, label: "Signing",
+                       value: store.signingReady ? "Ready" : "Not set up"),
+            HeroLegend(color: store.loginItemEnabled ? .green : Design.idle, label: "At login",
+                       value: store.loginItemEnabled ? "Starts" : "Off"),
+        ]) {
+            fan(Array(instances.prefix(4)))
+        }
+    }
+
+    private func fan(_ shown: [Instance]) -> some View {
+        ZStack {
+            if shown.isEmpty {
+                HeroKey(glow: Design.idle, size: 64) {
+                    Image(systemName: "plus").font(.system(size: 22, weight: .medium))
+                }
+            }
+            ForEach(Array(shown.enumerated()), id: \.element.id) { index, instance in
+                let offset = Double(index) - Double(shown.count - 1) / 2
+                IconTile(color: instance.tileColor, name: instance.name, radius: 13,
+                         renderingDocumentation: true, size: 56)
+                    .shadow(color: store.isRunning(instance) ? instance.tileColor.opacity(0.8) : .black.opacity(0.4),
+                            radius: store.isRunning(instance) ? 10 : 4)
+                    .rotationEffect(.degrees(offset * 9), anchor: .bottom)
+                    .offset(x: offset * 26, y: abs(offset) * 5)
+            }
+        }
+        .frame(width: 150, height: 104)
     }
 }

@@ -52,6 +52,20 @@ struct PermissionIssue: Hashable, Identifiable {
         }
     }
 
+    /// What the permission is for, independent of its state, for the badge
+    /// that leads its row.
+    var kindSymbol: String {
+        switch permission {
+        case "microphone": return "mic.fill"
+        case "camera": return "video.fill"
+        case "screen-recording": return "rectangle.dashed.badge.record"
+        case "accessibility": return "accessibility"
+        case "notifications": return "bell.fill"
+        case "permission-check": return "arrow.triangle.2.circlepath"
+        default: return "lock.fill"
+        }
+    }
+
     var statusLabel: String {
         switch status {
         case "granted": return "Granted"

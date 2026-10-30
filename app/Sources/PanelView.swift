@@ -64,7 +64,7 @@ struct MenuContent: View {
                     .padding(.bottom, 4)
                 // ponytail: no scrolling; a Mac with more than a dozen
                 // instances would want a ScrollView with a measured height.
-                VStack(spacing: 2) {
+                VStack(spacing: 4) {
                     ForEach(store.instances) { instance in row(instance) }
                 }
                 .padding(.horizontal, 8)
@@ -77,19 +77,37 @@ struct MenuContent: View {
 
     // MARK: - Header
 
+    /// A dark strip like the top of the Codex Micro page, with a light per
+    /// instance in its colour, lit while it runs, the way the pad shows who
+    /// holds each channel.
     private var header: some View {
         HStack(spacing: 6) {
-            Text("Doppel").font(.system(size: 15, weight: .semibold))
+            Text("Doppel").font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
+            HStack(spacing: 5) {
+                ForEach(store.instances) { instance in
+                    let lit = store.isRunning(instance)
+                    Circle()
+                        .fill(lit ? instance.tileColor : Design.idle)
+                        .frame(width: 6, height: 6)
+                        .shadow(color: lit ? instance.tileColor.opacity(0.8) : .clear, radius: 2)
+                }
+            }
+            .padding(.leading, 6)
+            .accessibilityElement()
+            .accessibilityLabel("\(store.instances.filter { store.isRunning($0) }.count) of \(store.instances.count) running")
             Spacer()
             iconButton("plus", label: "New instance") { open("create-instance") }
                 .disabled(store.engineOperationBusy || !store.anyAppInstalled)
             iconButton("arrow.clockwise", label: "Refresh") { store.reload() }
             iconButton("gearshape", label: "Settings") { open("settings") }
         }
+        .foregroundStyle(.white.opacity(0.85))
         .padding(.leading, 16)
         .padding(.trailing, 10)
-        .padding(.top, 12)
-        .padding(.bottom, 8)
+        .padding(.vertical, 8)
+        .background(Design.heroGradient)
+        .environment(\.colorScheme, .dark)
+        .padding(.bottom, 10)
     }
 
     private func iconButton(_ symbol: String, label: String,
@@ -261,7 +279,17 @@ struct MenuContent: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 7)
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .fill(attention ? Color.red.opacity(0.10) : Color.clear))
+            .fill(rowAccent(instance, activity: activity, attention: attention)?.opacity(0.10) ?? .clear))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .strokeBorder(rowAccent(instance, activity: activity, attention: attention)?.opacity(0.45) ?? .clear,
+                          lineWidth: 1))
+    }
+
+    /// Rows light up like the Codex Micro channel tiles: in the instance's
+    /// colour while it runs, red when it needs attention, plain otherwise.
+    private func rowAccent(_ instance: Instance, activity: InstanceActivity, attention: Bool) -> Color? {
+        if attention { return .red }
+        return activity == .running || activity == .working ? instance.tileColor : nil
     }
 
     @ViewBuilder
@@ -298,8 +326,8 @@ struct MenuContent: View {
                         .font(.system(size: 10.5, weight: .medium))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 1)
-                        .background(Capsule().fill(Color.orange.opacity(0.16)))
-                        .foregroundStyle(Color(hex: "B4541C"))
+                        .background(Capsule().fill(Design.claude.opacity(0.16)))
+                        .foregroundStyle(Design.claude)
                 }
                 if instance.usesBuiltInBrowser {
                     Text("Official engine")
@@ -383,7 +411,7 @@ struct MenuContent: View {
     private var footer: some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(spacing: 8) {
-                Image(systemName: "arrow.triangle.2.circlepath").foregroundStyle(.secondary)
+                legendDot(store.chatGPTUpdate != nil ? .blue : (store.installedChatGPT == nil ? .secondary : .green))
                 Text(chatGPTLine).lineLimit(1)
                 Spacer()
                 Button(store.checkingForUpdates ? "Checking…" : "Check now") {
@@ -426,7 +454,7 @@ struct MenuContent: View {
         let issues = store.permissionIssues
         if let first = issues.first {
             HStack(spacing: 8) {
-                Image(systemName: "exclamationmark.circle").foregroundStyle(.red)
+                legendDot(.red)
                 Text(issues.count == 1 ? "1 permission needs attention"
                      : "\(issues.count) permissions need attention")
                 Spacer()
@@ -439,10 +467,14 @@ struct MenuContent: View {
             }
         } else if !store.permissionStatuses.isEmpty {
             HStack(spacing: 8) {
-                Image(systemName: "checkmark.circle").foregroundStyle(.green)
+                legendDot(.green)
                 Text("Permissions OK")
             }
         }
+    }
+
+    private func legendDot(_ color: Color) -> some View {
+        Circle().fill(color).frame(width: 7, height: 7).frame(width: 14)
     }
 
     private func open(_ id: String) {

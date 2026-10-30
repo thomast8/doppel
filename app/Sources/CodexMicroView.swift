@@ -67,36 +67,33 @@ struct ClaudeMicroPlan: Equatable {
     }
 }
 
-/// The Codex Micro page in Settings: the pad drawn the way Codex shows it,
-/// which instance answers by default, the nine Bluetooth channels and Claude
-/// Code's place among them.
 /// Which channel's chooser is open. An ObservableObject rather than @State,
 /// which the Command Line Tools toolchain lacks.
 final class CodexMicroModel: ObservableObject {
     @Published var openChannel: Int?
 }
 
+/// The Codex Micro page in Settings: the pad drawn the way Codex shows it,
+/// which instance answers by default, the three Bluetooth channels and Claude
+/// Code's place among them.
 struct CodexMicroView: View {
     @ObservedObject var store: InstanceStore
     @StateObject private var model = CodexMicroModel()
 
-    private static let claudeColor = Color(hex: "D97757")
     private var chatGPTInstances: [Instance] { store.instances.filter { $0.appKind == .chatgpt } }
     private var busy: Bool { store.engineOperationBusy || store.checkingCreatorMicro }
 
-    var body: some View {
-        VStack(spacing: 0) {
-            hero.padding(.horizontal, 20).padding(.top, 16)
-            form
-        }
-    }
+    var body: some View { form }
 
     private var form: some View {
         Form {
             Section {
                 defaultOwner
             } header: {
-                Text("Default")
+                VStack(alignment: .leading, spacing: 18) {
+                    hero.heroHeader()
+                    Text("Default")
+                }
             } footer: {
                 Text("The default instance listens on every channel nobody else holds. Running instances restart when this changes, and official ChatGPT also uses the pad while it runs.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -125,29 +122,12 @@ struct CodexMicroView: View {
     /// the dial and joystick, and along the top a light for each channel in the
     /// colour of whoever holds it.
     private var hero: some View {
-        HStack(spacing: 22) {
-            pad
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Codex Micro")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(.white)
-                Text("Also the Work Louder Creator Micro 2")
-                    .font(.system(size: 11.5, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.55))
-                Spacer().frame(height: 6)
-                legendRow(color: ownerColor, label: "Default", value: ownerName)
-                legendRow(color: Self.claudeColor, label: "Claude Code", value: claudeSummary)
-                legendRow(color: .white.opacity(0.25), label: "Free channels",
-                          value: "\(MicroChannels.all.filter { channels.holder(of: $0) == .free }.count) of \(MicroChannels.all.count)")
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(20)
-        .background(
-            LinearGradient(colors: [Color(white: 0.11), Color(white: 0.05)],
-                           startPoint: .topLeading, endPoint: .bottomTrailing))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .environment(\.colorScheme, .dark)
+        HeroCard(title: "Codex Micro", subtitle: "Also the Work Louder Creator Micro 2", legend: [
+            HeroLegend(color: ownerColor, label: "Default", value: ownerName),
+            HeroLegend(color: Design.claude, label: "Claude Code", value: claudeSummary),
+            HeroLegend(color: Design.idle, label: "Free channels",
+                       value: "\(MicroChannels.all.filter { channels.holder(of: $0) == .free }.count) of \(MicroChannels.all.count)"),
+        ]) { pad }
     }
 
     private var pad: some View {
@@ -162,14 +142,7 @@ struct CodexMicroView: View {
             }
             HStack(alignment: .top, spacing: 12) {
                 LazyVGrid(columns: Array(repeating: GridItem(.fixed(30), spacing: 6), count: 3), spacing: 6) {
-                    ForEach(0..<6, id: \.self) { index in
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(Color(white: 0.17))
-                            .frame(width: 30, height: 30)
-                            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .strokeBorder(keyGlow(index), lineWidth: 1.5))
-                            .shadow(color: keyGlow(index).opacity(0.5), radius: 4)
-                    }
+                    ForEach(0..<6, id: \.self) { index in HeroKey(glow: keyGlow(index)) }
                 }
                 VStack(spacing: 8) {
                     Circle()
@@ -184,10 +157,7 @@ struct CodexMicroView: View {
                 }
             }
         }
-        .padding(14)
-        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color(white: 0.09)))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .strokeBorder(.white.opacity(0.08), lineWidth: 1))
+        .heroPlate()
         .accessibilityElement()
         .accessibilityLabel("Codex Micro pad")
     }
@@ -198,14 +168,6 @@ struct CodexMicroView: View {
         let held = MicroChannels.all.map { channels.holder(of: $0) }.filter { $0 != .free }
         guard index < held.count else { return .white.opacity(index == 0 && ownerName != "Nobody" ? 0.55 : 0.12) }
         return color(for: held[index])
-    }
-
-    private func legendRow(color: Color, label: String, value: String) -> some View {
-        HStack(spacing: 8) {
-            Circle().fill(color).frame(width: 7, height: 7)
-            Text(label).font(.system(size: 12)).foregroundStyle(.white.opacity(0.6))
-            Text(value).font(.system(size: 12, weight: .medium)).foregroundStyle(.white)
-        }
     }
 
     // MARK: - Sections
@@ -295,7 +257,7 @@ struct CodexMicroView: View {
                     store.setMicroChannel(channel, for: instance)
                 }
             }
-            chooserRow("Claude Code", color: Self.claudeColor, selected: holder == .claude) {
+            chooserRow("Claude Code", color: Design.claude, selected: holder == .claude) {
                 store.planClaudeMicro(channel: String(channel))
             }
             Divider().padding(.vertical, 4)
@@ -372,7 +334,7 @@ struct CodexMicroView: View {
             }
         } else {
             HStack {
-                Circle().fill(channels.claude == .off ? Color.secondary.opacity(0.4) : Self.claudeColor)
+                Circle().fill(channels.claude == .off ? Color.secondary.opacity(0.4) : Design.claude)
                     .frame(width: 8, height: 8)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(claudeSummary)
@@ -421,7 +383,7 @@ struct CodexMicroView: View {
     private func color(for holder: MicroChannels.Holder) -> Color {
         switch holder {
         case .free: return .white.opacity(0.18)
-        case .claude: return Self.claudeColor
+        case .claude: return Design.claude
         case .instance(let slug): return store.instances.first { $0.id == slug }?.tileColor ?? .gray
         }
     }
