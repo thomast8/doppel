@@ -6,6 +6,21 @@
         <description>Signed Doppel releases</description>
         <language>en</language>
         <item>
+            <title>2.1.0</title>
+            <pubDate>Fri, 30 Oct 2026 13:11:20 +0000</pubDate>
+            <link>https://github.com/thomast8/doppel</link>
+            <sparkle:version>41</sparkle:version>
+            <sparkle:shortVersionString>2.1.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Doppel 2.1.0
+
+Create separate Claude desktop apps from New Instance → Claude, each with its own login, Code configuration, name and colour. Google sign-in returns to the right instance, and Claude's pale star stays visible on tinted icons.
+
+After signing in and opening Code, use Import Existing Code History to bring over local conversations for the same account and workspace. Existing sessions and original files are kept. Missing transcripts and working folders are reported. Working copies are not moved, so check the original folder for uncommitted work if Claude creates a new worktree when resuming a conversation.
+]]></description>
+            <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.1.0/Doppel-2.1.0-macOS.zip" length="7805383" type="application/octet-stream" sparkle:edSignature="RVLFRqGFk7b9lvQJ9VxBnHUdbf/33T7bpJc5EMTgpJoHJ7tX6ZB7ioF+psrjaCKEflEaDPqW3+fxoetya3EDDw=="/>
+        </item>
+        <item>
             <title>2.0.5</title>
             <pubDate>Wed, 28 Oct 2026 19:08:33 +0000</pubDate>
             <link>https://github.com/thomast8/doppel</link>
@@ -35,21 +50,6 @@
 - A ChatGPT instance and Claude Code can no longer be given the same channel, and `doppel micro channel` now lists Claude Code too.
 ]]></description>
             <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.4/Doppel-2.0.4-macOS.zip" length="7801126" type="application/octet-stream" sparkle:edSignature="wiHZN/5J/JMBZQwhPRTvkVOrM3MDOnJ9kWdbCdu+/fGcOpvAbOpEUT721dE1bRiKgZj5LyJprJ60uKsth3hjAQ=="/>
-        </item>
-        <item>
-            <title>2.0.3</title>
-            <pubDate>Wed, 28 Oct 2026 10:58:56 +0000</pubDate>
-            <link>https://github.com/thomast8/doppel</link>
-            <sparkle:version>38</sparkle:version>
-            <sparkle:shortVersionString>2.0.3</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[# Doppel 2.0.3
-
-- Instances can now share a Creator Micro by Bluetooth channel. Run `doppel micro channel "ChatGPT Personal" 3` to keep an instance to channel 3, and switching apps becomes a press of the pad's channel button, with every app left running. Free channels can go to another app, such as a Claude Code plugin.
-- An instance with a channel uses the pad even when it is not the assigned one. `doppel micro channel` lists the channels, and `any` in place of the number removes one.
-- Rebuild each instance once from the Doppel menu to install the change, then pair each channel you use with this Mac.
-]]></description>
-            <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.3/Doppel-2.0.3-macOS.zip" length="7785397" type="application/octet-stream" sparkle:edSignature="A8tPKCPehD0GpmE8gJsfrYoJNV11TGs+RtFbrVXWjgi37TtDGb8YqOSoSUtccrAk7qSMGLaRwQHG9ORsmFybCQ=="/>
         </item>
     </channel>
 </rss>
