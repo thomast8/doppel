@@ -23,9 +23,15 @@ Claude tints colour the tile while preserving the pale star, with light colours 
 The CLI selects Claude with `doppel --app claude create --name "Claude Personal" --tint F28C28`;
 use the same `--app claude` prefix for list, launch, rebuild, edit and remove.
 
-Code history is local to each desktop profile. After signing in and opening Code,
-choose **Import Existing Code History…** to copy sessions from the same account
-and workspace in the original Claude app. This keeps new sessions already in the
+Code history is local to each desktop profile. Sign in and open Code once, and
+the next time the instance launches Doppel copies sessions from the same account
+and workspace in the original Claude app. It does this once per instance, and
+only when the instance's account and workspace match ones the original app has
+Code history for; a signed-out or different account gets nothing, and a session
+still running in the original app postpones the import to a later launch. The
+outcome of each attempt is logged to `state/imports/<instance>/auto-import.log`
+under Doppel's Claude data folder. **Import Existing Code History…** runs the same
+copy on demand without waiting for a relaunch. This keeps new sessions already in the
 instance, copies no browser login storage or scheduled-task settings, and leaves
 the originals in place. Missing transcripts are reported; missing working folders
 must be restored before continuing those sessions. The CLI equivalent is

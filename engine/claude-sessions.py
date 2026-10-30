@@ -190,7 +190,37 @@ def apply_plan(plan: dict, audit_root: Path) -> dict:
     return summary
 
 
+def record_import(state: Path, summary: dict) -> None:
+    state.mkdir(parents=True, exist_ok=True, mode=0o700)
+    marker = state / 'auto-import.json'
+    marker.write_text(json.dumps(dict(scope=summary['scope'], sessions=summary['sessions'])))
+    os.chmod(marker, 0o600)
+
+
+def auto_import(source_profile: Path, source_code: Path, target_profile: Path, target_code: Path,
+                state: Path, active: set[str] | None = None) -> str:
+    """Import once, at launch, when the instance shows the original's account and workspace.
+
+    plan_import only accepts a destination signed into exactly one account
+    and workspace that the original profile also has Code history for, so a
+    signed-out, unopened or mismatched instance is refused. Refusals leave no
+    marker; the next launch tries again.
+    """
+    if (state / 'auto-import.json').exists():
+        return 'already imported'
+    try:
+        plan = plan_import(source_profile, source_code, target_profile, target_code, active)
+        summary = apply_plan(plan, state) if plan['sessions'] else plan
+    except (ImportFailure, OSError, ValueError, subprocess.SubprocessError) as error:
+        return f'waiting: {error}'
+    record_import(state, summary)
+    return f"imported {summary['sessions']} Code sessions for {summary['scope']}"
+
+
 def main() -> int:
+    if len(sys.argv) == 7 and sys.argv[1] == 'auto':
+        print(auto_import(*(Path(value) for value in sys.argv[2:7])))
+        return 0
     if len(sys.argv) not in (6, 7) or sys.argv[1] not in ('plan', 'apply'):
         raise ImportFailure('Expected plan/apply and the original and destination profile and Code directories.')
     plan = plan_import(*(Path(value) for value in sys.argv[2:6]))
@@ -201,6 +231,7 @@ def main() -> int:
         if len(sys.argv) != 7:
             raise ImportFailure('An import audit directory is required.')
         summary = apply_plan(plan, Path(sys.argv[6]))
+        record_import(Path(sys.argv[6]), summary)
         print(f"Imported {summary['sessions']} Code sessions. Kept this instance's {summary['kept_sessions']} existing sessions unchanged.")
         if summary['missing_transcripts']:
             print(f"Skipped {summary['missing_transcripts']} records without a unique local transcript.")
