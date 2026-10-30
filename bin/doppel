@@ -1677,10 +1677,28 @@ claude_cli_path() {
     return 1
 }
 
-# Reads and edits the plugin's state in Claude Code's settings.json and the
-# plugin's config.toml. Modes: state, set-hooks, channel-get, channel-set N|any.
+# Each Claude app runs Claude Code on a config directory of its own, ~/.claude
+# for the original and one per Doppel Claude instance, and the plugin has to be
+# installed in each. Its daemon and config.toml are shared, so every Claude
+# app's sessions share the pad's six keys on one channel. Prints "name<TAB>dir"
+# per app. CLAUDE_CONFIG_DIR is not consulted: inside a Claude instance it names
+# that instance's directory, not the original's.
+claude_code_homes() {
+    local root dir home
+    print -r -- "Claude Code"$'\t'"$HOME/.claude"
+    [[ "$DOPPEL_APP_KIND" == claude ]] && root="$INSTANCES_ROOT" || root="$OTHER_INSTANCES_ROOT"
+    for dir in "$root"/*(N/); do
+        home="$(config_value "$dir" DOPPEL_CLAUDE_CONFIG_DIR)"
+        [[ "$home" == /* ]] || continue
+        print -r -- "$(config_value "$dir" DOPPEL_DISPLAY_NAME)"$'\t'"$home"
+    done
+}
+
+# Reads and edits the plugin's state in the settings.json of the Claude Code
+# directory in CLAUDE_PAD_HOME and the plugin's config.toml. Modes: state,
+# set-hooks, channel-get, channel-set N|any.
 claude_pad() {
-    CLAUDE_SETTINGS="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" \
+    CLAUDE_SETTINGS="${CLAUDE_PAD_HOME:-$HOME/.claude}/settings.json" \
     PAD_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/codex-micro/config.toml" \
         /usr/bin/python3 - "$@" <<'PY'
 import json, os, re, sys, tempfile
@@ -1738,17 +1756,17 @@ PY
 }
 
 cmd_micro_claude() {
-    local channel="${1:-}" mode="${2:-}" claude version taken file
-    local -a state steps
+    local channel="${1:-}" mode="${2:-}" claude version taken file entry name home
+    local -a state steps homes
+    homes=("${(@f)$(claude_code_homes)}")
     if [[ -z "$channel" ]]; then
-        state=("${(@f)$(claude_pad state)}")
-        if [[ "${state[2]}" != 1 ]]; then
-            print -r -- "Claude Code: not set up"
-        else
-            channel="$(claude_pad channel-get)"
-            [[ -n "$channel" ]] && channel="channel $channel" || channel="every channel"
-            print -r -- "Claude Code: $channel"
-        fi
+        channel="$(claude_pad channel-get)"
+        [[ -n "$channel" ]] && channel="channel $channel" || channel="every channel"
+        for entry in "${homes[@]}"; do
+            state=("${(@f)$(CLAUDE_PAD_HOME="${entry#*$'\t'}" claude_pad state)}")
+            [[ "${state[2]}" == 1 ]] && print -r -- "${entry%%$'\t'*}: $channel" || \
+                print -r -- "${entry%%$'\t'*}: not set up"
+        done
         return
     fi
     [[ $# -le 2 && ( "$channel" == [1-9] || "$channel" == any ) && ( -z "$mode" || "$mode" == --plan || "$mode" == --yes ) ]] || \
@@ -1760,15 +1778,18 @@ cmd_micro_claude() {
         done
     fi
     claude="$(claude_cli_path)" || die "Claude Code's claude command was not found; install Claude Code first"
-    state=("${(@f)$(claude_pad state)}")
-    if [[ -z "${state[1]}" ]]; then
-        steps+=("add the codex-micro marketplace from $CLAUDE_MICRO_REPO")
-    elif [[ "${state[1]}" != "$CLAUDE_MICRO_REPO" ]]; then
-        steps+=("point the codex-micro marketplace at $CLAUDE_MICRO_REPO, in place of ${state[1]}")
-    fi
-    [[ "${state[1]}" == "$CLAUDE_MICRO_REPO" && "${state[2]}" == 1 ]] || steps+=("install the codex-micro plugin")
-    [[ "${state[3]}" == 1 ]] || \
-        steps+=("turn on CLAUDE_CODE_ENABLE_FUNCTION_HOOKS in ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json, which the Claude app's Code tab needs")
+    for entry in "${homes[@]}"; do
+        name="${entry%%$'\t'*}" home="${entry#*$'\t'}"
+        state=("${(@f)$(CLAUDE_PAD_HOME="$home" claude_pad state)}")
+        if [[ -z "${state[1]}" ]]; then
+            steps+=("$name: add the codex-micro marketplace from $CLAUDE_MICRO_REPO")
+        elif [[ "${state[1]}" != "$CLAUDE_MICRO_REPO" ]]; then
+            steps+=("$name: point the codex-micro marketplace at $CLAUDE_MICRO_REPO, in place of ${state[1]}")
+        fi
+        [[ "${state[1]}" == "$CLAUDE_MICRO_REPO" && "${state[2]}" == 1 ]] || steps+=("$name: install the codex-micro plugin")
+        [[ "${state[3]}" == 1 ]] || \
+            steps+=("$name: turn on CLAUDE_CODE_ENABLE_FUNCTION_HOOKS in $home/settings.json, which the Claude app's Code tab needs")
+    done
     taken="$(claude_pad channel-get)"
     if [[ "$channel" == any && -n "$taken" ]]; then
         steps+=("let the plugin use every channel")
@@ -1794,18 +1815,26 @@ cmd_micro_claude() {
         print
     fi
     (( ${#steps} )) || return 0
-    if [[ -n "${state[1]}" && "${state[1]}" != "$CLAUDE_MICRO_REPO" ]]; then
-        "$claude" plugin marketplace remove codex-micro >/dev/null || die "could not remove the old codex-micro marketplace"
-        state[1]=""
-    fi
-    if [[ -z "${state[1]}" ]]; then
-        "$claude" plugin marketplace add "$CLAUDE_MICRO_REPO" >/dev/null || die "could not add the codex-micro marketplace"
-        state[2]=0
-    fi
-    if [[ "${state[2]}" != 1 ]]; then
-        "$claude" plugin install codex-micro@codex-micro >/dev/null || die "could not install the codex-micro plugin"
-    fi
-    [[ "${state[3]}" == 1 ]] || claude_pad set-hooks || die "could not update Claude Code's settings"
+    for entry in "${homes[@]}"; do
+        name="${entry%%$'\t'*}" home="${entry#*$'\t'}"
+        state=("${(@f)$(CLAUDE_PAD_HOME="$home" claude_pad state)}")
+        if [[ -n "${state[1]}" && "${state[1]}" != "$CLAUDE_MICRO_REPO" ]]; then
+            CLAUDE_CONFIG_DIR="$home" "$claude" plugin marketplace remove codex-micro >/dev/null || \
+                die "could not remove the old codex-micro marketplace for $name"
+            state[1]=""
+        fi
+        if [[ -z "${state[1]}" ]]; then
+            CLAUDE_CONFIG_DIR="$home" "$claude" plugin marketplace add "$CLAUDE_MICRO_REPO" >/dev/null || \
+                die "could not add the codex-micro marketplace for $name"
+            state[2]=0
+        fi
+        if [[ "${state[2]}" != 1 ]]; then
+            CLAUDE_CONFIG_DIR="$home" "$claude" plugin install codex-micro@codex-micro >/dev/null || \
+                die "could not install the codex-micro plugin for $name"
+        fi
+        [[ "${state[3]}" == 1 ]] || CLAUDE_PAD_HOME="$home" claude_pad set-hooks || \
+            die "could not update the Claude Code settings for $name"
+    done
     claude_pad channel-set "$channel" || die "could not save the plugin's channel"
     print -r -- "Claude Code is set up for the Creator Micro; new Claude Code sessions pick it up."
 }

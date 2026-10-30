@@ -11,8 +11,11 @@ import tempfile
 cli = Path(__file__).resolve().parents[1] / "bin/doppel"
 with tempfile.TemporaryDirectory(prefix="doppel-micro-") as scratch:
     root = Path(scratch)
-    environment = {**os.environ, "DOPPEL_HOME": scratch, "DOPPEL_DEV": "1",
-                   "CLAUDE_CONFIG_DIR": f"{scratch}/claude", "XDG_CONFIG_HOME": f"{scratch}/xdg"}
+    # HOME is the scratch directory, so ~/.claude and the Claude instances
+    # under ~/Library are throwaway too.
+    environment = {**os.environ, "HOME": scratch, "DOPPEL_HOME": scratch, "DOPPEL_DEV": "1",
+                   "XDG_CONFIG_HOME": f"{scratch}/xdg"}
+    environment.pop("CLAUDE_CONFIG_DIR", None)
     for slug, name in [("personal", "ChatGPT Personal"), ("veridue", "ChatGPT Veridue")]:
         instance = root / "instances" / slug
         instance.mkdir(parents=True)
@@ -68,22 +71,34 @@ with tempfile.TemporaryDirectory(prefix="doppel-micro-") as scratch:
     assert run("channel") == "Creator Micro channels: none set\n"
 
     # Claude Code setup, against a stand-in claude CLI that records each call
-    # and edits the throwaway settings the way the real one would.
-    claude_home, xdg = root / "claude", root / "xdg"
+    # and edits the throwaway settings the way the real one would. The original
+    # Claude keeps ~/.claude; a Doppel Claude instance has a directory of its own.
+    claude_home, clone_home, xdg = root / ".claude", root / ".claude-claude-one", root / "xdg"
     claude_home.mkdir()
     settings = claude_home / "settings.json"
     settings.write_text(json.dumps({"env": {"KEEP": "1"}, "theme": "dark"}))
+    clone_settings = clone_home / "settings.json"
+    clone = root / "Library/Application Support/Doppel/claude/instances/claude-one"
+    clone.mkdir(parents=True)
+    (clone / "instance-config.zsh").write_text(
+        'DOPPEL_DISPLAY_NAME="Claude One"\n'
+        f'DOPPEL_CLAUDE_CONFIG_DIR="{clone_home}"\n')
     (xdg / "codex-micro").mkdir(parents=True)
     pad_config = xdg / "codex-micro" / "config.toml"
     pad_config.write_text('[keys]\nfast = "approve"\n')
     calls = root / "claude-calls"
     stub = root / "claude-stub"
     stub.write_text(f'''#!/usr/bin/python3
-import json, sys
+import json, os, sys
 args = " ".join(sys.argv[1:])
-open({str(calls)!r}, "a").write(args + "\\n")
-path = {str(settings)!r}
-data = json.load(open(path))
+home = os.environ["CLAUDE_CONFIG_DIR"]
+open({str(calls)!r}, "a").write(args + ("" if args == "--version" else " @" + os.path.basename(home)) + "\\n")
+path = os.path.join(home, "settings.json")
+try:
+    data = json.load(open(path))
+except FileNotFoundError:
+    os.makedirs(home, exist_ok=True)
+    data = {{}}
 if args == "--version":
     print("2.1.252 (Claude Code)")
 elif args.startswith("plugin marketplace add "):
@@ -99,17 +114,21 @@ else:
 json.dump(data, open(path, "w"))
 ''')
     stub.chmod(0o755)
-    environment.update(CLAUDE_CONFIG_DIR=str(claude_home), XDG_CONFIG_HOME=str(xdg),
-                       DOPPEL_CLAUDE_CLI=str(stub))
+    # Run from inside the Claude instance, whose launcher exports its own
+    # CLAUDE_CONFIG_DIR: setup must still reach every Claude app.
+    environment.update(CLAUDE_CONFIG_DIR=str(clone_home), DOPPEL_CLAUDE_CLI=str(stub))
     called = lambda: calls.read_text().splitlines() if calls.exists() else []
 
-    assert run("claude") == "Claude Code: not set up\n"
+    assert run("claude") == "Claude Code: not set up\nClaude One: not set up\n"
     run("channel", "ChatGPT Veridue", "1")
     run("claude", "1", "--yes", success=False)
     plan = run("claude", "2", "--plan")
-    for step in ["add the codex-micro marketplace from thomast8/codex-micro-for-claude-code",
-                 "install the codex-micro plugin",
-                 "turn on CLAUDE_CODE_ENABLE_FUNCTION_HOOKS",
+    for step in ["Claude Code: add the codex-micro marketplace from thomast8/codex-micro-for-claude-code",
+                 "Claude Code: install the codex-micro plugin",
+                 f"Claude Code: turn on CLAUDE_CODE_ENABLE_FUNCTION_HOOKS in {claude_home}/settings.json",
+                 "Claude One: add the codex-micro marketplace from thomast8/codex-micro-for-claude-code",
+                 "Claude One: install the codex-micro plugin",
+                 f"Claude One: turn on CLAUDE_CODE_ENABLE_FUNCTION_HOOKS in {clone_home}/settings.json",
                  "keep the plugin to Bluetooth channel 2",
                  "older than 2.1.303"]:
         assert step in plan, (step, plan)
@@ -118,13 +137,17 @@ json.dump(data, open(path, "w"))
     run("claude", "2", success=False)
     assert called() == ["--version", "--version"]
     run("claude", "2", "--yes")
-    assert called()[2:] == ["--version", "plugin marketplace add thomast8/codex-micro-for-claude-code",
-                            "plugin install codex-micro@codex-micro"], called()
+    assert called()[2:] == ["--version",
+                            "plugin marketplace add thomast8/codex-micro-for-claude-code @.claude",
+                            "plugin install codex-micro@codex-micro @.claude",
+                            "plugin marketplace add thomast8/codex-micro-for-claude-code @.claude-claude-one",
+                            "plugin install codex-micro@codex-micro @.claude-claude-one"], called()
     data = json.loads(settings.read_text())
     assert data["env"] == {"KEEP": "1", "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1"}
     assert data["theme"] == "dark"
+    assert json.loads(clone_settings.read_text())["env"] == {"CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1"}
     assert pad_config.read_text() == '[keys]\nfast = "approve"\n\n[pad]\nchannel = 2\n'
-    assert run("claude") == "Claude Code: channel 2\n"
+    assert run("claude") == "Claude Code: channel 2\nClaude One: channel 2\n"
     assert "nothing to change" in run("claude", "2", "--plan")
     assert run("channel") == "ChatGPT Veridue: 1\nClaude Code: 2\n"
     run("channel", "ChatGPT Personal", "2", success=False)
@@ -133,14 +156,23 @@ json.dump(data, open(path, "w"))
     data["extraKnownMarketplaces"]["codex-micro"]["source"]["repo"] = "dustinwdev/codex-micro-for-claude-code"
     settings.write_text(json.dumps(data))
     calls.unlink()
-    assert "point the codex-micro marketplace at thomast8/codex-micro-for-claude-code" in run("claude", "3", "--plan")
+    plan = run("claude", "3", "--plan")
+    assert "Claude Code: point the codex-micro marketplace at thomast8/codex-micro-for-claude-code" in plan
+    assert "Claude One" not in plan, plan
     run("claude", "3", "--yes")
-    assert called()[1:] == ["--version", "plugin marketplace remove codex-micro",
-                            "plugin marketplace add thomast8/codex-micro-for-claude-code",
-                            "plugin install codex-micro@codex-micro"], called()
+    assert called()[1:] == ["--version", "plugin marketplace remove codex-micro @.claude",
+                            "plugin marketplace add thomast8/codex-micro-for-claude-code @.claude",
+                            "plugin install codex-micro@codex-micro @.claude"], called()
     run("claude", "any", "--yes")
     assert "channel" not in pad_config.read_text()
-    assert run("claude") == "Claude Code: every channel\n"
+    assert run("claude") == "Claude Code: every channel\nClaude One: every channel\n"
+    # A Claude instance made after setup shows up as not set up until it runs again.
+    later = clone.parent / "claude-two"
+    later.mkdir()
+    (later / "instance-config.zsh").write_text(
+        f'DOPPEL_DISPLAY_NAME="Claude Two"\nDOPPEL_CLAUDE_CONFIG_DIR="{root}/.claude-claude-two"\n')
+    assert run("claude").endswith("Claude Two: not set up\n")
+    assert "Claude Two: install the codex-micro plugin" in run("claude", "any", "--plan")
     run("channel", "ChatGPT Veridue", "any")
 
 print("Creator Micro CLI QA passed")
