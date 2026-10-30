@@ -95,7 +95,8 @@ readonly PAYLOAD="$APP/Contents/Resources/doppel"
 /bin/mkdir -p "$PAYLOAD/bin" "$PAYLOAD/engine" "$PAYLOAD/prebuilt"
 /bin/cp "$REMOTE_BINARY" "$PAYLOAD/prebuilt/DoppelRemoteHelper"
 /bin/cp "$REPO_ROOT/bin/doppel" "$REPO_ROOT/bin/doppel-signing" "$PAYLOAD/bin/"
-/bin/cp "$REPO_ROOT/engine/doppel-engine.zsh" "$PAYLOAD/engine/"
+/bin/cp "$REPO_ROOT/engine/doppel-engine.zsh" "$REPO_ROOT/engine/vendor.zsh" \
+    "$REPO_ROOT/engine/claude-profile.cjs" "$PAYLOAD/engine/"
 /bin/cp "$REPO_ROOT/engine/patch-deep-link.py" "$PAYLOAD/engine/"
 /bin/chmod 755 "$PAYLOAD/bin/doppel" "$PAYLOAD/bin/doppel-signing" "$PAYLOAD/engine/doppel-engine.zsh"
 

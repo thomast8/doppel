@@ -130,6 +130,7 @@ start_lying_stub_process() {
 write_instance_assets() {
     local profile_root="$1"
     /bin/mkdir -p "$ASSETS"
+    /bin/cp "$REPO_ROOT/engine/vendor.zsh" "$REPO_ROOT/engine/claude-profile.cjs" "$ASSETS/"
     {
         print -r -- "# QA fixture"
         printf 'DOPPEL_DISPLAY_NAME=%q\n' "ChatGPT Engine QA"

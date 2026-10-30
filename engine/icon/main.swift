@@ -1,7 +1,6 @@
-// doppel-icon <source.png> <output.png> <RRGGBB>
+// doppel-icon <source.png> <output.png> <RRGGBB> [chatgpt|claude]
 //
-// Tints the neutral, light background of an app icon while leaving the glyph,
-// the coloured bevels and the transparent exterior untouched.
+// Tints each app's background while preserving its glyph and transparent exterior.
 //
 // This exists so Doppel needs nothing beyond macOS itself. The same filter used
 // to run through Python and Pillow, fetched on demand by uv — a package manager
@@ -21,9 +20,11 @@ func fail(_ message: String) -> Never {
 }
 
 let arguments = CommandLine.arguments
-guard arguments.count == 4 else {
-    fail("usage: doppel-icon <source.png> <output.png> <RRGGBB>")
+guard arguments.count == 4 || arguments.count == 5 else {
+    fail("usage: doppel-icon <source.png> <output.png> <RRGGBB> [chatgpt|claude]")
 }
+let app = arguments.count == 5 ? arguments[4] : "chatgpt"
+guard app == "chatgpt" || app == "claude" else { fail("unsupported app: \(app)") }
 let sourceURL = URL(fileURLWithPath: arguments[1])
 let outputURL = URL(fileURLWithPath: arguments[2])
 
@@ -36,6 +37,9 @@ let tint = (
     g: Double((rgb >> 8) & 0xFF),
     b: Double(rgb & 0xFF)
 )
+// Claude has a pale glyph on a coloured tile. Keep light tints dark enough to read it.
+let tintLuminance = 0.2126 * tint.r + 0.7152 * tint.g + 0.0722 * tint.b
+let tintScale = app == "claude" ? min(1, 150 / max(tintLuminance, 1)) : 1
 
 guard let source = CGImageSourceCreateWithURL(sourceURL as CFURL, nil),
       let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
@@ -83,10 +87,19 @@ for index in stride(from: 0, to: pixels.count, by: 4) {
     let neutrality = 1.0 - ((maximum - minimum) / max(maximum, 1))
     let lightWeight = clamp((luminance - 118.0) / 82.0)
     let neutralWeight = clamp((neutrality - 0.72) / 0.24)
-    let weight = lightWeight * neutralWeight
+    let weight: Double
+    let shade: Double
+    if app == "claude" {
+        // Select the coloured tile, preserving the pale star and neutral exterior shadows.
+        weight = clamp((1 - neutrality - 0.12) / 0.20)
+            * (1 - clamp((luminance - 210) / 25))
+        shade = maximum / 255.0 * tintScale
+    } else {
+        weight = lightWeight * neutralWeight
+        shade = luminance / 255.0
+    }
     guard weight > 0 else { continue }
 
-    let shade = luminance / 255.0
     red = red * (1 - weight) + tint.r * shade * weight
     green = green * (1 - weight) + tint.g * shade * weight
     blue = blue * (1 - weight) + tint.b * shade * weight

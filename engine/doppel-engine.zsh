@@ -1,6 +1,6 @@
 #!/bin/zsh
 # Doppel engine: builds and launches an independent, rebranded instance of a
-# locally installed Electron app (currently: the ChatGPT desktop app).
+# locally installed ChatGPT or Claude desktop app.
 #
 # The engine never ships or downloads vendor code. It clones the app the user
 # already has, gives the clone its own bundle identity, icon, and data
@@ -11,7 +11,7 @@
 set -u
 setopt PIPE_FAIL
 
-readonly ENGINE_VERSION="32"
+readonly ENGINE_VERSION="33"
 
 # When this engine copy runs from inside an installed bundle, environment
 # overrides are ignored: otherwise a same-uid process could point a
@@ -37,16 +37,15 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
     print -u2 -r -- "Doppel: missing instance config at $CONFIG_FILE"
     exit 1
 fi
+unset DOPPEL_APP_KIND
 source "$CONFIG_FILE"
+DOPPEL_APP_KIND="${DOPPEL_APP_KIND:-chatgpt}"
+source "$ASSET_ROOT/vendor.zsh"
 
-for _required in DOPPEL_DISPLAY_NAME DOPPEL_BUNDLE_ID DOPPEL_URL_SCHEME DOPPEL_PROFILE_ROOT DOPPEL_CODEX_HOME; do
+for _required in DOPPEL_DISPLAY_NAME DOPPEL_BUNDLE_ID DOPPEL_URL_SCHEME DOPPEL_PROFILE_ROOT "$AGENT_HOME_KEY"; do
     [[ -n "${(P)_required:-}" ]] || { print -u2 -r -- "Doppel: config is missing $_required"; exit 1 }
 done
 
-readonly PRIMARY_APP="${DOPPEL_PRIMARY_APP:-/Applications/ChatGPT.app}"
-readonly PRIMARY_BUNDLE_ID="${DOPPEL_PRIMARY_BUNDLE_ID:-com.openai.codex}"
-readonly PRIMARY_SCHEME="${DOPPEL_PRIMARY_SCHEME:-codex}"
-readonly PRIMARY_TEAM_ID="${DOPPEL_PRIMARY_TEAM_ID:-2DC432GLL2}"
 # Both are interpolated into a code-signing requirement, so they are checked
 # once here rather than at every use. A value carrying a quote can close the
 # string and append its own clause: a team id of `Z" or ! identifier "zzzzzzzz`
@@ -60,7 +59,8 @@ readonly PRIMARY_TEAM_ID="${DOPPEL_PRIMARY_TEAM_ID:-2DC432GLL2}"
 # rebuild into a normal-launch claim on the shared OAuth callback.
 [[ "${DOPPEL_URL_SCHEME:l}" != "${PRIMARY_SCHEME:l}" ]] || \
     { print -u2 -r -- "Doppel: the instance URL scheme belongs to the primary app"; exit 1; }
-readonly STATE_ROOT="${DOPPEL_STATE_ROOT:-$HOME/Library/Application Support/Doppel/state/$DOPPEL_BUNDLE_ID}"
+readonly AGENT_HOME="${(P)AGENT_HOME_KEY}"
+readonly STATE_ROOT="${DOPPEL_STATE_ROOT:-$DEFAULT_DOPPEL_HOME/state/$DOPPEL_BUNDLE_ID}"
 # Where the launcher looks up the requirement a bundle at a given path has to
 # satisfy. Keyed by install path rather than by anything inside the bundle:
 # the launcher used to read the requirement out of the very Info.plist it was
@@ -218,7 +218,7 @@ prune_state() {
 is_doppel_instance() {
     local app="$1"
     [[ -e "$app" ]] || return 0
-    [[ -x "$app/Contents/MacOS/ChatGPT.real" ]] && return 0
+    [[ -x "$app/Contents/MacOS/$PRIMARY_EXECUTABLE.real" ]] && return 0
     [[ -n "$(plist_value "$app/Contents/Info.plist" DoppelSigningIdentifier)" ]] && return 0
     return 1
 }
@@ -226,7 +226,7 @@ is_doppel_instance() {
 require_engine_assets() {
     local asset
     for asset in "$LAUNCHER" "$ALERT_HELPER" "$URL_HANDLER_HELPER" "$DEEP_LINK_PATCHER" \
-                 "$ROUTER_CLI" "$ROUTER_ENGINE" "$ROUTER_PATCHER" "$ICON_ICNS" "$ICON_PNG"; do
+                 "$ROUTER_CLI" "$ROUTER_ENGINE" "$ROUTER_PATCHER" "$ASSET_ROOT/vendor.zsh" "$ASSET_ROOT/claude-profile.cjs" "$ICON_ICNS" "$ICON_PNG"; do
         [[ -f "$asset" ]] || fail_closed "A required engine asset is missing: $asset"
     done
     [[ -x "$LAUNCHER" ]] || fail_closed "The launcher is not executable: $LAUNCHER"
@@ -265,8 +265,9 @@ validate_primary() {
     # satisfied it.
     /usr/bin/codesign --verify --deep --strict \
         -R "$(vendor_requirement)" "$PRIMARY_APP" >/dev/null 2>&1 || \
-        fail_closed "The primary app is not Apple-anchored OpenAI-signed code. No rebuild was performed."
+        fail_closed "The primary app does not have the expected Apple-anchored vendor signature. No rebuild was performed."
 
+    [[ "$DOPPEL_APP_KIND" == claude ]] && return 0
     LC_ALL=C /usr/bin/grep -a -q 'CODEX_ELECTRON_USER_DATA_PATH' "$PRIMARY_APP/Contents/Resources/app.asar" || \
         fail_closed "This release no longer exposes the expected separate-profile control. No rebuild was performed."
 }
@@ -276,7 +277,7 @@ source_version() {
 }
 
 source_executable_hash() {
-    sha256_file "$PRIMARY_APP/Contents/MacOS/ChatGPT"
+    sha256_file "$PRIMARY_APP/Contents/MacOS/$PRIMARY_EXECUTABLE"
 }
 
 instance_is_healthy() {
@@ -287,8 +288,8 @@ instance_is_healthy() {
     expected_router_hash="$(sha256_file "$ROUTER_CLI" 2>/dev/null)" || return 1
 
     [[ -d "$app" ]] || return 1
-    [[ -x "$app/Contents/MacOS/ChatGPT" ]] || return 1
-    [[ -x "$app/Contents/MacOS/ChatGPT.real" ]] || return 1
+    [[ -x "$app/Contents/MacOS/$PRIMARY_EXECUTABLE" ]] || return 1
+    [[ -x "$app/Contents/MacOS/$PRIMARY_EXECUTABLE.real" ]] || return 1
     /usr/bin/xattr -d com.apple.FinderInfo "$app" 2>/dev/null || true
     /usr/bin/xattr -d com.apple.ResourceFork "$app" 2>/dev/null || true
     [[ "$(plist_value "$info" CFBundleIdentifier)" == "$DOPPEL_BUNDLE_ID" ]] || return 1
@@ -296,9 +297,15 @@ instance_is_healthy() {
     [[ "$(plist_value "$info" DoppelEngineVersion)" == "$ENGINE_VERSION" ]] || return 1
     [[ "$(plist_value "$info" DoppelSourceBundleVersion)" == "$expected_version" ]] || return 1
     [[ "$(plist_value "$info" DoppelSourceExecutableSHA256)" == "$expected_hash" ]] || return 1
+    if [[ "$DOPPEL_APP_KIND" == chatgpt ]]; then
     [[ "$(plist_value "$info" LSEnvironment.CODEX_ELECTRON_USER_DATA_PATH)" == "$DOPPEL_PROFILE_ROOT" ]] || return 1
-    [[ "$(plist_value "$info" LSEnvironment.CODEX_HOME)" == "$DOPPEL_CODEX_HOME" ]] || return 1
+    [[ "$(plist_value "$info" LSEnvironment.CODEX_HOME)" == "$AGENT_HOME" ]] || return 1
     [[ "$(plist_value "$info" LSEnvironment.CODEX_SPARKLE_ENABLED)" == "false" ]] || return 1
+    else
+        [[ "$(plist_value "$info" LSEnvironment.CLAUDE_CONFIG_DIR)" == "$AGENT_HOME" ]] || return 1
+        [[ -f "$app/Contents/Resources/Doppel/claude.json" ]] || return 1
+        /usr/bin/cmp -s "$ASSET_ROOT/claude-profile.cjs" "$app/Contents/Resources/Doppel/claude-profile.cjs" || return 1
+    fi
     [[ "$(plist_value "$info" LSEnvironment.DOPPEL_URL_SCHEME)" == "$DOPPEL_URL_SCHEME" ]] || return 1
     [[ "$(plist_value "$info" CFBundleURLTypes.0.CFBundleURLSchemes.0)" == "$DOPPEL_URL_SCHEME" ]] || return 1
     [[ "$(plist_value "$info" CFBundleURLTypes.0.CFBundleURLSchemes.1)" == "$PRIMARY_SCHEME" ]] || return 1
@@ -310,6 +317,7 @@ instance_is_healthy() {
     [[ -x "$app/Contents/Resources/Doppel/bin/doppel" ]] || return 1
     [[ -x "$app/Contents/Resources/Doppel/engine/doppel-engine.zsh" ]] || return 1
     [[ -f "$app/Contents/Resources/Doppel/engine/patch-deep-link.py" ]] || return 1
+    /usr/bin/cmp -s "$ASSET_ROOT/vendor.zsh" "$app/Contents/Resources/Doppel/vendor.zsh" || return 1
     [[ "$(plist_value "$info" DoppelRouterSHA256)" == "$expected_router_hash" ]] || return 1
     [[ "$(sha256_file "$app/Contents/Resources/Doppel/bin/doppel" 2>/dev/null)" == \
        "$expected_router_hash" ]] || return 1
@@ -336,14 +344,23 @@ patch_plist() {
 
     /usr/bin/plutil -replace CFBundleIdentifier -string "$DOPPEL_BUNDLE_ID" "$info"
     /usr/bin/plutil -replace CFBundleDisplayName -string "$DOPPEL_DISPLAY_NAME" "$info"
-    /usr/bin/plutil -replace CFBundleName -string "$DOPPEL_DISPLAY_NAME" "$info"
-    /usr/bin/plutil -replace CFBundleExecutable -string 'ChatGPT' "$info"
+    if [[ "$DOPPEL_APP_KIND" == claude ]]; then
+        # Electron resolves its vendor helper app names before JavaScript runs.
+        /usr/bin/plutil -replace CFBundleName -string Claude "$info"
+    else
+        /usr/bin/plutil -replace CFBundleName -string "$DOPPEL_DISPLAY_NAME" "$info"
+    fi
+    /usr/bin/plutil -replace CFBundleExecutable -string "$PRIMARY_EXECUTABLE" "$info"
     /usr/bin/plutil -remove CFBundleIconName "$info" 2>/dev/null || true
     /usr/bin/plutil -remove NSDockTilePlugIn "$info" 2>/dev/null || true
     /usr/bin/plutil -remove LSHasLocalizedDisplayName "$info" 2>/dev/null || true
     /usr/bin/plutil -replace BundleSigningBaseName -string "${DOPPEL_SIGNING_BASE_NAME:-Doppel}" "$info"
     /usr/bin/plutil -replace CrProductDirName -string "$DOPPEL_BUNDLE_ID" "$info"
-    /usr/bin/plutil -replace CFBundleAlternateNames.0 -string "$DOPPEL_DISPLAY_NAME" "$info"
+    if [[ "$DOPPEL_APP_KIND" == claude ]]; then
+        /usr/bin/plutil -replace CFBundleAlternateNames -json "[\"$DOPPEL_DISPLAY_NAME\"]" "$info"
+    else
+        /usr/bin/plutil -replace CFBundleAlternateNames.0 -string "$DOPPEL_DISPLAY_NAME" "$info"
+    fi
     /usr/bin/plutil -replace CFBundleURLTypes.0.CFBundleURLName -string "$DOPPEL_DISPLAY_NAME" "$info"
     # Electron can only claim a macOS protocol that the bundle declares. Keep
     # the instance scheme first for ordinary launch-time registration, and
@@ -352,14 +369,19 @@ patch_plist() {
     # taking codex:// ownership.
     /usr/bin/plutil -replace CFBundleURLTypes.0.CFBundleURLSchemes -json \
         "[\"$DOPPEL_URL_SCHEME\",\"$PRIMARY_SCHEME\"]" "$info"
+    if [[ "$DOPPEL_APP_KIND" == chatgpt ]]; then
     /usr/bin/plutil -replace LSEnvironment.CODEX_ELECTRON_USER_DATA_PATH -string "$DOPPEL_PROFILE_ROOT" "$info"
-    /usr/bin/plutil -replace LSEnvironment.CODEX_HOME -string "$DOPPEL_CODEX_HOME" "$info"
+    /usr/bin/plutil -replace LSEnvironment.CODEX_HOME -string "$AGENT_HOME" "$info"
     # Codex now supplies its appcast at runtime, so the traditional Sparkle
     # Info.plist switches below no longer stop a user- or backend-initiated
     # update. This environment switch is read by Codex before it creates the
     # updater and is the supported interception point. Only the untouched,
     # vendor-signed primary app is ever allowed to run Sparkle.
     /usr/bin/plutil -replace LSEnvironment.CODEX_SPARKLE_ENABLED -string "false" "$info"
+    else
+        /usr/bin/plutil -replace LSEnvironment.CLAUDE_CONFIG_DIR -string "$AGENT_HOME" "$info"
+        /usr/bin/plutil -remove CFBundleURLTypes.1 "$info" 2>/dev/null || true
+    fi
     # The packaged app otherwise hardcodes codex:// both when it creates an
     # OAuth callback and when it registers with Launch Services. The cloned
     # app.asar reads this per-instance value instead.
@@ -430,6 +452,19 @@ if bad or ent.get("com.apple.security.cs.disable-library-validation") is not Tru
 PYVERIFY
 }
 
+write_claude_config() {
+    [[ "$DOPPEL_APP_KIND" == claude ]] || return 0
+    /usr/bin/python3 - "$1/Contents/Resources/Doppel/claude.json" "$DOPPEL_DISPLAY_NAME" \
+        "$DOPPEL_PROFILE_ROOT" "$AGENT_HOME" "$DOPPEL_URL_SCHEME" "$DOPPEL_BUNDLE_ID" \
+        "$PRIMARY_APP" "$PRIMARY_BUNDLE_ID" "$DOPPEL_INSTANCE_SLUG" <<'PYCLAUDE'
+import json, sys
+from pathlib import Path
+output, name, profile, code, scheme, bundle, primary, primary_bundle, slug = sys.argv[1:]
+Path(output).write_text(json.dumps(dict(name=name, profile=profile, code=code, scheme=scheme,
+    bundleID=bundle, primaryApp=primary, primaryBundleID=primary_bundle, slug=slug)))
+PYCLAUDE
+}
+
 build_instance() {
     local target="$1"
     local version="$2"
@@ -455,18 +490,18 @@ build_instance() {
         fail_closed "The staged source copy did not retain the vendor signature."
     [[ "$(plist_value "$target/Contents/Info.plist" CFBundleVersion)" == "$version" ]] || \
         fail_closed "The primary app changed while the staged copy was being created."
-    [[ "$(sha256_file "$target/Contents/MacOS/ChatGPT")" == "$executable_hash" ]] || \
+    [[ "$(sha256_file "$target/Contents/MacOS/$PRIMARY_EXECUTABLE")" == "$executable_hash" ]] || \
         fail_closed "The primary executable changed while the staged copy was being created."
 
     local embedded="$target/Contents/Resources/Doppel"
     mkdir -p "$embedded/bin" "$embedded/assets" "$embedded/engine"
-    /bin/cp "$ASSET_ROOT/doppel-engine.zsh" "$CONFIG_FILE" "$DEEP_LINK_PATCHER" "$embedded/" || \
+    /bin/cp "$ASSET_ROOT/doppel-engine.zsh" "$ASSET_ROOT/vendor.zsh" "$ASSET_ROOT/claude-profile.cjs" "$CONFIG_FILE" "$DEEP_LINK_PATCHER" "$embedded/" || \
         fail_closed "Embedding the self-healing engine failed."
     /bin/cp "$LAUNCHER" "$ALERT_HELPER" "$URL_HANDLER_HELPER" "$embedded/bin/" || \
         fail_closed "Embedding the engine executables failed."
     /bin/cp "$ROUTER_CLI" "$embedded/bin/doppel" || \
         fail_closed "Embedding the engine router failed."
-    /bin/cp "$ROUTER_ENGINE" "$ROUTER_PATCHER" "$embedded/engine/" || \
+    /bin/cp "$ROUTER_ENGINE" "$ROUTER_PATCHER" "$ASSET_ROOT/vendor.zsh" "$ASSET_ROOT/claude-profile.cjs" "$embedded/engine/" || \
         fail_closed "Embedding the router support files failed."
     /bin/chmod 755 "$embedded/bin/doppel-launcher" "$embedded/bin/doppel-alert" \
         "$embedded/bin/doppel-url-handler" "$embedded/bin/doppel" \
@@ -474,7 +509,9 @@ build_instance() {
     /bin/cp "$ICON_ICNS" "$ICON_PNG" "$embedded/assets/" || \
         fail_closed "Embedding the icon assets failed."
 
-    /bin/mv "$target/Contents/MacOS/ChatGPT" "$target/Contents/MacOS/ChatGPT.real" || \
+    write_claude_config "$target" || fail_closed "Writing the Claude profile settings failed."
+
+    /bin/mv "$target/Contents/MacOS/$PRIMARY_EXECUTABLE" "$target/Contents/MacOS/$PRIMARY_EXECUTABLE.real" || \
         fail_closed "Preserving the vendor executable failed."
 
     # The vendor's entitlements are extracted from the copy itself, so a
@@ -487,11 +524,11 @@ build_instance() {
         fail_closed "Creating the private entitlements directory failed."
     /bin/chmod 700 "$entitlements_dir"
     entitlements="$entitlements_dir/entitlements.plist"
-    write_filtered_entitlements "$target/Contents/MacOS/ChatGPT.real" "$entitlements" || \
+    write_filtered_entitlements "$target/Contents/MacOS/$PRIMARY_EXECUTABLE.real" "$entitlements" || \
         fail_closed "Extracting and filtering the vendor entitlements failed."
 
-    /bin/cp "$LAUNCHER" "$target/Contents/MacOS/ChatGPT" || fail_closed "Installing the durable launcher failed."
-    /bin/chmod 755 "$target/Contents/MacOS/ChatGPT"
+    /bin/cp "$LAUNCHER" "$target/Contents/MacOS/$PRIMARY_EXECUTABLE" || fail_closed "Installing the durable launcher failed."
+    /bin/chmod 755 "$target/Contents/MacOS/$PRIMARY_EXECUTABLE"
     /bin/cp "$ICON_ICNS" "$target/Contents/Resources/electron.icns"
     /bin/cp "$ICON_ICNS" "$target/Contents/Resources/icon-chatgpt.icns"
     /bin/cp "$ICON_PNG" "$target/Contents/Resources/icon-chatgpt.png"
@@ -502,7 +539,7 @@ build_instance() {
     # registered codex:// OAuth callback. The ASAR patch claims codex:// only
     # when this instance actually starts connector authorization.
     local asar_hash
-    asar_hash="$(/usr/bin/python3 "$DEEP_LINK_PATCHER" patch \
+    asar_hash="$(/usr/bin/python3 "$DEEP_LINK_PATCHER" --app "$DOPPEL_APP_KIND" patch \
         "$target/Contents/Resources/app.asar")" || \
         fail_closed "Patching the instance OAuth callback routing failed."
     (( ${#asar_hash} == 64 )) && [[ "$asar_hash" != *[^0-9a-f]* ]] || \
@@ -514,16 +551,21 @@ build_instance() {
 
     # New Electron releases seal the integrity dictionary inside the framework
     # as well as in Info.plist. Refresh that digest without disabling validation.
-    local framework="$target/Contents/Frameworks/Codex Framework.framework" digest_status
+    local framework="$target/Contents/Frameworks/$PRIMARY_FRAMEWORK.framework" digest_status
     digest_status="$(/usr/bin/python3 "$DEEP_LINK_PATCHER" integrity \
-        "$framework/Codex Framework" "$PRIMARY_APP/Contents/Info.plist" \
+        "$framework/$PRIMARY_FRAMEWORK" "$PRIMARY_APP/Contents/Info.plist" \
         "$target/Contents/Info.plist")" || \
         fail_closed "Updating Electron's framework integrity digest failed."
     if [[ "$digest_status" == "updated" ]]; then
         # Vendor helpers cannot load the now locally signed framework. Apply
         # the same filtered runtime entitlements as the clone's main process.
         local helper helper_entitlements="$entitlements_dir/helper.plist"
-        for helper in "$framework"/Helpers/*.app(N/); do
+        local -a electron_helpers
+        electron_helpers=("$framework"/Helpers/*.app(N/))
+        if [[ "$DOPPEL_APP_KIND" == claude ]]; then
+            electron_helpers+=("$target/Contents/Frameworks"/Claude\ Helper*.app(N/))
+        fi
+        for helper in "$electron_helpers[@]"; do
             write_filtered_entitlements "$helper" "$helper_entitlements" && \
                 verify_filtered_entitlements "$helper_entitlements" || \
                 fail_closed "Filtering Electron helper entitlements failed."
@@ -547,7 +589,7 @@ build_instance() {
     # from one instance to another.
     /usr/bin/codesign --force --sign "$SIGN_IDENTITY" -i "$DOPPEL_BUNDLE_ID" --options runtime \
         --entitlements "$entitlements" \
-        "$target/Contents/MacOS/ChatGPT.real" >/dev/null || fail_closed "Signing the preserved vendor executable failed."
+        "$target/Contents/MacOS/$PRIMARY_EXECUTABLE.real" >/dev/null || fail_closed "Signing the preserved vendor executable failed."
     /usr/bin/xattr -cr "$target" || fail_closed "Removing intermediate signing metadata failed."
     # The bundle signature covers the launcher, the process that runs Apple's
     # native permission requests for the menu. tccd's hardened-runtime
@@ -576,7 +618,7 @@ build_instance() {
 restyle_instance() {
     local app="$1"
     [[ -d "$app" ]] || fail_closed "There is no bundle to restyle at $app"
-    [[ -x "$app/Contents/MacOS/ChatGPT.real" ]] || \
+    [[ -x "$app/Contents/MacOS/$PRIMARY_EXECUTABLE.real" ]] || \
         fail_closed "The bundle at $app is not a Doppel instance."
     require_engine_assets
 
@@ -591,13 +633,14 @@ restyle_instance() {
         /bin/mkdir -p "$embedded/bin" "$embedded/assets" "$embedded/engine"
         /bin/cp "$CONFIG_FILE" "$embedded/instance-config.zsh" || \
             fail_closed "Updating the embedded config failed."
+        /bin/cp "$ASSET_ROOT/vendor.zsh" "$ASSET_ROOT/claude-profile.cjs" "$embedded/" || fail_closed "Updating vendor support failed."
         /bin/cp "$ASSET_ROOT/doppel-engine.zsh" "$embedded/doppel-engine.zsh" 2>/dev/null || true
         /bin/cp "$DEEP_LINK_PATCHER" "$embedded/patch-deep-link.py" 2>/dev/null || true
         /bin/cp "$URL_HANDLER_HELPER" "$embedded/bin/doppel-url-handler" || \
             fail_closed "Updating the URL-handler repair helper failed."
         /bin/cp "$ROUTER_CLI" "$embedded/bin/doppel" || \
             fail_closed "Updating the embedded engine router failed."
-        /bin/cp "$ROUTER_ENGINE" "$ROUTER_PATCHER" "$embedded/engine/" || \
+        /bin/cp "$ROUTER_ENGINE" "$ROUTER_PATCHER" "$ASSET_ROOT/vendor.zsh" "$ASSET_ROOT/claude-profile.cjs" "$embedded/engine/" || \
             fail_closed "Updating the router support files failed."
         /bin/chmod 755 "$embedded/bin/doppel-url-handler" "$embedded/bin/doppel" \
             "$embedded/engine/doppel-engine.zsh"
@@ -606,11 +649,17 @@ restyle_instance() {
         /bin/chmod 755 "$embedded/doppel-engine.zsh" 2>/dev/null || true
     fi
 
+    write_claude_config "$app" || fail_closed "Updating the Claude profile settings failed."
     /bin/cp "$ICON_ICNS" "$app/Contents/Resources/electron.icns" || fail_closed "Replacing the icon failed."
     /bin/cp "$ICON_ICNS" "$app/Contents/Resources/icon-chatgpt.icns" || fail_closed "Replacing the icon failed."
     /bin/cp "$ICON_PNG" "$app/Contents/Resources/icon-chatgpt.png" || fail_closed "Replacing the icon failed."
     /usr/bin/plutil -replace CFBundleDisplayName -string "$DOPPEL_DISPLAY_NAME" "$info"
-    /usr/bin/plutil -replace CFBundleName -string "$DOPPEL_DISPLAY_NAME" "$info"
+    if [[ "$DOPPEL_APP_KIND" == claude ]]; then
+        # Electron resolves its vendor helper app names before JavaScript runs.
+        /usr/bin/plutil -replace CFBundleName -string Claude "$info"
+    else
+        /usr/bin/plutil -replace CFBundleName -string "$DOPPEL_DISPLAY_NAME" "$info"
+    fi
     /usr/bin/plutil -replace CFBundleAlternateNames.0 -string "$DOPPEL_DISPLAY_NAME" "$info"
     /usr/bin/plutil -replace CFBundleURLTypes.0.CFBundleURLName -string "$DOPPEL_DISPLAY_NAME" "$info"
     /usr/bin/plutil -replace DoppelRouterSHA256 -string "$(sha256_file "$ROUTER_CLI")" "$info"
@@ -625,7 +674,7 @@ restyle_instance() {
         fail_closed "Creating the private entitlements directory failed."
     /bin/chmod 700 "$entitlements_dir"
     entitlements="$entitlements_dir/entitlements.plist"
-    write_filtered_entitlements "$app/Contents/MacOS/ChatGPT.real" "$entitlements" || \
+    write_filtered_entitlements "$app/Contents/MacOS/$PRIMARY_EXECUTABLE.real" "$entitlements" || \
         fail_closed "Extracting the preserved entitlements failed."
     verify_filtered_entitlements "$entitlements" || \
         fail_closed "The entitlements plist changed after filtering; refusing to sign."
@@ -706,7 +755,7 @@ PYEXCHANGE
 }
 
 managed_slug_for_this_profile() {
-    local doppel_home="$HOME/Library/Application Support/Doppel"
+    local doppel_home="$DEFAULT_DOPPEL_HOME"
     if [[ "${DOPPEL_DEV:-0}" == "1" ]]; then
         doppel_home="${DOPPEL_HOME:-$doppel_home}"
     fi
@@ -724,7 +773,7 @@ managed_slug_for_this_profile() {
 }
 
 consume_clone_launch_authorization() {
-    local marker="$1" slug token doppel_home="$HOME/Library/Application Support/Doppel"
+    local marker="$1" slug token doppel_home="$DEFAULT_DOPPEL_HOME"
     if [[ "${DOPPEL_DEV:-0}" == "1" ]]; then
         doppel_home="${DOPPEL_HOME:-$doppel_home}"
     fi
@@ -752,7 +801,7 @@ route_managed_engine() {
     log_message "Direct app launch entered locked engine routing"
     # Read permission to continue while the coordinator retains its lock until
     # this exact process execs the runtime. Reopening the app splits its Dock tile.
-    coproc "$ROUTER_CLI" __route-launch-in-place "$slug" "$$" "$@" 2>&1
+    coproc "$ROUTER_CLI" --app "$DOPPEL_APP_KIND" __route-launch-in-place "$slug" "$$" "$@" 2>&1
     if ! IFS=$'\t' read -r -p mode token extra; then
         fail_closed "The engine coordinator did not authorize this launcher."
     fi
@@ -791,7 +840,7 @@ launch_carries_arguments() {
 # QA has to be able to put stand-in processes in front of this scan.
 chatgpt_process_candidates() {
     /bin/ps -ww -axo pid=,comm= 2>/dev/null | \
-        /usr/bin/awk '/\/Contents\/MacOS\/ChatGPT(\.real)?$/ { print $1 }' || true
+        /usr/bin/awk -v executable="$PRIMARY_EXECUTABLE" '$0 ~ ("/Contents/MacOS/" executable "(\\.real)?$") { print $1 }' || true
 }
 
 # The executable a pid is actually running, asked of the kernel. Everything
@@ -883,7 +932,7 @@ primary_holds_profile() {
 # unless `doppel micro assign` named this one. Read at launch, so assigning
 # needs no rebuild and takes effect when the instance next starts.
 codex_micro_owner_is_this_profile() {
-    local doppel_home="$HOME/Library/Application Support/Doppel" owner=""
+    local doppel_home="$DEFAULT_DOPPEL_HOME" owner=""
     if [[ "${DOPPEL_DEV:-0}" == "1" ]]; then
         doppel_home="${DOPPEL_HOME:-$doppel_home}"
     fi
@@ -895,7 +944,7 @@ codex_micro_owner_is_this_profile() {
 
 # The Bluetooth channel `doppel micro channel` gave this clone, or nothing.
 codex_micro_channel() {
-    local doppel_home="$HOME/Library/Application Support/Doppel" channel="" file
+    local doppel_home="$DEFAULT_DOPPEL_HOME" channel="" file
     if [[ "${DOPPEL_DEV:-0}" == "1" ]]; then
         doppel_home="${DOPPEL_HOME:-$doppel_home}"
     fi
@@ -909,7 +958,13 @@ codex_micro_channel() {
 exec_clone_binary() {
     local app="$1" channel
     shift
-    mkdir -p "$DOPPEL_PROFILE_ROOT" "$DOPPEL_CODEX_HOME"
+    if [[ "$DOPPEL_APP_KIND" == claude ]]; then
+        ( umask 077; mkdir -p "$DOPPEL_PROFILE_ROOT" "$AGENT_HOME" ) || fail_closed "Creating the Claude profile directories failed."
+        export CLAUDE_CONFIG_DIR="$AGENT_HOME"
+        exec "$app/Contents/MacOS/$PRIMARY_EXECUTABLE.real" --user-data-dir="$DOPPEL_PROFILE_ROOT" "$@"
+        fail_closed "The preserved Claude executable could not be started."
+    fi
+    mkdir -p "$DOPPEL_PROFILE_ROOT" "$AGENT_HOME"
     unset DOPPEL_CODEX_MICRO DOPPEL_MICRO_CHANNEL
     channel="$(codex_micro_channel)"
     if [[ -n "$channel" ]]; then
@@ -918,7 +973,7 @@ exec_clone_binary() {
         export DOPPEL_CODEX_MICRO=1
     fi
     export CODEX_ELECTRON_USER_DATA_PATH="$DOPPEL_PROFILE_ROOT"
-    export CODEX_HOME="$DOPPEL_CODEX_HOME"
+    export CODEX_HOME="$AGENT_HOME"
     # Read by the ASAR patch: each clone keeps its own Codex runtime, because
     # accounts are pinned to different versions and would reinstall over each
     # other in ~/.cache. The Chromium profile is the one root a clone never shares.
@@ -928,7 +983,7 @@ exec_clone_binary() {
     export DOPPEL_PRIMARY_BUNDLE_ID="$PRIMARY_BUNDLE_ID"
     export DOPPEL_URL_HANDLER_HELPER="$URL_HANDLER_HELPER"
     log_message "Launching healthy instance $(source_version)"
-    exec "$app/Contents/MacOS/ChatGPT.real" --user-data-dir="$DOPPEL_PROFILE_ROOT" "$@"
+    exec "$app/Contents/MacOS/$PRIMARY_EXECUTABLE.real" --user-data-dir="$DOPPEL_PROFILE_ROOT" "$@"
     fail_closed "The preserved vendor executable could not be started."
 }
 
@@ -983,6 +1038,12 @@ launch_instance() {
 
     require_engine_assets
 
+    # Claude must retain the coordinator through self-healing too: installing
+    # a fresh bundle restores the shared callback handler.
+    if [[ "$DOPPEL_APP_KIND" == claude && "${DOPPEL_INSTALL_ONLY:-0}" != 1 ]] && (( ! authorized_clone )); then
+        if route_managed_engine "$@"; then authorized_clone=1; fi
+    fi
+
     local version executable_hash
     version="$(source_version)" || fail_closed "The primary app version could not be read."
     executable_hash="$(source_executable_hash)" || fail_closed "The primary executable could not be fingerprinted."
@@ -1012,6 +1073,10 @@ launch_instance() {
     is_doppel_instance "$app" || \
         fail_closed "There is already an app at $app and it is not a Doppel instance. Move it aside first; Doppel will not replace it."
 
+    if [[ "$DOPPEL_APP_KIND" == claude ]]; then
+        "$ROUTER_CLI" --app claude __auth-idle || \
+            fail_closed "Finish the active Claude sign-in or quit its window before rebuilding instances."
+    fi
     validate_primary
     local lock staging timestamp backup_root backup staging_root=""
     # The exit inside acquire_rebuild_lock only kills the $(...) subshell;

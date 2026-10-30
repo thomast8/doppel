@@ -14,13 +14,31 @@ enum UIRenderer {
     private static var remoteQALaunchObserver: NSObjectProtocol?
 
     static func scheduleRemoteAccessQA(profileID: String) {
+        scheduleQA { showRemoteAccessQA(profileID: profileID) }
+    }
+
+    static func scheduleCreateInstanceQA() {
+        scheduleQA {
+            NSApp.setActivationPolicy(.regular)
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 520),
+                                  styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            window.title = "New Doppel Instance QA"
+            window.isReleasedWhenClosed = false
+            window.contentViewController = NSHostingController(rootView: CreateInstanceView(store: InstanceStore()))
+            remoteQAWindow = window
+            window.center(); window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+    }
+
+    private static func scheduleQA(_ show: @escaping @MainActor () -> Void) {
         remoteQALaunchObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didFinishLaunchingNotification, object: nil, queue: .main
         ) { _ in
             Task { @MainActor in
                 if let observer = remoteQALaunchObserver { NotificationCenter.default.removeObserver(observer) }
                 remoteQALaunchObserver = nil
-                showRemoteAccessQA(profileID: profileID)
+                show()
             }
         }
     }

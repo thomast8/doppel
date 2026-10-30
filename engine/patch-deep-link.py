@@ -840,8 +840,71 @@ def patch_integrity_digest(framework: Path, source_info: Path, clone_info: Path)
     return bool(offsets)
 
 
+CLAUDE_BOOTSTRAP = (
+    b'"use strict";globalThis.doppelClaude=require(process.resourcesPath+'
+    b'"/Doppel/claude-profile.cjs").install(require("electron"),'
+    b'JSON.parse(require("node:fs").readFileSync(process.resourcesPath+'
+    b'"/Doppel/claude.json","utf8")));'
+)
+CLAUDE_AUTH = re.compile(
+    rb'(async function [\w$]+\(e,t\)\{)(let n=t\.logPrefix\?\?"\[Auth\]",r=new URL\(e\);)'
+)
+CLAUDE_AUTH_MARKER = b't=globalThis.doppelClaude.prepareLogin(t);'
+CLAUDE_UPDATE_MARKER = b'(true/*Doppel: updates managed*/)'
+CLAUDE_UPDATE = re.compile(rb'(?<![\w$.])[\w$]+(?:\.[\w$]+)*\(\)\.autoUpdate\.disabled\b')
+
+
+def verify_claude(path: Path) -> str:
+    archive = read_archive(path)
+    counts = [0, 0, 0]
+    for member in members(archive):
+        if not member.path.startswith('.vite/build/index') or not member.path.endswith('.js'):
+            continue
+        data = read_member(archive, member)
+        found = [data.count(marker) for marker in
+                 (CLAUDE_BOOTSTRAP, CLAUDE_AUTH_MARKER, CLAUDE_UPDATE_MARKER)]
+        if any(found):
+            verify_member_integrity(member.entry, data)
+        counts = [total + value for total, value in zip(counts, found)]
+    if counts != [1, 1, 15]:
+        raise PatchError('Claude profile, authentication or updater patch is incomplete')
+    return digest(archive.header_json)
+
+
+def patch_claude(path: Path) -> str:
+    archive = read_archive(path)
+    replacements = []
+    auth_sites = update_sites = bootstrap_sites = 0
+    for member in members(archive):
+        if not member.path.startswith('.vite/build/index') or not member.path.endswith('.js'):
+            continue
+        original = read_member(archive, member)
+        if CLAUDE_BOOTSTRAP in original:
+            return verify_claude(path)
+        data = original
+        if member.path == '.vite/build/index.pre.js':
+            data = CLAUDE_BOOTSTRAP + data
+            bootstrap_sites += 1
+        data, count = CLAUDE_AUTH.subn(rb'\1' + CLAUDE_AUTH_MARKER + rb'\2', data)
+        auth_sites += count
+        data, count = CLAUDE_UPDATE.subn(CLAUDE_UPDATE_MARKER, data)
+        update_sites += count
+        if data != original:
+            verify_member_integrity(member.entry, original)
+            replacements.append((member.path, data))
+    # Fail closed when the vendor changes the control points we have qualified.
+    if (bootstrap_sites, auth_sites, update_sites) != (1, 1, 15):
+        raise PatchError('This Claude build has unsupported profile, authentication or updater controls')
+    for name, data in replacements:
+        archive = read_archive(path)
+        member = next(item for item in members(archive) if item.path == name)
+        rewrite_archive(archive, member, data)
+    return verify_claude(path)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--app", choices=("chatgpt", "claude"), default="chatgpt")
     parser.add_argument("mode", choices=("patch", "verify", "integrity"))
     parser.add_argument("archive", type=Path)
     parser.add_argument("source_info", type=Path, nargs="?")
@@ -859,7 +922,8 @@ def main() -> int:
             changed = patch_integrity_digest(arguments.archive, arguments.source_info, arguments.clone_info)
             print("updated" if changed else "unchanged")
             return 0
-        header_hash = patch(arguments.archive) if arguments.mode == "patch" else verify(arguments.archive)
+        patch_app, verify_app = (patch_claude, verify_claude) if arguments.app == 'claude' else (patch, verify)
+        header_hash = patch_app(arguments.archive) if arguments.mode == "patch" else verify_app(arguments.archive)
     except (OSError, PatchError) as error:
         print(f"patch-deep-link: {error}", file=sys.stderr)
         return 1

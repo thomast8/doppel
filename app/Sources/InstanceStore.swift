@@ -6,6 +6,18 @@ enum InstanceEngine: String {
     case vendor
 }
 
+enum InstanceApp: String, CaseIterable, Hashable, Sendable {
+    case chatgpt, claude
+
+    var label: String { self == .chatgpt ? "ChatGPT" : "Claude" }
+    var cliPrefix: [String] { self == .chatgpt ? [] : ["--app", "claude"] }
+    var path: String { "/Applications/\(label).app" }
+    var downloadURL: URL {
+        URL(string: self == .chatgpt ? "https://chatgpt.com/features/desktop/" : "https://claude.com/download")!
+    }
+    func instanceID(_ slug: String) -> String { self == .chatgpt ? slug : "claude/\(slug)" }
+}
+
 struct Instance: Identifiable {
     let id: String        // stable slug assigned at creation
     let name: String
@@ -15,6 +27,7 @@ struct Instance: Identifiable {
     let tint: String
     /// The profile is stable; only the process used to open it changes.
     let engine: InstanceEngine
+    var appKind: InstanceApp = .chatgpt
 
     var usesBuiltInBrowser: Bool { engine == .vendor }
 }
@@ -26,6 +39,7 @@ final class InstanceStore: ObservableObject {
     @Published var instances: [Instance] = []
     @Published var busy: Set<String> = []
     @Published var primaryInstalled = false
+    @Published var claudeInstalled = false
     @Published var signingReady = false
     @Published var chatGPTUpdate: ChatGPTUpdate?
     /// The installed vendor build, shown in the menu even when it is current.
@@ -160,6 +174,7 @@ final class InstanceStore: ObservableObject {
 
     func reload() {
         primaryInstalled = FileManager.default.fileExists(atPath: Self.primaryAppPath)
+        claudeInstalled = FileManager.default.fileExists(atPath: InstanceApp.claude.path)
         if let cli = discoveredCLI {
             signingReady = SigningIdentity.status(cli: cli).isPresent
         }
@@ -171,14 +186,20 @@ final class InstanceStore: ObservableObject {
         clearReport(for: "cli")
         Task.detached { [weak self] in
             let result = Self.runProcess(cli: cli, arguments: ["list", "--porcelain"])
+            let claudeResult = Self.runProcess(cli: cli, arguments: ["--app", "claude", "list", "--porcelain"])
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 switch result {
                 case .failure(let message):
                     self.report(message, for: "list")
                 case .success(let stdout):
+                    guard case .success(let claudeOutput) = claudeResult else {
+                        if case .failure(let message) = claudeResult { self.report(message, for: "list") }
+                        return
+                    }
                     self.clearReport(for: "list")
-                    self.instances = Self.parsePorcelain(stdout).sorted { $0.name < $1.name }
+                    self.instances = (Self.parsePorcelain(stdout) + Self.parsePorcelain(claudeOutput, appKind: .claude))
+                        .sorted { $0.name < $1.name }
                     self.checkPermissions()
                     self.checkNativeTools()
                     self.checkCreatorMicro()
@@ -188,12 +209,13 @@ final class InstanceStore: ObservableObject {
     }
 
     func launch(_ instance: Instance) {
-        runCLI(["launch", instance.name], busyKey: instance.id) { [weak self] failure in
+        runCLI(instance.appKind.cliPrefix + ["launch", instance.name], busyKey: instance.id) { [weak self] failure in
             if failure == nil { self?.checkNativeTools() }
         }
     }
 
     func assignBuiltInBrowser(to instance: Instance) {
+        guard instance.appKind == .chatgpt else { return }
         runCLI(["browser", "assign", instance.name], busyKey: "iab-slot",
                reportFailure: false) { [weak self] failure in
             guard let self else { return }
@@ -249,6 +271,7 @@ final class InstanceStore: ObservableObject {
     }
 
     func assignCreatorMicro(to instance: Instance) {
+        guard instance.appKind == .chatgpt else { return }
         runCLI(["micro", "assign", instance.name], busyKey: "creator-micro") { [weak self] _ in
             self?.checkCreatorMicro()
         }
@@ -330,7 +353,7 @@ final class InstanceStore: ObservableObject {
     }
 
     func rebuild(_ instance: Instance) {
-        runCLI(["rebuild", instance.name], busyKey: instance.id) { [weak self] failure in
+        runCLI(instance.appKind.cliPrefix + ["rebuild", instance.name], busyKey: instance.id) { [weak self] failure in
             if failure == nil {
                 self?.checkPermissions()
                 self?.checkNativeTools()
@@ -381,6 +404,7 @@ final class InstanceStore: ObservableObject {
     /// Passing a browser assigns just that one, so two instances can hold two
     /// different browsers at once. Omitting it assigns every registration.
     func claimBrowserHost(for instance: Instance, browser: String? = nil) {
+        guard instance.appKind == .chatgpt else { return }
         var arguments = ["native-tools", "claim-browser"]
         if let browser { arguments += ["--browser", browser] }
         arguments.append(instance.name)
@@ -396,6 +420,7 @@ final class InstanceStore: ObservableObject {
         checkingPermissions = true
         Task.detached { [weak self] in
             let result = Self.runProcess(cli: cli, arguments: ["permissions", "check", "--porcelain"])
+            let claudeResult = Self.runProcess(cli: cli, arguments: ["--app", "claude", "permissions", "check", "--porcelain"])
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.checkingPermissions = false
@@ -403,8 +428,13 @@ final class InstanceStore: ObservableObject {
                 case .failure(let message):
                     self.report(message, for: "permissions-check")
                 case .success(let output):
+                    guard case .success(let claudeOutput) = claudeResult else {
+                        if case .failure(let message) = claudeResult { self.report(message, for: "permissions-check") }
+                        return
+                    }
                     self.clearReport(for: "permissions-check")
-                    self.permissionStatuses = PermissionIssue.parseStatuses(output)
+                    self.permissionStatuses = PermissionIssue.parseStatuses(output) +
+                        PermissionIssue.parseStatuses(claudeOutput, appKind: .claude)
                 }
             }
         }
@@ -424,8 +454,8 @@ final class InstanceStore: ObservableObject {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = issues.count == 1
-            ? "A managed ChatGPT permission needs attention"
-            : "Managed ChatGPT permissions need attention"
+            ? "A managed app permission needs attention"
+            : "Managed app permissions need attention"
         alert.informativeText = """
             macOS reports an explicit denial or an outdated permission checker for:
 
@@ -444,7 +474,7 @@ final class InstanceStore: ObservableObject {
                 requestedPermissionIDs.insert(permission.id)
             }
             runCLI(
-                ["permissions", "request", permission.instanceName, permission.permission],
+                permission.appKind.cliPrefix + ["permissions", "request", permission.instanceName, permission.permission],
                 busyKey: "permissions"
             ) { [weak self] failure in
                 guard let self else { return }
@@ -763,11 +793,11 @@ final class InstanceStore: ObservableObject {
 
     /// Creates an instance from just a name and a tint color; the CLI derives
     /// bundle id, URL scheme, and data directories from the name.
-    func create(name: String, tintHex: String, completion: @escaping (String?) -> Void) {
+    func create(name: String, tintHex: String, appKind: InstanceApp = .chatgpt, completion: @escaping (String?) -> Void) {
         let tintArguments = tintHex == "original" ? ["--original-icon"] : ["--tint", tintHex]
         // As with edit: the window is still on screen and shows the failure
         // itself.
-        runCLI(["create", "--name", name] + tintArguments, busyKey: "create",
+        runCLI(appKind.cliPrefix + ["create", "--name", name] + tintArguments, busyKey: "create",
                reportFailure: false) { [weak self] failure in
             if failure == nil { self?.reload() }
             completion(failure)
@@ -786,7 +816,7 @@ final class InstanceStore: ObservableObject {
         guard arguments.count > 2 else { completion(nil); return }
         // The edit window shows its own failure inline, so this one is not
         // raised as an alert on top of it.
-        runCLI(arguments, busyKey: instance.id, reportFailure: false) { [weak self] failure in
+        runCLI(instance.appKind.cliPrefix + arguments, busyKey: instance.id, reportFailure: false) { [weak self] failure in
             if failure == nil { self?.reload() }
             completion(failure)
         }
@@ -797,7 +827,7 @@ final class InstanceStore: ObservableObject {
     func remove(_ instance: Instance, purgeData: Bool) {
         var arguments = ["remove", instance.name]
         if purgeData { arguments.append("--purge-data") }
-        runCLI(arguments, busyKey: instance.id) { [weak self] failure in
+        runCLI(instance.appKind.cliPrefix + arguments, busyKey: instance.id) { [weak self] failure in
             if failure == nil { self?.reload() }
         }
     }
@@ -810,12 +840,12 @@ final class InstanceStore: ObservableObject {
             return
         }
         busy.insert("signing")
-        let instanceNames = instances.map(\.name)
+        let rebuildCommands = instances.map { $0.appKind.cliPrefix + ["rebuild", $0.name] }
         Task.detached { [weak self] in
             let failure = SigningIdentity.setUp(cli: cli)
             if failure == nil {
-                for name in instanceNames {
-                    _ = Self.runProcess(cli: cli, arguments: ["rebuild", name])
+                for arguments in rebuildCommands {
+                    _ = Self.runProcess(cli: cli, arguments: arguments)
                 }
             }
             await MainActor.run { [weak self] in
@@ -860,21 +890,22 @@ final class InstanceStore: ObservableObject {
         reported[key] = nil
     }
 
-    nonisolated static func parsePorcelain(_ output: String) -> [Instance] {
+    nonisolated static func parsePorcelain(_ output: String, appKind: InstanceApp = .chatgpt) -> [Instance] {
         output.split(separator: "\n").compactMap { line in
             let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
             // Tint and engine were added later; older output stays readable
             // and defaults to the historical locally signed engine.
             guard fields.count >= 4 else { return nil }
             return Instance(
-                id: String(fields[0]),
+                id: appKind.instanceID(String(fields[0])),
                 name: String(fields[1]),
                 appPath: String(fields[2]),
                 installed: fields[3] == "installed",
                 tint: fields.count > 4 ? String(fields[4]) : "",
                 engine: fields.count > 5
                     ? InstanceEngine(rawValue: String(fields[5])) ?? .clone
-                    : .clone
+                    : .clone,
+                appKind: appKind
             )
         }
     }

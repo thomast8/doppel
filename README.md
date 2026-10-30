@@ -16,6 +16,24 @@ with this project; every clone is generated on your machine from your own
 installed copy. When an update is available, Doppel downloads it only from the
 official OpenAI appcast and verifies the vendor signature before installation.
 
+Claude desktop instances use the same launcher, signing, rebuild and rollback
+mechanisms. In **New Instance**, select **Claude**, then choose a name and colour.
+Each instance gets its own desktop profile and Claude Code configuration directory.
+Claude tints colour the tile while preserving the pale star, with light colours shaded for contrast.
+The CLI selects Claude with `doppel --app claude create --name "Claude Personal" --tint F28C28`;
+use the same `--app claude` prefix for list, launch, rebuild, edit and remove.
+
+Google sign-in temporarily routes `claude://` to the initiating instance. Finish
+one sign-in before starting another or rebuilding instances. Doppel restores the original Claude handler
+after the callback, cancellation, timeout or normal quit. Claude's callback and
+nonce validation remain in place.
+
+Update the original `/Applications/Claude.app`, then reopen or rebuild its managed
+instances. Updates inside clones are disabled so they cannot replace their own
+profile routing. ChatGPT's coordinated update feed, Browser assignment, Creator
+Micro assignment and iPhone Remote Access remain ChatGPT-specific. Claude's own
+restrictions on browser pairing with relocated profiles remain in effect.
+
 <p align="center">
   <img src="docs/images/menu-permissions.png" width="820"
        alt="Doppel's menu bar menu with a managed instance's Privacy Permissions submenu open, showing granted microphone access">
