@@ -359,7 +359,8 @@ struct MenuContent: View {
             Divider()
             Menu("Use with Claude Code") {
                 if let status = store.claudeMicroStatus {
-                    Text(status)
+                    // One line per Claude app: the original and each Claude instance.
+                    ForEach(status.components(separatedBy: "\n"), id: \.self) { Text($0) }
                     Divider()
                 }
                 ForEach(1...9, id: \.self) { channel in

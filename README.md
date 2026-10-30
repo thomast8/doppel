@@ -258,6 +258,15 @@ Claude app's Code tab, and setting the channel in the plugin's config.toml. The
 plugin needs Claude Code 2.1.303 or newer, and new Claude Code sessions pick it
 up.
 
+Every Claude app shares that one channel. The original Claude and each Doppel
+Claude instance keep Claude Code settings of their own, so setup installs the
+plugin in each of them, and their sessions share the pad's six agent keys.
+`doppel micro claude` lists each Claude app; one created after setup reads
+"not set up" until you run setup again. Pressing a key for a Claude instance's
+session brings that instance forward, not the exact chat, because the plugin
+looks chats up only in the original app's data. Allow each Claude instance under **Input
+Monitoring** as well.
+
 `rebuild` opens the rebuilt instance when it succeeds, even if the instance was
 closed before the command began. Set `DOPPEL_RELAUNCH=0` for maintenance or QA
 that should rebuild without opening the app. The menu labels this action
