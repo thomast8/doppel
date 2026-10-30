@@ -93,15 +93,32 @@ else
     fail "patching is idempotent" "second patch returned '$SECOND_HASH'"
 fi
 
-MARKERS="$(LC_ALL=C /usr/bin/grep -a -o 'DOPPEL_URL_SCHEME' "$TEST_ASAR" | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
+# BSD grep -o rescans very long ASAR lines; match the same bytes without line buffering.
+count_marker() {
+    /usr/bin/python3 - "$TEST_ASAR" "$1" "${2:-literal}" <<'PYCOUNT'
+import mmap, re, sys
+with open(sys.argv[1], "rb") as source, mmap.mmap(source.fileno(), 0, access=mmap.ACCESS_READ) as data:
+    pattern = sys.argv[2].encode()
+    if sys.argv[3] == "regex":
+        count = sum(1 for _ in re.finditer(pattern, data))
+    else:
+        count, offset = 0, 0
+        while (offset := data.find(pattern, offset)) != -1:
+            count += 1
+            offset += len(pattern)
+    print(count)
+PYCOUNT
+}
+
+MARKERS="$(count_marker 'DOPPEL_URL_SCHEME')"
 if [[ "$MARKERS" == "1" ]]; then
     pass "the runtime now reads the per-instance scheme"
 else
     fail "the runtime now reads the per-instance scheme" "found $MARKERS patch markers"
 fi
 
-OAUTH_MARKERS="$(LC_ALL=C /usr/bin/grep -a -o 'Doppel could not claim codex:// OAuth callback' "$TEST_ASAR" | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
-CALLBACKS="$(LC_ALL=C /usr/bin/grep -a -o -E 'callbackUrl:`codex://connector/oauth_callback`|return`codex://connector/oauth_callback`' "$TEST_ASAR" | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
+OAUTH_MARKERS="$(count_marker 'Doppel could not claim codex:// OAuth callback')"
+CALLBACKS="$(count_marker 'callbackUrl:`codex://connector/oauth_callback`|return`codex://connector/oauth_callback`' regex)"
 if [[ "$OAUTH_MARKERS" == "1" && "$CALLBACKS" == "1" ]]; then
     pass "OAuth claims the shared registered callback only when requested"
 else
@@ -109,8 +126,8 @@ else
         "found $OAUTH_MARKERS ownership markers and $CALLBACKS callback URLs"
 fi
 
-RESTORE_MARKERS="$(LC_ALL=C /usr/bin/grep -a -o 'DOPPEL_URL_HANDLER_HELPER' "$TEST_ASAR" | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
-RESTORE_SPAWNS="$(LC_ALL=C /usr/bin/grep -a -o 'require("node:child_process").spawn(process.env.DOPPEL_URL_HANDLER_HELPER' "$TEST_ASAR" | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
+RESTORE_MARKERS="$(count_marker 'DOPPEL_URL_HANDLER_HELPER')"
+RESTORE_SPAWNS="$(count_marker 'require("node:child_process").spawn(process.env.DOPPEL_URL_HANDLER_HELPER')"
 if [[ "$RESTORE_MARKERS" == "2" && "$RESTORE_SPAWNS" == "1" ]]; then
     pass "a completed callback restores primary codex ownership"
 else
@@ -118,14 +135,14 @@ else
         "found $RESTORE_MARKERS restoration markers and $RESTORE_SPAWNS direct spawn calls"
 fi
 
-MICRO_MARKERS="$(LC_ALL=C /usr/bin/grep -a -o 'process.env.DOPPEL_CODEX_MICRO' "$TEST_ASAR" | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
+MICRO_MARKERS="$(count_marker 'process.env.DOPPEL_CODEX_MICRO')"
 if [[ "$MICRO_MARKERS" == "1" ]]; then
     pass "the clone leaves the Codex Micro pad to the primary"
 else
     fail "the clone leaves the Codex Micro pad to the primary" "found $MICRO_MARKERS Micro gates"
 fi
 
-CHANNEL_GATES="$(LC_ALL=C /usr/bin/grep -a -o 'process.env.DOPPEL_MICRO_CHANNEL' "$TEST_ASAR" | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
+CHANNEL_GATES="$(count_marker 'process.env.DOPPEL_MICRO_CHANNEL')"
 if [[ "$CHANNEL_GATES" == "1" ]]; then
     pass "the pad owner can be limited to one Bluetooth channel"
 else
@@ -134,9 +151,9 @@ fi
 
 # The runtime root moves, the plugin marketplace copy beneath it does not: the
 # Codex CLI only trusts that copy at the real ~/.cache path.
-RUNTIME_ROOTS="$(LC_ALL=C /usr/bin/grep -a -o -E '\(process\.env\.DOPPEL_CODEX_RUNTIMES_ROOT\|\|[A-Za-z_$][A-Za-z0-9_$]*\.default\.join\([A-Za-z_$][A-Za-z0-9_$]*\.default\.homedir\(\),`\.cache`,`codex-runtimes`\)\)' "$TEST_ASAR" | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
-RUNTIME_MARKERS="$(LC_ALL=C /usr/bin/grep -a -o 'DOPPEL_CODEX_RUNTIMES_ROOT' "$TEST_ASAR" | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
-PLUGIN_COPIES="$(LC_ALL=C /usr/bin/grep -a -o -E 'homedir\(\),`\.cache`,`codex-runtimes`,[A-Za-z_$][A-Za-z0-9_$.]*,`plugins`' "$TEST_ASAR" | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
+RUNTIME_ROOTS="$(count_marker '\(process\.env\.DOPPEL_CODEX_RUNTIMES_ROOT\|\|[A-Za-z_$][A-Za-z0-9_$]*\.default\.join\([A-Za-z_$][A-Za-z0-9_$]*\.default\.homedir\(\),`\.cache`,`codex-runtimes`\)\)' regex)"
+RUNTIME_MARKERS="$(count_marker 'DOPPEL_CODEX_RUNTIMES_ROOT')"
+PLUGIN_COPIES="$(count_marker 'homedir\(\),`\.cache`,`codex-runtimes`,[A-Za-z_$][A-Za-z0-9_$.]*,`plugins`' regex)"
 if [[ "$RUNTIME_ROOTS" == "4" && "$RUNTIME_MARKERS" == "4" && "$PLUGIN_COPIES" == "1" ]]; then
     pass "the clone keeps its own Codex runtime but the shared plugin copy"
 else

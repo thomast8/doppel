@@ -7,6 +7,20 @@ import XCTest
 // practice, so this uses the mature one. `app/test.zsh` finds a toolchain that
 // has it, whatever `xcode-select` happens to point at.
 final class UpdateParsingTests: XCTestCase {
+    func testClaudeProfilesAndPermissionsKeepTheirNamespace() {
+        let row = "personal\tPersonal\t/Applications/Personal.app\tinstalled\tF28C28\tclone\n"
+        let chatgpt = InstanceStore.parsePorcelain(row).first!
+        let claude = InstanceStore.parsePorcelain(row, appKind: .claude).first!
+        XCTAssertEqual(chatgpt.id, "personal")
+        XCTAssertEqual(claude.id, "claude/personal")
+        XCTAssertEqual(claude.appKind.cliPrefix + ["launch", claude.name],
+                       ["--app", "claude", "launch", "Personal"])
+        let permission = PermissionIssue.parseStatuses("personal\tPersonal\tmicrophone\tdenied\n", appKind: .claude).first!
+        XCTAssertEqual(permission.instanceID, claude.id)
+        XCTAssertEqual(permission.appKind, .claude)
+        XCTAssertFalse(claude.usesBuiltInBrowser)
+    }
+
     func testCreatorMicroAssignmentParsing() {
         XCTAssertEqual(InstanceStore.parseCreatorMicroOwner("owner\tchatgpt-veridue\n"), "chatgpt-veridue")
         XCTAssertNil(InstanceStore.parseCreatorMicroOwner("owner\t\n"))

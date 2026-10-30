@@ -62,6 +62,8 @@ while [[ ! -e "$DOPPEL_QA_GATE" ]]; do /bin/sleep .05; done
 exec_clone_binary "$DOPPEL_QA_APP" "$@"
 ''')
     env = {**os.environ, **values, 'DOPPEL_HOME': str(home), 'DOPPEL_DEV': '1',
+           'DOPPEL_APP_KIND': 'chatgpt', 'PRIMARY_EXECUTABLE': 'ChatGPT',
+           'DEFAULT_DOPPEL_HOME': str(home), 'AGENT_HOME': values['DOPPEL_CODEX_HOME'],
            'ROUTER_CLI': str(cli), 'PRIMARY_APP': '/Applications/ChatGPT.app',
            'PRIMARY_BUNDLE_ID': 'com.openai.codex', 'URL_HANDLER_HELPER': '/usr/bin/true',
            'DOPPEL_QA_APP': str(app), 'DOPPEL_QA_RUNTIME_FILE': str(root / 'runtime-pid'),

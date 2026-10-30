@@ -11,6 +11,7 @@ struct PermissionIssue: Hashable, Identifiable {
     let instanceName: String
     let permission: String
     let status: String
+    var appKind: InstanceApp = .chatgpt
 
     var id: String { "\(instanceID):\(permission)" }
 
@@ -85,15 +86,15 @@ struct PermissionIssue: Hashable, Identifiable {
         }
     }
 
-    static func parseStatuses(_ output: String) -> [PermissionIssue] {
+    static func parseStatuses(_ output: String, appKind: InstanceApp = .chatgpt) -> [PermissionIssue] {
         output.split(separator: "\n").compactMap { line in
             let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
             guard fields.count == 4 else { return nil }
             return PermissionIssue(
-                instanceID: String(fields[0]),
+                instanceID: appKind.instanceID(String(fields[0])),
                 instanceName: String(fields[1]),
                 permission: String(fields[2]),
-                status: String(fields[3]))
+                status: String(fields[3]), appKind: appKind)
         }
     }
 

@@ -4,6 +4,7 @@ import AppKit
 /// Form state lives in an ObservableObject because the SwiftUI @State macro
 /// is unavailable under a Command Line Tools-only toolchain.
 final class CreateForm: ObservableObject {
+    @Published var appKind = InstanceApp.chatgpt
     @Published var name = ""
     @Published var color = Color(hex: "F28C28")
     @Published var customHue: Double = 0.08
@@ -29,6 +30,7 @@ struct CreateInstanceView: View {
     @Environment(\.dismiss) private var dismiss
 
     private var isEditing: Bool { editing != nil }
+    private var primaryInstalled: Bool { form.appKind == .chatgpt ? store.primaryInstalled : store.claudeInstalled }
 
     private enum Radius {
         static let panel: CGFloat = 20
@@ -42,13 +44,21 @@ struct CreateInstanceView: View {
 
     private var canCreate: Bool {
         !trimmedName.isEmpty && !form.creating && !store.engineOperationBusy &&
-            (store.primaryInstalled || isEditing)
+            (primaryInstalled || isEditing)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             header
-            if !store.primaryInstalled && !isEditing { missingPrimaryNotice }
+            if !isEditing {
+                Picker("App", selection: $form.appKind) {
+                    ForEach(InstanceApp.allCases, id: \.self) { kind in
+                        Text(kind.label).tag(kind)
+                    }
+                }
+                .disabled(form.creating)
+            }
+            if !primaryInstalled && !isEditing { missingPrimaryNotice }
             nameField
             colourSection
             if let errorMessage = form.errorMessage { errorRow(errorMessage) }
@@ -60,8 +70,13 @@ struct CreateInstanceView: View {
         .onAppear {
             // Load what the instance actually is, so the form never misreports
             // its colour or name back to the user.
-            guard let editing, !form.loaded else { return }
+            guard !form.loaded else { return }
             form.loaded = true
+            guard let editing else {
+                if !store.primaryInstalled && store.claudeInstalled { form.appKind = .claude }
+                return
+            }
+            form.appKind = editing.appKind
             form.name = editing.name
             if editing.tint == "original" {
                 form.useOriginal = true
@@ -115,7 +130,7 @@ struct CreateInstanceView: View {
                     .background(RoundedRectangle(cornerRadius: Radius.field, style: .continuous)
                         .fill(.black.opacity(0.06)))
             } else {
-                TextField("", text: $form.name, prompt: Text("ChatGPT Personal").foregroundStyle(.tertiary))
+                TextField("", text: $form.name, prompt: Text("\(form.appKind.label) Personal").foregroundStyle(.tertiary))
                     .textFieldStyle(.plain)
                     .font(.system(size: 15))
                     .padding(.horizontal, 13)
@@ -141,9 +156,9 @@ struct CreateInstanceView: View {
         HStack(spacing: 12) {
             Text(isEditing
                  ? "The account and its chats stay where they are."
-                 : (store.primaryInstalled
+                 : (primaryInstalled
                     ? "Everything else is derived from the name."
-                    : "Install ChatGPT first."))
+                    : "Install \(form.appKind.label) first."))
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer(minLength: 8)
@@ -168,15 +183,15 @@ struct CreateInstanceView: View {
 
     private var missingPrimaryNotice: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("ChatGPT isn't installed", systemImage: "exclamationmark.triangle.fill")
+            Label("\(form.appKind.label) isn't installed", systemImage: "exclamationmark.triangle.fill")
                 .font(.callout.weight(.medium))
             Text("Instances are built from your own copy. Install it, then come back.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 10) {
-                glassButton("Get ChatGPT", prominent: false) {
-                    NSWorkspace.shared.open(InstanceStore.primaryDownloadURL)
+                glassButton("Get \(form.appKind.label)", prominent: false) {
+                    NSWorkspace.shared.open(form.appKind.downloadURL)
                 }
                 glassButton("Check again", prominent: false) { store.reload() }
             }
@@ -264,7 +279,7 @@ struct CreateInstanceView: View {
         } else {
             form.creating = true
             form.errorMessage = nil
-            store.create(name: trimmedName, tintHex: tint, completion: finish)
+            store.create(name: trimmedName, tintHex: tint, appKind: form.appKind, completion: finish)
         }
     }
 }

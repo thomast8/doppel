@@ -25,6 +25,8 @@ readonly SIBLING_SLUG="doppel-edge-sibling-$$"
 readonly SIBLING_NAME="Doppel Edge Sibling $$"
 readonly APPS="$SCRATCH/Applications"
 export DOPPEL_RELAUNCH=0
+# The isolated function probes bypass the CLI's shared vendor initialization.
+export PRIMARY_EXECUTABLE=ChatGPT
 
 typeset -i PASSED=0 FAILED=0
 pass() { print -r -- "  ✓ $1"; (( PASSED += 1 )); return 0 }
@@ -61,6 +63,7 @@ write_config_file() {
         printf 'DOPPEL_CODEX_HOME=%q\n' "$codex"
         printf 'DOPPEL_TINT=%q\n' "$tint"
     } > "$dir/instance-config.zsh"
+    /bin/cp "$REPO_ROOT/engine/vendor.zsh" "$REPO_ROOT/engine/claude-profile.cjs" "$dir/"
 }
 
 set_profile_root() {
@@ -287,6 +290,10 @@ check "the read-only probe resumes and exits" "$(/bin/ps -p "$PROBE_PID" -o stat
 check "the checker is never sent an app quit event" "$(/bin/cat "$PROBE_QUIT_LOG")" ""
 check "a stopped app is left alone" "$(/bin/ps -p "$NORMAL_PID" -o stat= | /usr/bin/tr -d ' ' | /usr/bin/cut -c1)" "T"
 check "another instance's probe is left alone" "$(/bin/ps -p "$SIBLING_PROBE_PID" -o stat= | /usr/bin/tr -d ' ' | /usr/bin/cut -c1)" "T"
+if [[ "$(/bin/ps -p "$PROBE_PID" -o comm= 2>/dev/null)" == "$PROBE_APP/Contents/MacOS/ChatGPT" ]]; then
+    # A failed assertion must not strand our stopped probe in the queue's process group.
+    /bin/kill -CONT "$PROBE_PID" 2>/dev/null || true
+fi
 /bin/kill -9 "$NORMAL_PID" "$SIBLING_PROBE_PID" 2>/dev/null || true
 
 print -r -- ""
@@ -632,7 +639,7 @@ done
 GUARD_OUT="$(DOPPEL_NO_ALERT=1 DOPPEL_ASSET_ROOT="$ENGINE_DIR" \
     DOPPEL_STATE_ROOT="$SCRATCH/engine-state" DOPPEL_PRIMARY_APP="$SPOOF" \
     /bin/zsh "$REPO_ROOT/engine/doppel-engine.zsh" install "$SCRATCH/EngineProbe.app" 2>&1)"
-[[ "$GUARD_OUT" == *"not Apple-anchored OpenAI-signed code"* ]] \
+[[ "$GUARD_OUT" == *"does not have the expected Apple-anchored vendor signature"* ]] \
     && pass "and the engine's own copy of the check refuses it too" \
     || fail "and the engine's own copy of the check refuses it too" "got: $GUARD_OUT"
 
@@ -770,6 +777,7 @@ GUARD_FIXTURE="$SCRATCH/Doppel.app/Contents/Resources/doppel/bin"
 /bin/mkdir -p "$GUARD_FIXTURE" "${GUARD_FIXTURE:h}/engine"
 /bin/cp "$CLI" "$GUARD_FIXTURE/doppel"
 /bin/cp "$REPO_ROOT/engine/doppel-engine.zsh" "$REPO_ROOT/engine/patch-deep-link.py" \
+    "$REPO_ROOT/engine/vendor.zsh" "$REPO_ROOT/engine/claude-profile.cjs" "$REPO_ROOT/engine/claude-sessions.py" \
     "${GUARD_FIXTURE:h}/engine/"
 /bin/chmod 755 "$GUARD_FIXTURE/doppel"
 # First prove the probe can detect a leak at all: from a checkout path the
@@ -869,9 +877,12 @@ if [[ -s "$PIN" ]]; then
     else
         pass "stripping the key and resealing ad hoc is rejected"
     fi
-    "$CLI" rebuild "$NAME" >/dev/null 2>&1
-    /usr/bin/codesign --verify --deep --strict "$APP" >/dev/null 2>&1 \
-        && pass "and a rebuild puts it right" || fail "and a rebuild puts it right" "still invalid"
+    run_real rebuild "$NAME"
+    if (( STATUS == 0 )) && /usr/bin/codesign --verify --deep --strict -R "=$REQUIREMENT" "$APP" >/dev/null 2>&1; then
+        pass "and a rebuild puts it right"
+    else
+        fail "and a rebuild puts it right" "rebuild status $STATUS: $OUT"
+    fi
 else
     fail "a requirement is recorded outside the bundle" "nothing at $PIN (is a signing identity set up?)"
 fi

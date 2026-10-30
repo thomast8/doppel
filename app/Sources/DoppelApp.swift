@@ -15,6 +15,7 @@ struct DoppelApp: App {
         let headlessCommand = arguments.contains("--login-item")
             || arguments.contains("--render-ui")
             || arguments.contains("--remote-access-qa")
+            || arguments.contains("--create-instance-qa")
         doppelUpdatesEnabled = !(Bundle.main.object(
             forInfoDictionaryKey: "SUPublicEDKey") as? String ?? "").isEmpty
         updaterController = DoppelUpdater(
@@ -60,6 +61,8 @@ struct DoppelApp: App {
         if let index = arguments.firstIndex(of: "--remote-access-qa"), index + 1 < arguments.count {
             let profileID = arguments[index + 1]
             UIRenderer.scheduleRemoteAccessQA(profileID: profileID)
+        } else if arguments.contains("--create-instance-qa") {
+            UIRenderer.scheduleCreateInstanceQA()
         }
 
         // Deterministic production-like QA hook. It drives the same Sparkle
@@ -281,17 +284,23 @@ struct MenuContent: View {
                     .disabled(engineBusy)
                 Button("Rebuild & Reopen") { store.rebuild(instance) }
                     .disabled(engineBusy)
+                if instance.appKind == .claude {
+                    Button("Import Existing Code History…") { store.importClaudeSessions(instance) }
+                        .disabled(engineBusy)
+                }
                 Button("Rename or Recolour…") {
                     openWindow(id: "edit-instance", value: instance.id)
                     NSApp.activate(ignoringOtherApps: true)
                 }
                 .disabled(engineBusy)
-                Button("Remote Access…") {
-                    openWindow(id: "remote-access", value: instance.id)
-                    NSApp.activate(ignoringOtherApps: true)
+                if instance.appKind == .chatgpt {
+                    Button("Remote Access…") {
+                        openWindow(id: "remote-access", value: instance.id)
+                        NSApp.activate(ignoringOtherApps: true)
+                    }
+                    .disabled(engineBusy)
                 }
-                .disabled(engineBusy)
-                if !instance.usesBuiltInBrowser {
+                if instance.appKind == .chatgpt && !instance.usesBuiltInBrowser {
                     Menu("Fallback Engine") {
                         Text("Only if a ChatGPT update breaks this clone.")
                         Button("Run on Official ChatGPT Instead") {
@@ -333,7 +342,7 @@ struct MenuContent: View {
                 Text("No Doppel instance assigned")
             }
             Divider()
-            ForEach(store.instances) { instance in
+            ForEach(store.instances.filter { $0.appKind == .chatgpt }) { instance in
                 Button {
                     store.assignCreatorMicro(to: instance)
                 } label: {
@@ -423,10 +432,10 @@ struct MenuContent: View {
                     // than pointing the registration at a path that is not
                     // there, so offering them would be a dead end.
                     let eligible = store.instances.filter {
-                        $0.installed && status.instancesWithBrowserHost.contains($0.name)
+                        $0.appKind == .chatgpt && $0.installed && status.instancesWithBrowserHost.contains($0.name)
                     }
                     let hidden = store.instances.filter {
-                        $0.installed && !status.instancesWithBrowserHost.contains($0.name)
+                        $0.appKind == .chatgpt && $0.installed && !status.instancesWithBrowserHost.contains($0.name)
                     }
                     // Each browser is assigned on its own, because each has its
                     // own registration and so two instances can browse at the
@@ -578,8 +587,10 @@ struct MenuContent: View {
         alert.informativeText = """
             The app moves to the Trash and can be rebuilt at any time.
             Its account data (chats and login) is kept unless you tick below.
-            Remote Access is disabled first, interrupting any remote tasks.
             """
+        if instance.appKind == .chatgpt {
+            alert.informativeText += "\nRemote Access is disabled first, interrupting any remote tasks."
+        }
         alert.alertStyle = .warning
         let purge = NSButton(checkboxWithTitle: "Also move this account's data to the Trash", target: nil, action: nil)
         purge.state = .off

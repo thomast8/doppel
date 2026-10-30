@@ -1,0 +1,96 @@
+"""Test account-scoped history copying against real files, without vendor accounts."""
+import importlib.util
+import json
+from pathlib import Path
+import tempfile
+
+spec = importlib.util.spec_from_file_location('history_import', Path(__file__).resolve().parents[1] / 'engine/claude-sessions.py')
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+account = '11111111-1111-4111-8111-111111111111'
+other = '22222222-2222-4222-8222-222222222222'
+org = '33333333-3333-4333-8333-333333333333'
+session = '44444444-4444-4444-8444-444444444444'
+existing = '55555555-5555-4555-8555-555555555555'
+
+
+def fixture(root, transcript=True):
+    roots = [root / name for name in ['original', 'original-code', 'instance', 'instance-code']]
+    source, code, target, target_code = roots
+    for profile in [source, target]:
+        (profile / 'claude-code-sessions' / account / org).mkdir(parents=True)
+    scope = source / 'claude-code-sessions' / account / org
+    destination = target / 'claude-code-sessions' / account / org
+    record = dict(sessionId='local_' + session, cliSessionId=session, cwd=str(root), title='Old work')
+    (scope / ('local_' + session + '.json')).write_text(json.dumps(record))
+    keep = dict(sessionId='local_' + existing, cliSessionId=existing, title='New work in this instance')
+    (destination / ('local_' + existing + '.json')).write_text(json.dumps(keep))
+    (scope / ('local_' + existing + '.json')).write_text(json.dumps({**keep, 'title': 'Older source title'}))
+    foreign = source / 'claude-code-sessions' / other / org
+    foreign.mkdir(parents=True)
+    (foreign / ('local_' + session + '.json')).write_text(json.dumps(record))
+    (code / 'projects/project').mkdir(parents=True)
+    if transcript:
+        (code / 'projects/project' / (session + '.jsonl')).write_text('{"message":"Old transcript"}\n')
+    sidecar = code / 'projects/project' / session / 'subagents'
+    sidecar.mkdir(parents=True)
+    (sidecar / 'agent.jsonl').write_text('{"message":"Subagent history"}\n')
+    target_code.mkdir()
+    (code / '.credentials.json').write_text('source credential sentinel')
+    (target_code / '.credentials.json').write_text('destination credential sentinel')
+    return roots, scope, destination
+
+
+def refuses(call):
+    try:
+        call()
+    except (module.ImportFailure, OSError):
+        return
+    raise AssertionError('Unsafe import was accepted')
+
+
+with tempfile.TemporaryDirectory(prefix='doppel-history-qa-') as temporary:
+    root = Path(temporary)
+    roots, source, destination = fixture(root / 'happy')
+    original = (source / ('local_' + session + '.json')).read_bytes()
+    plan = module.plan_import(*roots, active=set())
+    assert (plan['sessions'], plan['existing'], plan['kept_sessions']) == (1, 1, 1)
+    assert not (destination / ('local_' + session + '.json')).exists(), 'Planning wrote session data'
+    module.apply_plan(plan, root / 'audit')
+    assert (source / ('local_' + session + '.json')).read_bytes() == original
+    assert (destination / ('local_' + session + '.json')).read_bytes() == original
+    assert json.loads((destination / ('local_' + existing + '.json')).read_text())['title'] == 'New work in this instance'
+    assert not (roots[2] / 'claude-code-sessions' / other).exists(), 'Another account was copied'
+    assert (roots[3] / '.credentials.json').read_text() == 'destination credential sentinel'
+    assert (roots[3] / 'projects/project' / session / 'subagents/agent.jsonl').exists()
+    assert module.plan_import(*roots, active=set())['sessions'] == 0, 'Re-import is not idempotent'
+
+    roots, source, destination = fixture(root / 'active')
+    refuses(lambda: module.plan_import(roots[0], roots[1], roots[2], Path('.'), active=set()))
+    refuses(lambda: module.plan_import(*roots, active={session}))
+    assert not (destination / ('local_' + session + '.json')).exists()
+
+    roots, source, destination = fixture(root / 'missing', transcript=False)
+    plan = module.plan_import(*roots, active=set())
+    assert plan['sessions'] == 0 and plan['missing_transcripts'] == 1
+
+    roots, source, destination = fixture(root / 'symlink')
+    (roots[1] / 'projects/project' / session / 'outside').symlink_to(root / 'happy', target_is_directory=True)
+    refuses(lambda: module.plan_import(*roots, active=set()))
+
+    roots, source, destination = fixture(root / 'changed')
+    plan = module.plan_import(*roots, active=set())
+    (roots[1] / 'projects/project' / (session + '.jsonl')).write_text('changed source transcript')
+    refuses(lambda: module.apply_plan(plan, root / 'changed-audit'))
+    assert not (destination / ('local_' + session + '.json')).exists()
+
+    roots, source, destination = fixture(root / 'collision')
+    plan = module.plan_import(*roots, active=set())
+    conflict = roots[3] / 'projects/project' / (session + '.jsonl')
+    conflict.parent.mkdir(parents=True)
+    conflict.write_text('new destination work')
+    refuses(lambda: module.apply_plan(plan, root / 'collision-audit'))
+    assert conflict.read_text() == 'new destination work'
+    assert not (destination / ('local_' + session + '.json')).exists()
+
+print('Claude history QA passed: account isolation, existing work, credentials, sidecars, idempotence, active sessions, missing history, symlinks, source changes and collisions')

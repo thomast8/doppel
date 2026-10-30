@@ -23,8 +23,8 @@ readonly UNIVERSAL="${DOPPEL_UNIVERSAL:-0}"
 # Developer ID build; from there notarisation is only notarytool plus stapling.
 # Ad-hoc builds can still use EdDSA-verified Sparkle updates for personal use.
 readonly SIGN_ID="${DOPPEL_SIGN_ID:--}"
-readonly DOPPEL_VERSION="${DOPPEL_VERSION:-2.0.5}"
-readonly DOPPEL_BUILD="${DOPPEL_BUILD:-40}"
+readonly DOPPEL_VERSION="${DOPPEL_VERSION:-2.1.0}"
+readonly DOPPEL_BUILD="${DOPPEL_BUILD:-41}"
 readonly DOPPEL_BUNDLE_ID="${DOPPEL_BUNDLE_ID:-ai.doppel.menubar}"
 # A beta version embeds the beta feed, so the standard packaging path keeps a
 # beta install on later betas instead of the stable 1.x feed.
@@ -95,8 +95,9 @@ readonly PAYLOAD="$APP/Contents/Resources/doppel"
 /bin/mkdir -p "$PAYLOAD/bin" "$PAYLOAD/engine" "$PAYLOAD/prebuilt"
 /bin/cp "$REMOTE_BINARY" "$PAYLOAD/prebuilt/DoppelRemoteHelper"
 /bin/cp "$REPO_ROOT/bin/doppel" "$REPO_ROOT/bin/doppel-signing" "$PAYLOAD/bin/"
-/bin/cp "$REPO_ROOT/engine/doppel-engine.zsh" "$PAYLOAD/engine/"
-/bin/cp "$REPO_ROOT/engine/patch-deep-link.py" "$PAYLOAD/engine/"
+/bin/cp "$REPO_ROOT/engine/doppel-engine.zsh" "$REPO_ROOT/engine/vendor.zsh" \
+    "$REPO_ROOT/engine/claude-profile.cjs" "$PAYLOAD/engine/"
+/bin/cp "$REPO_ROOT/engine/patch-deep-link.py" "$REPO_ROOT/engine/claude-sessions.py" "$PAYLOAD/engine/"
 /bin/chmod 755 "$PAYLOAD/bin/doppel" "$PAYLOAD/bin/doppel-signing" "$PAYLOAD/engine/doppel-engine.zsh"
 
 print -r -- "Compiling instance helpers…"
