@@ -361,6 +361,20 @@ final class InstanceStore: ObservableObject {
         }
     }
 
+    func importClaudeSessions(_ instance: Instance) {
+        guard instance.appKind == .claude else { return }
+        let alert = NSAlert()
+        alert.messageText = "Import existing Code history?"
+        alert.informativeText = "Sign into the intended account and open Code first. Doppel will copy matching local sessions from the original Claude app, keep this instance’s current sessions, and reopen it. Finish any running work before continuing."
+        alert.addButton(withTitle: "Import and Reopen")
+        alert.addButton(withTitle: "Cancel")
+        guard present(alert) == .alertFirstButtonReturn else { return }
+        runCLI(instance.appKind.cliPrefix + ["import-sessions", instance.name], busyKey: instance.id,
+               successTitle: "Code history import finished") { [weak self] failure in
+            if failure == nil { self?.reload() }
+        }
+    }
+
     /// Mirrors the CLI's global engine-operation lock so the menu avoids
     /// offering operations that would only be refused as concurrent work.
     var engineOperationBusy: Bool {
@@ -951,6 +965,7 @@ final class InstanceStore: ObservableObject {
     /// window is still on screen and shows the message itself.
     private func runCLI(_ arguments: [String], busyKey: String,
                         reportFailure: Bool = true,
+                        successTitle: String? = nil,
                         completion: (@MainActor (String?) -> Void)? = nil) {
         guard let cli = discoveredCLI else {
             if reportFailure { report(Self.missingCLIMessage, for: "cli") }
@@ -969,6 +984,13 @@ final class InstanceStore: ObservableObject {
                     if reportFailure { self.report(failure, for: busyKey) }
                 } else {
                     self.clearReport(for: busyKey)
+                    if let successTitle, case .success(let output) = result {
+                        let alert = NSAlert()
+                        alert.messageText = successTitle
+                        alert.informativeText = output.trimmingCharacters(in: .whitespacesAndNewlines)
+                        alert.addButton(withTitle: "OK")
+                        _ = self.present(alert)
+                    }
                 }
                 completion?(failure)
             }

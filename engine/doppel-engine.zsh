@@ -501,7 +501,7 @@ build_instance() {
         fail_closed "Embedding the engine executables failed."
     /bin/cp "$ROUTER_CLI" "$embedded/bin/doppel" || \
         fail_closed "Embedding the engine router failed."
-    /bin/cp "$ROUTER_ENGINE" "$ROUTER_PATCHER" "$ASSET_ROOT/vendor.zsh" "$ASSET_ROOT/claude-profile.cjs" "$embedded/engine/" || \
+    /bin/cp "$ROUTER_ENGINE" "$ROUTER_PATCHER" "$ASSET_ROOT/engine/claude-sessions.py" "$ASSET_ROOT/vendor.zsh" "$ASSET_ROOT/claude-profile.cjs" "$embedded/engine/" || \
         fail_closed "Embedding the router support files failed."
     /bin/chmod 755 "$embedded/bin/doppel-launcher" "$embedded/bin/doppel-alert" \
         "$embedded/bin/doppel-url-handler" "$embedded/bin/doppel" \
@@ -640,7 +640,7 @@ restyle_instance() {
             fail_closed "Updating the URL-handler repair helper failed."
         /bin/cp "$ROUTER_CLI" "$embedded/bin/doppel" || \
             fail_closed "Updating the embedded engine router failed."
-        /bin/cp "$ROUTER_ENGINE" "$ROUTER_PATCHER" "$ASSET_ROOT/vendor.zsh" "$ASSET_ROOT/claude-profile.cjs" "$embedded/engine/" || \
+        /bin/cp "$ROUTER_ENGINE" "$ROUTER_PATCHER" "$ASSET_ROOT/engine/claude-sessions.py" "$ASSET_ROOT/vendor.zsh" "$ASSET_ROOT/claude-profile.cjs" "$embedded/engine/" || \
             fail_closed "Updating the router support files failed."
         /bin/chmod 755 "$embedded/bin/doppel-url-handler" "$embedded/bin/doppel" \
             "$embedded/engine/doppel-engine.zsh"

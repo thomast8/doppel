@@ -777,7 +777,7 @@ GUARD_FIXTURE="$SCRATCH/Doppel.app/Contents/Resources/doppel/bin"
 /bin/mkdir -p "$GUARD_FIXTURE" "${GUARD_FIXTURE:h}/engine"
 /bin/cp "$CLI" "$GUARD_FIXTURE/doppel"
 /bin/cp "$REPO_ROOT/engine/doppel-engine.zsh" "$REPO_ROOT/engine/patch-deep-link.py" \
-    "$REPO_ROOT/engine/vendor.zsh" "$REPO_ROOT/engine/claude-profile.cjs" \
+    "$REPO_ROOT/engine/vendor.zsh" "$REPO_ROOT/engine/claude-profile.cjs" "$REPO_ROOT/engine/claude-sessions.py" \
     "${GUARD_FIXTURE:h}/engine/"
 /bin/chmod 755 "$GUARD_FIXTURE/doppel"
 # First prove the probe can detect a leak at all: from a checkout path the

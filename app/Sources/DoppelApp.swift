@@ -284,6 +284,10 @@ struct MenuContent: View {
                     .disabled(engineBusy)
                 Button("Rebuild & Reopen") { store.rebuild(instance) }
                     .disabled(engineBusy)
+                if instance.appKind == .claude {
+                    Button("Import Existing Code History…") { store.importClaudeSessions(instance) }
+                        .disabled(engineBusy)
+                }
                 Button("Rename or Recolour…") {
                     openWindow(id: "edit-instance", value: instance.id)
                     NSApp.activate(ignoringOtherApps: true)

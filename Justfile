@@ -5,6 +5,7 @@ test:
     python3 ./qa/launcher.py
     python3 ./qa/contents.py
     python3 ./qa/creator-micro.py
+    python3 ./qa/claude-sessions.py
     ./qa/release-notes.zsh
 
 qa:

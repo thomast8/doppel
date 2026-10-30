@@ -225,7 +225,7 @@ install_router_assets() {
     /bin/cp "$ENGINE_SRC/doppel-engine.zsh" "$ENGINE_SRC/vendor.zsh" "$ENGINE_SRC/claude-profile.cjs" "$dir/"
     /bin/cp "$DOPPEL_CLI_PATH" "$dir/bin/doppel"
     /bin/cp "$ENGINE_SRC/doppel-engine.zsh" "$ENGINE_SRC/vendor.zsh" "$ENGINE_SRC/claude-profile.cjs" "$dir/engine/"
-    /bin/cp "$ENGINE_SRC/patch-deep-link.py" "$dir/engine/patch-deep-link.py"
+    /bin/cp "$ENGINE_SRC/patch-deep-link.py" "$ENGINE_SRC/claude-sessions.py" "$dir/engine/"
     /bin/chmod 755 "$dir/doppel-engine.zsh" "$dir/bin/doppel" \
         "$dir/engine/doppel-engine.zsh"
 }
@@ -2093,6 +2093,58 @@ cmd_edit() {
         fi
     fi
     print -r -- "updated: $new_app"
+}
+
+run_claude_history_import() {
+    local dir="$1" mode="$2" profile code
+    profile="$(config_value "$dir" DOPPEL_PROFILE_ROOT)"
+    code="$(config_value "$dir" DOPPEL_CLAUDE_CONFIG_DIR)"
+    [[ "$profile" == /* && "$code" == /* ]] || die "the Claude profile and Code history directories must be absolute paths"
+    local -a arguments
+    arguments=("$mode" "$HOME/Library/Application Support/Claude" "$HOME/.claude" \
+        "$profile" "$code")
+    [[ "$mode" != apply ]] || arguments+=("$DOPPEL_HOME/state/imports/${dir:t}")
+    /usr/bin/python3 "$ENGINE_SRC/claude-sessions.py" "$arguments[@]"
+}
+
+cmd_import_sessions() {
+    [[ "$DOPPEL_APP_KIND" == claude ]] || die "Code history import is available for Claude instances"
+    local target="" dry_run=0 dir
+    while (( $# )); do
+        case "$1" in
+            --dry-run) dry_run=1 ;;
+            -*) die "unknown import option: $1" ;;
+            *) [[ -z "$target" ]] || die "choose one instance to import into"; target="$1" ;;
+        esac
+        shift
+    done
+    [[ -n "$target" ]] || die "usage: doppel --app claude import-sessions <name> [--dry-run]"
+    if (( dry_run )); then
+        dir="$(instance_dir_for "$target")"
+        run_claude_history_import "$dir" plan
+    else
+        with_iab_operation_lock cmd_import_sessions_apply "$target"
+    fi
+}
+
+cmd_import_sessions_apply() {
+    require_claude_auth_idle
+    local dir app bundle plan was_running=0 outcome=0
+    dir="$(instance_dir_for "$1")"
+    app="$(app_path_for "$dir")"
+    bundle="$(config_value "$dir" DOPPEL_BUNDLE_ID)"
+    plan="$(run_claude_history_import "$dir" plan)" || return 1
+    if [[ "$(print -r -- "$plan" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["sessions"])')" == 0 ]]; then
+        print -r -- "No missing local Code sessions with available transcripts were found."
+        return 0
+    fi
+    clone_instance_is_running "$dir" && was_running=1
+    quit_instance "$app" "$bundle" "$1"
+    run_claude_history_import "$dir" apply || outcome=$?
+    if (( was_running )); then
+        launch_clone_instance "$dir" >/dev/null || die "Claude could not reopen after the history import. Launch it again from Doppel."
+    fi
+    return "$outcome"
 }
 
 cmd_rebuild() {
@@ -4070,7 +4122,7 @@ if [[ "${1:-}" == "__iab-worker" ]]; then
         cmd_create|cmd_rebuild|cmd_edit) require_claude_auth_idle ;;
     esac
     case "$IAB_WORKER_OPERATION" in
-        cmd_auth_claim|cmd_auth_release|cmd_create|cmd_launch|cmd_route_launch|cmd_route_launch_in_place|cmd_rebuild|cmd_edit|cmd_remove|cmd_browser_assign|cmd_browser_release|cmd_micro_change|cmd_update_apply)
+        cmd_import_sessions_apply|cmd_auth_claim|cmd_auth_release|cmd_create|cmd_launch|cmd_route_launch|cmd_route_launch_in_place|cmd_rebuild|cmd_edit|cmd_remove|cmd_browser_assign|cmd_browser_release|cmd_micro_change|cmd_update_apply)
             "$IAB_WORKER_OPERATION" "$@"
             exit $?
             ;;
@@ -4100,6 +4152,7 @@ case "${1:-}" in
     launch) [[ $# -eq 2 ]] || die "usage: doppel launch <name>"; with_iab_operation_lock cmd_launch "$2" ;;
     rebuild) [[ $# -eq 2 ]] || die "usage: doppel rebuild <name>"; with_iab_operation_lock cmd_rebuild "$2" ;;
     edit) shift; with_iab_operation_lock cmd_edit "$@" ;;
+    import-sessions) shift; cmd_import_sessions "$@" ;;
     remove) shift; with_iab_operation_lock cmd_remove "$@" ;;
     update) shift; cmd_update "$@" ;;
     permissions) shift; cmd_permissions "$@" ;;
@@ -4108,5 +4161,5 @@ case "${1:-}" in
     native-tools) shift; cmd_native_tools "$@" ;;
     remote) shift; cmd_remote "$@" ;;
     prune) shift; [[ $# -le 1 ]] || die "usage: doppel prune [<name>]"; cmd_prune "${1:-}" ;;
-    *) die "usage: doppel [--app chatgpt|claude] {create|list|launch|rebuild|edit|remove|update|permissions|browser|micro|native-tools|remote|prune} ..." ;;
+    *) die "usage: doppel [--app chatgpt|claude] {create|list|launch|rebuild|edit|import-sessions|remove|update|permissions|browser|micro|native-tools|remote|prune} ..." ;;
 esac

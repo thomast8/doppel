@@ -23,6 +23,18 @@ Claude tints colour the tile while preserving the pale star, with light colours 
 The CLI selects Claude with `doppel --app claude create --name "Claude Personal" --tint F28C28`;
 use the same `--app claude` prefix for list, launch, rebuild, edit and remove.
 
+Code history is local to each desktop profile. After signing in and opening Code,
+choose **Import Existing Code History…** to copy sessions from the same account
+and workspace in the original Claude app. This keeps new sessions already in the
+instance, copies no browser login storage or scheduled-task settings, and leaves
+the originals in place. Missing transcripts are reported; missing working folders
+must be restored before continuing those sessions. The CLI equivalent is
+`doppel --app claude import-sessions "Claude Personal"`; add `--dry-run` to preview
+the counts without changing anything.
+Working folders and worktree leases stay with the original profile. If Claude
+creates a new worktree when you resume an imported conversation, check the old
+folder for uncommitted work before continuing.
+
 Google sign-in temporarily routes `claude://` to the initiating instance. Finish
 one sign-in before starting another or rebuilding instances. Doppel restores the original Claude handler
 after the callback, cancellation, timeout or normal quit. Claude's callback and
@@ -123,7 +135,7 @@ the official window, so it never asks.
 
 ### iPhone Remote Access
 
-Doppel 2.0.5 is available on the [stable release page](https://github.com/thomast8/doppel/releases/tag/v2.0.5). Download the ZIP, quit Doppel and install its `Doppel.app` in place of your existing menu app. Your profile data and remote connections are retained. Existing installations can also use Check for Updates. Run `doppel prune` once to clear update copies left by earlier versions.
+Doppel 2.1.0 is available on the [stable release page](https://github.com/thomast8/doppel/releases/tag/v2.1.0). Download the ZIP, quit Doppel and install its `Doppel.app` in place of your existing menu app. Your profile data and remote connections are retained. Existing installations can also use Check for Updates. Choose Claude in New Instance to add a Claude desktop profile.
 
 Open a profile's **Remote Access…** menu item. Choose an assigned private Mac
 address, save the network, and sign in to the intended ChatGPT account using the
