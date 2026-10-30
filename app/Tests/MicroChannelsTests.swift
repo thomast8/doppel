@@ -11,6 +11,13 @@ final class MicroChannelsTests: XCTestCase {
         XCTAssertEqual(state.holder(of: 5), .free)
     }
 
+    func testThePadHasThreeChannels() {
+        XCTAssertEqual(MicroChannels.all, 1...3, "the Creator Micro 2 pairs as three Bluetooth devices")
+        let state = MicroChannels.parse("instance\told\t7\nclaude\t4\n")
+        XCTAssertTrue(state.instances.isEmpty, "a channel the pad does not have is no assignment")
+        XCTAssertEqual(state.claude, .off)
+    }
+
     func testClaudeStates() {
         XCTAssertEqual(MicroChannels.parse("claude\toff\n").claude, .off)
         XCTAssertEqual(MicroChannels.parse("claude\tany\n").claude, .everyChannel)

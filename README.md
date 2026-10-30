@@ -24,7 +24,8 @@ The CLI selects Claude with `doppel --app claude create --name "Claude Personal"
 use the same `--app claude` prefix for list, launch, rebuild, edit and remove.
 
 Code history is local to each desktop profile. After signing in and opening Code,
-choose **Import Existing Code History…** to copy sessions from the same account
+open the instance window from the panel and choose
+**Import…** under Maintenance to copy sessions from the same account
 and workspace in the original Claude app. This keeps new sessions already in the
 instance, copies no browser login storage or scheduled-task settings, and leaves
 the originals in place. Missing transcripts are reported; missing working folders
@@ -251,7 +252,7 @@ press of the pad's channel button, with every app left running. A clone with a
 channel uses the pad even when it is not the assigned instance, USB still
 reaches every clone that uses the pad, and `any` in place of the number takes the
 channel away. Channels are read when an instance starts, and `doppel micro
-channel` lists them (`--porcelain` lists them by slug for scripts). The nine
+channel` lists them (`--porcelain` lists them by slug for scripts). The three
 tiles under **Bluetooth channels** in Settings do the same with a click. The assigned instance without a channel still listens on
 every channel.
 

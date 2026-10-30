@@ -18,14 +18,55 @@ struct SettingsView: View {
         _selection = StateObject(wrappedValue: SettingsSelection(tab: initialTab))
     }
 
+    private static let tabs: [(title: String, symbol: String)] = [
+        ("General", "gearshape"), ("Updates", "arrow.down.circle"),
+        ("Integrations", "puzzlepiece.extension"), ("Codex Micro", "keyboard"),
+    ]
+
     var body: some View {
-        TabView(selection: $selection.tab) {
-            general.tabItem { Label("General", systemImage: "gearshape") }.tag(0)
-            updates.tabItem { Label("Updates", systemImage: "arrow.down.circle") }.tag(1)
-            integrations.tabItem { Label("Integrations", systemImage: "puzzlepiece.extension") }.tag(2)
-            CodexMicroView(store: store).tabItem { Label("Codex Micro", systemImage: "keyboard") }.tag(3)
+        VStack(spacing: 0) {
+            tabBar
+            Divider()
+            Group {
+                switch selection.tab {
+                case 1: updates
+                case 2: integrations
+                case 3: CodexMicroView(store: store)
+                default: general
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(width: 600, height: 620)
+    }
+
+    /// Icon tabs in the style of the system's own settings windows. A bordered
+    /// TabView in a plain window draws its segmented control across the edge
+    /// of an inset box, which looks broken next to the grouped forms.
+    private var tabBar: some View {
+        HStack(spacing: 4) {
+            ForEach(Self.tabs.indices, id: \.self) { index in
+                let tab = Self.tabs[index]
+                let selected = selection.tab == index
+                Button { selection.tab = index } label: {
+                    VStack(spacing: 3) {
+                        Image(systemName: tab.symbol).font(.system(size: 18))
+                            .frame(height: 22)
+                        Text(tab.title).font(.system(size: 11))
+                    }
+                    .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+                    .frame(width: 86, height: 50)
+                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(selected ? Color.primary.opacity(0.08) : Color.clear))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(tab.title)
+                .accessibilityAddTraits(selected ? .isSelected : [])
+            }
+        }
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
     }
 
     // MARK: - General
@@ -42,14 +83,15 @@ struct SettingsView: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(store.installedChatGPT.map { "ChatGPT \($0.display)" } ?? "ChatGPT")
-                        Text("Doppel checks every six hours and updates every instance together.")
+                        Text(store.chatGPTUpdate.map(MenuContent.updateHeadline)
+                             ?? "Doppel checks every six hours and updates every instance together.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
                     if store.busy.contains("update") {
                         ProgressView().controlSize(.small)
                     } else if let update = store.chatGPTUpdate {
-                        Button(MenuContent.updateButtonTitle(update)) { store.beginKnownUpdate() }
+                        Button(MenuContent.bannerButtonTitle(update)) { store.beginKnownUpdate() }
                             .disabled(store.engineOperationBusy)
                     } else {
                         Button(store.checkingForUpdates ? "Checking…" : "Check Now") {
@@ -148,8 +190,6 @@ struct SettingsView: View {
                             Text("\(host.browser) extension")
                             Text("Any instance can use a running one; this picks whose starts it.")
                                 .font(.caption).foregroundStyle(.secondary)
-                            Text("doppel native-tools claim-browser")
-                                .font(.system(size: 10.5, design: .monospaced)).foregroundStyle(.secondary)
                         }
                         Spacer()
                         if eligible.isEmpty {

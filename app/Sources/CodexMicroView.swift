@@ -12,6 +12,9 @@ struct MicroChannels: Equatable {
         case free, claude, instance(String)
     }
 
+    /// The Creator Micro 2 pairs as three Bluetooth devices, one per channel.
+    static let all = 1...3
+
     var instances: [String: Int] = [:]
     var claude: ClaudeCode = .off
 
@@ -27,13 +30,13 @@ struct MicroChannels: Equatable {
             let fields = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
             switch (fields.first, fields.count) {
             case ("instance", 3):
-                if let channel = Int(fields[2]), (1...9).contains(channel), !fields[1].isEmpty {
+                if let channel = Int(fields[2]), MicroChannels.all.contains(channel), !fields[1].isEmpty {
                     state.instances[fields[1]] = channel
                 }
             case ("claude", 2):
                 if fields[1] == "any" {
                     state.claude = .everyChannel
-                } else if let channel = Int(fields[1]), (1...9).contains(channel) {
+                } else if let channel = Int(fields[1]), MicroChannels.all.contains(channel) {
                     state.claude = .channel(channel)
                 }
             default:
@@ -135,7 +138,7 @@ struct CodexMicroView: View {
                 legendRow(color: ownerColor, label: "Default", value: ownerName)
                 legendRow(color: Self.claudeColor, label: "Claude Code", value: claudeSummary)
                 legendRow(color: .white.opacity(0.25), label: "Free channels",
-                          value: "\((1...9).filter { channels.holder(of: $0) == .free }.count) of 9")
+                          value: "\(MicroChannels.all.filter { channels.holder(of: $0) == .free }.count) of \(MicroChannels.all.count)")
             }
             Spacer(minLength: 0)
         }
@@ -150,10 +153,10 @@ struct CodexMicroView: View {
     private var pad: some View {
         VStack(spacing: 10) {
             HStack(spacing: 5) {
-                ForEach(1...9, id: \.self) { channel in
+                ForEach(MicroChannels.all, id: \.self) { channel in
                     Circle()
                         .fill(color(for: channels.holder(of: channel)))
-                        .frame(width: 5, height: 5)
+                        .frame(width: 6, height: 6)
                         .shadow(color: color(for: channels.holder(of: channel)).opacity(0.8), radius: 2)
                 }
             }
@@ -192,7 +195,7 @@ struct CodexMicroView: View {
     /// The agent keys show what holds the pad's channels, in channel order,
     /// so the picture changes as the assignments do.
     private func keyGlow(_ index: Int) -> Color {
-        let held = (1...9).map { channels.holder(of: $0) }.filter { $0 != .free }
+        let held = MicroChannels.all.map { channels.holder(of: $0) }.filter { $0 != .free }
         guard index < held.count else { return .white.opacity(index == 0 && ownerName != "Nobody" ? 0.55 : 0.12) }
         return color(for: held[index])
     }
@@ -237,7 +240,7 @@ struct CodexMicroView: View {
 
     private var channelGrid: some View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
-            ForEach(1...9, id: \.self) { channel in channelTile(channel) }
+            ForEach(MicroChannels.all, id: \.self) { channel in channelTile(channel) }
         }
         .padding(.vertical, 4)
     }
@@ -378,7 +381,7 @@ struct CodexMicroView: View {
                 }
                 Spacer()
                 Menu(channels.claude == .off ? "Set Up…" : "Change…") {
-                    ForEach((1...9).filter { channels.holder(of: $0) != .claude }, id: \.self) { channel in
+                    ForEach(MicroChannels.all.filter { channels.holder(of: $0) != .claude }, id: \.self) { channel in
                         Button("Channel \(channel)") { store.planClaudeMicro(channel: String(channel)) }
                             .disabled(channels.holder(of: channel) != .free)
                     }

@@ -108,6 +108,12 @@ struct InstanceDetailView: View {
                         detail: "Fixes a broken clone. Keeps the account and chats.") {
                         Button("Rebuild") { store.rebuild(instance) }.disabled(busy)
                     }
+                    if instance.appKind == .claude {
+                        row("Import Code history",
+                            detail: "Copies matching local Code sessions from the original Claude app.") {
+                            Button("Import…") { store.importClaudeSessions(instance) }.disabled(busy)
+                        }
+                    }
                     row("Remove instance",
                         detail: "The app goes to the Trash. Account data is kept unless you choose otherwise.") {
                         Button("Remove…", role: .destructive) { store.confirmRemove(instance) }
@@ -118,6 +124,7 @@ struct InstanceDetailView: View {
             .formStyle(.grouped)
         }
         .frame(width: 560, height: 640)
+        .navigationTitle(instance.name)
     }
 
     private func engineOption(_ title: String, detail: String) -> some View {

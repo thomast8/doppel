@@ -1001,11 +1001,7 @@ final class InstanceStore: ObservableObject {
                 } else {
                     self.clearReport(for: busyKey)
                     if let successTitle, case .success(let output) = result {
-                        let alert = NSAlert()
-                        alert.messageText = successTitle
-                        alert.informativeText = output.trimmingCharacters(in: .whitespacesAndNewlines)
-                        alert.addButton(withTitle: "OK")
-                        _ = self.present(alert)
+                        Notifier.post(successTitle, output.trimmingCharacters(in: .whitespacesAndNewlines))
                     }
                 }
                 completion?(failure)

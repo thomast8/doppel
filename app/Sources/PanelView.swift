@@ -487,23 +487,6 @@ struct MenuContent: View {
         }
     }
 
-    /// What the Settings update button offers. It acts at once, so it carries
-    /// no ellipsis. A stale-instance row is not an
-    /// available version: nothing is downloaded and the primary is left alone,
-    /// so offering to install a version the Mac already has would misdescribe
-    /// the work.
-    static func updateButtonTitle(_ update: ChatGPTUpdate) -> String {
-        switch update.state {
-        case .ready:
-            return "Restart to Install ChatGPT \(update.targetVersion)"
-        case .available:
-            return "Download ChatGPT \(update.targetVersion)"
-        case .staleInstances:
-            let noun = update.staleInstanceCount == 1 ? "Instance" : "Instances"
-            return "Rebuild \(update.staleInstanceCount) Outdated \(noun)"
-        }
-    }
-
     /// Doppel's own marketing version and build, from the bundle it is running
     /// out of.
     static let doppelVersionLabel: String = versionLabel(

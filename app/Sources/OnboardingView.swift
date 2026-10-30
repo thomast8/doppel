@@ -30,10 +30,15 @@ struct OnboardingView: View {
     @StateObject private var model = OnboardingModel()
     @Environment(\.dismiss) private var dismiss
 
-    private var trimmedName: String { model.name.trimmingCharacters(in: .whitespaces) }
-    private var shownName: String {
-        model.createdName ?? (trimmedName.isEmpty ? "\(model.appKind.label) Work" : trimmedName)
+    /// The field shows a suggestion as its placeholder and the button names
+    /// it, so leaving the field empty creates the suggestion.
+    static func instanceName(typed: String, kind: InstanceApp) -> String {
+        let trimmed = typed.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? "\(kind.label) Work" : trimmed
     }
+
+    private var nameToCreate: String { Self.instanceName(typed: model.name, kind: model.appKind) }
+    private var shownName: String { model.createdName ?? nameToCreate }
     private var createdInstance: Instance? {
         model.createdName.flatMap { name in
             store.instances.first { $0.name == name && $0.appKind == model.appKind }
@@ -261,7 +266,7 @@ struct OnboardingView: View {
     // MARK: - Footer
 
     private var canCreate: Bool {
-        !trimmedName.isEmpty && !model.creating && !store.engineOperationBusy && store.isInstalled(model.appKind)
+        !model.creating && !store.engineOperationBusy && store.isInstalled(model.appKind)
     }
 
     private var footer: some View {
@@ -325,7 +330,7 @@ struct OnboardingView: View {
         guard canCreate else { return }
         model.creating = true
         model.errorMessage = nil
-        let name = trimmedName
+        let name = nameToCreate
         store.create(name: name, tintHex: model.useOriginal ? "original" : model.color.rgbHex,
                      appKind: model.appKind) { [model] failure in
             model.creating = false

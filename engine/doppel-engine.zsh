@@ -963,7 +963,7 @@ codex_micro_channel() {
     file="$doppel_home/state/codex-micro-channels/$(managed_slug_for_this_profile)"
     [[ -r "$file" ]] || return 0
     IFS= read -r channel < "$file" || true
-    [[ "$channel" == [1-9] ]] && print -r -- "$channel"
+    [[ "$channel" == [1-3] ]] && print -r -- "$channel"
     return 0
 }
 

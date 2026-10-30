@@ -57,7 +57,7 @@ with tempfile.TemporaryDirectory(prefix="doppel-micro-") as scratch:
     assert run("channel", "--porcelain") == "instance\tpersonal\t3\ninstance\tveridue\t1\nclaude\toff\n"
     assert (channels / "veridue").read_text() == "1\n"
     run("channel", "ChatGPT Personal", "1", success=False)
-    for invalid in ["0", "10", "x", "../1"]:
+    for invalid in ["0", "4", "9", "10", "x", "../1"]:
         run("channel", "ChatGPT Veridue", invalid, success=False)
     run("channel", "Missing Instance", "2", success=False)
     (channels / "removed-instance").write_text("2\n")
@@ -109,6 +109,7 @@ json.dump(data, open(path, "w"))
     assert run("claude") == "Claude Code: not set up\n"
     run("channel", "ChatGPT Veridue", "1")
     run("claude", "1", "--yes", success=False)
+    run("claude", "4", "--plan", success=False)
     plan = run("claude", "2", "--plan")
     for step in ["add the codex-micro marketplace from thomast8/codex-micro-for-claude-code",
                  "install the codex-micro plugin",

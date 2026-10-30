@@ -84,4 +84,11 @@ final class PanelStateTests: XCTestCase {
                                                 "/Applications/ChatGPT Work.app"))
         XCTAssertFalse(InstanceStore.pathsMatch("", ""), "an instance with no path is never running")
     }
+
+    func testAnEmptyNameCreatesTheSuggestedOne() {
+        XCTAssertEqual(OnboardingView.instanceName(typed: "  ", kind: .chatgpt), "ChatGPT Work",
+                       "the button offers the suggestion, so pressing it must create that")
+        XCTAssertEqual(OnboardingView.instanceName(typed: "", kind: .claude), "Claude Work")
+        XCTAssertEqual(OnboardingView.instanceName(typed: " Research ", kind: .claude), "Research")
+    }
 }

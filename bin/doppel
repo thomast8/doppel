@@ -1786,8 +1786,8 @@ cmd_micro_claude() {
         fi
         return
     fi
-    [[ $# -le 2 && ( "$channel" == [1-9] || "$channel" == any ) && ( -z "$mode" || "$mode" == --plan || "$mode" == --yes ) ]] || \
-        die "usage: doppel micro claude [<1-9|any> [--plan|--yes]]"
+    [[ $# -le 2 && ( "$channel" == [1-3] || "$channel" == any ) && ( -z "$mode" || "$mode" == --plan || "$mode" == --yes ) ]] || \
+        die "usage: doppel micro claude [<1-3|any> [--plan|--yes]]"
     if [[ "$channel" != any ]]; then
         for file in "$CODEX_MICRO_CHANNELS"/*(N); do
             [[ "$(<"$file")" == "$channel" ]] && is_instance_dir "$INSTANCES_ROOT/${file:t}" || continue
@@ -1881,7 +1881,7 @@ cmd_micro() {
                 for file in "$CODEX_MICRO_CHANNELS"/*(N); do
                     is_instance_dir "$INSTANCES_ROOT/${file:t}" || continue
                     IFS= read -r value < "$file" || true
-                    [[ "$value" == [1-9] ]] && printf 'instance\t%s\t%s\n' "${file:t}" "$value"
+                    [[ "$value" == [1-3] ]] && printf 'instance\t%s\t%s\n' "${file:t}" "$value"
                 done
                 local -a pad_state=("${(@f)$(claude_pad state)}")
                 if [[ "${pad_state[2]}" != 1 ]]; then
@@ -1898,7 +1898,7 @@ cmd_micro() {
                 for file in "$CODEX_MICRO_CHANNELS"/*(N); do
                     is_instance_dir "$INSTANCES_ROOT/${file:t}" || continue
                     IFS= read -r value < "$file" || true
-                    [[ "$value" == [1-9] ]] || continue
+                    [[ "$value" == [1-3] ]] || continue
                     lines+=("$(config_value "$INSTANCES_ROOT/${file:t}" DOPPEL_DISPLAY_NAME): $value")
                 done
                 value="$(claude_pad channel-get)"
@@ -1906,7 +1906,7 @@ cmd_micro() {
                 (( ${#lines} )) && print -rl -- "${lines[@]}" || print -r -- "Creator Micro channels: none set"
                 return
             fi
-            [[ $# -eq 2 && ( "$2" == [1-9] || "$2" == any ) ]] || die "usage: doppel micro channel [--porcelain | <name> <1-9|any>]"
+            [[ $# -eq 2 && ( "$2" == [1-3] || "$2" == any ) ]] || die "usage: doppel micro channel [--porcelain | <name> <1-3|any>]"
             name="$1"
             file="$(instance_dir_for "$name")" || exit 1
             file="$CODEX_MICRO_CHANNELS/${file:t}"
@@ -1927,7 +1927,7 @@ cmd_micro() {
             print -r -- "$name now uses Bluetooth channel $2; restart it to apply"
             ;;
         claude) cmd_micro_claude "$@" ;;
-        *) die "usage: doppel micro {assign <name>|release|status|channel [<name> <1-9|any>]|claude [<1-9|any> [--plan|--yes]]}" ;;
+        *) die "usage: doppel micro {assign <name>|release|status|channel [<name> <1-3|any>]|claude [<1-3|any> [--plan|--yes]]}" ;;
     esac
 }
 
