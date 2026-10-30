@@ -1958,6 +1958,13 @@ cmd_remove() {
     local removed_root="$DOPPEL_HOME/state/Removed"
     mkdir -p "$removed_root"
     /bin/mv "$dir" "$removed_root/${dir:t}.$stamp" || die "preserving the instance definition failed"
+    # The import record goes with the definition: a new instance can reuse this
+    # slug, and an inherited marker would stop it ever importing its own history.
+    local imports="$DOPPEL_HOME/state/imports/${dir:t}"
+    if [[ -d "$imports" ]]; then
+        /bin/mv "$imports" "$removed_root/${dir:t}.$stamp/imports" || \
+            die "moving the history import record failed; the instance definition is at $removed_root/${dir:t}.$stamp"
+    fi
     print -r -- "instance definition kept at: $removed_root/${dir:t}.$stamp"
 
     if (( purge )); then
@@ -2105,6 +2112,27 @@ run_claude_history_import() {
         "$profile" "$code")
     [[ "$mode" != apply ]] || arguments+=("$DOPPEL_HOME/state/imports/${dir:t}")
     /usr/bin/python3 "$ENGINE_SRC/claude-sessions.py" "$arguments[@]"
+}
+
+# A launch is the one moment the import is safe without asking: the instance
+# is closed, and if Code was opened under the original's account and workspace
+# its history scope already exists. claude-sessions.py refuses a signed-out,
+# mismatched or busy instance without writing anything, so that just retries on
+# the next launch; after one success it never runs again. Output goes to a log
+# because the in-place launcher parses everything this command prints.
+auto_import_claude_history() {
+    [[ "$DOPPEL_APP_KIND" == claude ]] || return 0
+    local dir="$1" state="$DOPPEL_HOME/state/imports/${1:t}" profile code
+    [[ -f "$state/auto-import.json" ]] && return 0
+    profile="$(config_value "$dir" DOPPEL_PROFILE_ROOT)"
+    code="$(config_value "$dir" DOPPEL_CLAUDE_CONFIG_DIR)"
+    [[ "$profile" == /* && "$code" == /* ]] || return 0
+    /bin/mkdir -p -m 700 "$state" 2>/dev/null || return 0
+    {
+        print -rn -- "$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ) "
+        /usr/bin/python3 "$ENGINE_SRC/claude-sessions.py" auto \
+            "$HOME/Library/Application Support/Claude" "$HOME/.claude" "$profile" "$code" "$state"
+    } >>"$state/auto-import.log" 2>&1 || true
 }
 
 cmd_import_sessions() {
@@ -2847,6 +2875,7 @@ launch_clone_instance() {
     any_chatgpt_process_uses_profile "$dir" && \
         die "'$name''s Electron profile is already open through another ChatGPT app. Quit that window before launching its Doppel engine."
     [[ -d "$app" ]] || die "instance app not installed at $app; run: doppel rebuild '$name'"
+    auto_import_claude_history "$dir"
     if [[ -n "$IAB_IN_PLACE_LAUNCH_PID" ]]; then
         local started executable
         started="$(process_start_fingerprint "$IAB_IN_PLACE_LAUNCH_PID")" || die "the original launcher exited before routing"
