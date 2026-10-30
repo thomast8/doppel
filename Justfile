@@ -33,6 +33,9 @@ build-claude-qa:
 qa-create-window:
     python3 ./qa/create-window.py
 
+qa-history-volume:
+    python3 ./qa/claude-history-volume.py
+
 qa-icons:
     mkdir -p qa/.build/icon-tint
     git show v2.0.5:engine/icon/main.swift > qa/.build/icon-tint/legacy.swift

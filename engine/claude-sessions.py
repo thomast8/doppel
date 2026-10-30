@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+from contextlib import ExitStack
 import json
 import os
 from pathlib import Path
@@ -152,12 +153,19 @@ def apply_plan(plan: dict, audit_root: Path) -> dict:
     metadata = set(plan['metadata'])
     # Publish transcripts before their registry entries, and never replace an existing file.
     ordered = sorted(plan['files'], key=lambda path: (path in metadata, str(path)))
-    with tempfile.TemporaryDirectory(prefix='.import-', dir=audit_root) as temporary:
+    with ExitStack() as temporary:
         staged = {}
+        directories = {}
         for index, target in enumerate(ordered):
-            source, fingerprint, source_root, _ = plan['files'][target]
+            source, fingerprint, source_root, target_root = plan['files'][target]
             checked(source, source_root)
-            stage = Path(temporary) / str(index)
+            checked(target, target_root)
+            target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            checked(target, target_root)
+            if target.parent not in directories:
+                directories[target.parent] = Path(temporary.enter_context(
+                    tempfile.TemporaryDirectory(prefix='.doppel-import-', dir=target.parent)))
+            stage = directories[target.parent] / str(index)
             with open_regular(source) as original, stage.open('xb') as output:
                 shutil.copyfileobj(original, output)
             os.chmod(stage, 0o600)
