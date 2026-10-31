@@ -400,7 +400,7 @@ so `Not requested` is informational and never raises a warning. The public
 Accessibility and Screen Recording checks expose only a boolean and can lag or
 disagree with the visible System Settings row; Doppel labels an inconclusive
 result `Check in Settings` instead of claiming the permission is missing. Only an explicit
-denial, restriction, or outdated checker changes the menu-bar icon to a warning
+denial, restriction, or outdated checker adds a dot to the menu-bar icon
 and marks the instance's row in the panel.
 
 Permissions that macOS grants only in the context of a specific action or

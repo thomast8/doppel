@@ -271,7 +271,7 @@ struct OnboardingView: View {
                 .lead()
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 460)
-            Label("Look for the two speech bubbles in the menu bar.", systemImage: "menubar.arrow.up.rectangle")
+            Label("Look for the fanned tiles in the menu bar.", systemImage: "menubar.arrow.up.rectangle")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .padding(.top, 18)

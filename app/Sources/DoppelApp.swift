@@ -176,75 +176,80 @@ struct MenuBarLabel: View {
     }
 }
 
-/// Doppel's original mark at menu-bar scale: two asymmetric conversation
-/// bubbles, offset on the same diagonal as the app artwork. Keeping the geometry
-/// local means this identity has no dependency on another app's trademark.
+/// The app icon's mark at menu-bar scale: three instance tiles fanned out,
+/// the front one carrying a speech bubble. It is one colour so macOS can tint
+/// it for the menu bar, and the side tiles are half strength so the fan still
+/// reads at 18 pt. When something needs attention the same mark gains a dot
+/// rather than turning into a different symbol.
 private enum DoppelMenuBarMark {
+    static let image = mark(warning: false)
+    static let warningImage = mark(warning: true)
+
     /// NSImage's drawing handler is resolution-independent, so this stays sharp
     /// on Retina displays while presenting MenuBarExtra with the direct image it
     /// expects. `isTemplate` lets macOS supply the correct light/dark tint.
-    static let image: NSImage = {
-        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+    private static func mark(warning: Bool) -> NSImage {
+        let image = NSImage(size: NSSize(width: 22, height: 18), flipped: false) { _ in
             guard let context = NSGraphicsContext.current?.cgContext else { return false }
-            context.setLineCap(.round)
-            context.setLineJoin(.round)
-            context.setLineWidth(1.45)
-            context.setStrokeColor(NSColor.black.cgColor)
+            let front = tile(center: CGPoint(x: 11, y: 9), size: 9.8, degrees: 0)
+            context.setFillColor(NSColor.black.cgColor)
 
             context.saveGState()
-            context.setAlpha(0.46)
-            context.addPath(bubblePath(in: CGRect(x: 0.5, y: 6.8,
-                                                  width: 12.2, height: 9.4)))
-            context.strokePath()
+            context.setAlpha(0.5)
+            context.addPath(tile(center: CGPoint(x: 5.6, y: 8.2), size: 7.8, degrees: 14))
+            context.addPath(tile(center: CGPoint(x: 16.4, y: 8.2), size: 7.8, degrees: -14))
+            context.fillPath()
             context.restoreGState()
 
-            context.addPath(bubblePath(in: CGRect(x: 5.3, y: 1.4,
-                                                  width: 12.2, height: 9.4)))
+            // A gap around the front tile so it reads as lying on top.
+            context.setBlendMode(.clear)
+            context.addPath(front)
+            context.setLineWidth(2.2)
             context.strokePath()
+            context.setBlendMode(.normal)
+            context.addPath(front)
+            context.fillPath()
+
+            // The bubble is cut out of the front tile.
+            context.setBlendMode(.clear)
+            context.addPath(bubblePath(in: CGRect(x: 8.4, y: 6.6, width: 5.2, height: 4.8)))
+            context.fillPath()
+
+            if warning {
+                let dot = CGRect(x: 15.2, y: 13.2, width: 4.2, height: 4.2)
+                context.addEllipse(in: dot.insetBy(dx: -1.2, dy: -1.2))
+                context.fillPath()
+                context.setBlendMode(.normal)
+                context.addEllipse(in: dot)
+                context.fillPath()
+            }
+            context.setBlendMode(.normal)
             return true
         }
         image.isTemplate = true
         return image
-    }()
+    }
 
-    static let warningImage: NSImage = {
-        let image = NSImage(systemSymbolName: "exclamationmark.bubble.fill",
-                            accessibilityDescription: nil)
-            ?? NSImage(systemSymbolName: "exclamationmark.triangle.fill",
-                       accessibilityDescription: nil)!
-        image.isTemplate = true
-        return image
-    }()
+    private static func tile(center: CGPoint, size: CGFloat, degrees: CGFloat) -> CGPath {
+        var transform = CGAffineTransform(translationX: center.x, y: center.y)
+            .rotated(by: degrees * .pi / 180)
+        let rect = CGRect(x: -size / 2, y: -size / 2, width: size, height: size)
+        return CGPath(roundedRect: rect, cornerWidth: size * 0.26, cornerHeight: size * 0.26,
+                      transform: &transform)
+    }
 
+    /// A rounded bubble with a short tail at the lower left, simple enough to
+    /// survive at a few points across.
     private static func bubblePath(in rect: CGRect) -> CGPath {
         let path = CGMutablePath()
-        let tailHeight = rect.height * 0.20
-        let bodyBottom = rect.minY + tailHeight
-        let radius = min(rect.width * 0.16, (rect.height - tailHeight) * 0.30)
-        let tailStart = rect.minX + rect.width * 0.22
-        let tailTip = CGPoint(x: rect.minX + rect.width * 0.09, y: rect.minY)
-        let tailEnd = rect.minX + rect.width * 0.41
-
-        path.move(to: CGPoint(x: rect.minX + radius, y: bodyBottom))
-        path.addLine(to: CGPoint(x: tailStart, y: bodyBottom))
-        path.addQuadCurve(to: tailTip,
-                          control: CGPoint(x: tailStart - rect.width * 0.035,
-                                           y: bodyBottom - tailHeight * 0.48))
-        path.addQuadCurve(to: CGPoint(x: tailEnd, y: bodyBottom),
-                          control: CGPoint(x: tailTip.x + rect.width * 0.16,
-                                           y: tailTip.y + tailHeight * 0.36))
-        path.addLine(to: CGPoint(x: rect.maxX - radius, y: bodyBottom))
-        path.addQuadCurve(to: CGPoint(x: rect.maxX, y: bodyBottom + radius),
-                          control: CGPoint(x: rect.maxX, y: bodyBottom))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - radius))
-        path.addQuadCurve(to: CGPoint(x: rect.maxX - radius, y: rect.maxY),
-                          control: CGPoint(x: rect.maxX, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.minX + radius, y: rect.maxY))
-        path.addQuadCurve(to: CGPoint(x: rect.minX, y: rect.maxY - radius),
-                          control: CGPoint(x: rect.minX, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.minX, y: bodyBottom + radius))
-        path.addQuadCurve(to: CGPoint(x: rect.minX + radius, y: bodyBottom),
-                          control: CGPoint(x: rect.minX, y: bodyBottom))
+        let tail = rect.height * 0.24
+        let bottom = rect.minY + tail
+        let radius = rect.height * 0.28
+        path.addRoundedRect(in: CGRect(x: rect.minX, y: bottom, width: rect.width, height: rect.height - tail),
+                            cornerWidth: radius, cornerHeight: radius)
+        path.move(to: CGPoint(x: rect.minX + rect.width * 0.22, y: bottom + 0.2))
+        path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.12, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.48, y: bottom + 0.2))
         path.closeSubpath()
         return path
     }
