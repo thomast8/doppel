@@ -1,14 +1,19 @@
 import SwiftUI
 import AppKit
 
-/// Panel-only state that is not the store's business: which update offer the
+/// Panel-only state that is not the store's business: which update offers the
 /// user has put off for this session.
 final class PanelModel: ObservableObject {
-    @Published var dismissedUpdateKey: String?
+    @Published var dismissedUpdateKeys: Set<String> = []
 }
 
-extension ChatGPTUpdate {
-    var offerKey: String { "\(state.rawValue)-\(targetBuild)" }
+extension VendorUpdate {
+    var offerKey: String { "\(app.rawValue)-\(state.rawValue)-\(targetBuild)" }
+}
+
+extension InstanceApp {
+    /// The colour an app's update offer is drawn in.
+    var accent: Color { self == .claude ? Design.claude : .accentColor }
 }
 
 extension Instance {
@@ -39,7 +44,7 @@ enum PanelWindow {
 
 /// The menu bar panel: every instance with its state and one action, and
 /// below them the two things that need the user's attention from time to time,
-/// ChatGPT updates and permissions. Everything else lives in the instance
+/// vendor app updates and permissions. Everything else lives in the instance
 /// window or Settings.
 struct MenuContent: View {
     @ObservedObject var store: InstanceStore
@@ -161,9 +166,8 @@ struct MenuContent: View {
 
     // MARK: - Update banner
 
-    private var visibleUpdate: ChatGPTUpdate? {
-        guard let update = store.chatGPTUpdate, update.offerKey != panel.dismissedUpdateKey else { return nil }
-        return update
+    private var visibleUpdates: [VendorUpdate] {
+        store.pendingUpdates.filter { !panel.dismissedUpdateKeys.contains($0.offerKey) }
     }
 
     @ViewBuilder
@@ -202,31 +206,38 @@ struct MenuContent: View {
                         .foregroundStyle(.secondary)
                 }
             }
-        } else if let update = visibleUpdate {
-            banner {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(Self.updateHeadline(update)).font(.system(size: 13, weight: .semibold))
-                            Text(Self.updateDetail(update))
-                                .font(.system(size: 12))
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    } icon: {
-                        Image(systemName: "arrow.down.circle").foregroundStyle(Color.accentColor)
+        } else {
+            ForEach(visibleUpdates, id: \.offerKey) { updateBanner($0) }
+        }
+    }
+
+    private func updateBanner(_ update: VendorUpdate) -> some View {
+        banner(tint: update.app.accent) {
+            VStack(alignment: .leading, spacing: 8) {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(Self.updateHeadline(update)).font(.system(size: 13, weight: .semibold))
+                        Text(Self.updateDetail(update))
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    HStack {
-                        Spacer()
-                        Button("Later") { panel.dismissedUpdateKey = update.offerKey }
-                            .buttonStyle(.bordered)
-                        Button(Self.bannerButtonTitle(update)) { store.beginKnownUpdate() }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(store.engineOperationBusy)
-                    }
-                    .buttonBorderShape(.capsule)
-                    .controlSize(.small)
+                } icon: {
+                    Image(systemName: update.state == .staleInstances ? "arrow.triangle.2.circlepath"
+                                                                      : "arrow.down.circle")
+                        .foregroundStyle(update.app.accent)
                 }
+                HStack {
+                    Spacer()
+                    Button("Later") { panel.dismissedUpdateKeys.insert(update.offerKey) }
+                        .buttonStyle(.bordered)
+                    Button(Self.bannerButtonTitle(update)) { store.beginKnownUpdate(update.app) }
+                        .buttonStyle(.borderedProminent)
+                        .tint(update.app.accent)
+                        .disabled(store.engineOperationBusy)
+                }
+                .buttonBorderShape(.capsule)
+                .controlSize(.small)
             }
         }
     }
@@ -410,16 +421,21 @@ struct MenuContent: View {
 
     private var footer: some View {
         VStack(alignment: .leading, spacing: 9) {
-            HStack(spacing: 8) {
-                legendDot(store.chatGPTUpdate != nil ? .blue : (store.installedChatGPT == nil ? .secondary : .green))
-                Text(chatGPTLine).lineLimit(1)
-                Spacer()
-                Button(store.checkingForUpdates ? "Checking…" : "Check now") {
-                    store.lastError = nil
-                    store.checkForUpdates(userInitiated: true)
+            ForEach(versionLineApps, id: \.self) { app in
+                HStack(spacing: 8) {
+                    legendDot(store.updates[app] != nil ? app.accent
+                              : (store.installedVersions[app] == nil ? .secondary : .green))
+                    Text(versionLine(app)).lineLimit(1)
+                    Spacer()
+                    if app == versionLineApps.first {
+                        Button(store.checkingForUpdates ? "Checking…" : "Check now") {
+                            store.lastError = nil
+                            store.checkForUpdates(userInitiated: true)
+                        }
+                        .buttonStyle(.link)
+                        .disabled(store.checkingForUpdates || store.busy.contains("update"))
+                    }
                 }
-                .buttonStyle(.link)
-                .disabled(store.checkingForUpdates || store.busy.contains("update"))
             }
             permissionLine
             HStack {
@@ -439,14 +455,20 @@ struct MenuContent: View {
         .padding(.bottom, 12)
     }
 
+    /// ChatGPT always has a line, as it did before Claude had updates; Claude
+    /// gets one once it is installed.
+    private var versionLineApps: [InstanceApp] {
+        InstanceApp.allCases.filter { $0 == .chatgpt || store.isInstalled($0) }
+    }
+
     /// "Up to date" only after a check the CLI answered with "current"; a
     /// failed or unread check leaves the installed build from an earlier one.
-    private var chatGPTLine: String {
-        if store.checkingForUpdates { return "Checking for ChatGPT updates…" }
-        guard let installed = store.installedChatGPT else { return "ChatGPT updates not checked yet" }
-        return store.lastCheckWasCurrent && store.chatGPTUpdate == nil
-            ? "ChatGPT \(installed.version) is up to date"
-            : "ChatGPT \(installed.display)"
+    private func versionLine(_ app: InstanceApp) -> String {
+        if store.checkingForUpdates { return "Checking for \(app.label) updates…" }
+        guard let installed = store.installedVersions[app] else { return "\(app.label) updates not checked yet" }
+        return store.upToDateApps.contains(app) && store.updates[app] == nil
+            ? "\(app.label) \(installed.version) is up to date"
+            : "\(app.label) \(installed.display)"
     }
 
     @ViewBuilder
@@ -487,31 +509,32 @@ struct MenuContent: View {
 
     // MARK: - Copy
 
-    static func updateHeadline(_ update: ChatGPTUpdate) -> String {
+    static func updateHeadline(_ update: VendorUpdate) -> String {
+        let app = update.app.label
         switch update.state {
-        case .ready: return "ChatGPT \(update.targetVersion) is ready to install"
-        case .available: return "ChatGPT \(update.targetVersion) is available"
+        case .ready: return "\(app) \(update.targetVersion) is ready to install"
+        case .available: return "\(app) \(update.targetVersion) is available"
         case .staleInstances:
             return update.staleInstanceCount == 1
-                ? "1 instance is out of date"
-                : "\(update.staleInstanceCount) instances are out of date"
+                ? "1 \(app) instance is out of date"
+                : "\(update.staleInstanceCount) \(app) instances are out of date"
         }
     }
 
-    static func updateDetail(_ update: ChatGPTUpdate) -> String {
+    static func updateDetail(_ update: VendorUpdate) -> String {
         switch update.state {
         case .ready:
             return "Running instances close, update together and reopen. Save unfinished chats first, and choose Quit if an app asks."
         case .available:
             return "Doppel downloads it from OpenAI and verifies it. Nothing closes until you restart."
         case .staleInstances:
-            return "ChatGPT updated itself. Rebuilding closes the outdated instances and reopens them. Save unfinished chats first."
+            return "\(update.app.label) updated itself. Rebuilding closes the outdated instances and reopens them. Save unfinished chats first."
         }
     }
 
     /// The banner already names the version, so its button only says what
     /// happens next.
-    static func bannerButtonTitle(_ update: ChatGPTUpdate) -> String {
+    static func bannerButtonTitle(_ update: VendorUpdate) -> String {
         switch update.state {
         case .ready: return "Restart and Update"
         case .available: return "Download"

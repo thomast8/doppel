@@ -115,9 +115,9 @@ struct OnboardingView: View {
                 .lead()
             card {
                 VStack(spacing: 12) {
-                    appRow(.chatgpt, version: store.installedChatGPT.map(\.version))
+                    appRow(.chatgpt, version: store.installedVersions[.chatgpt].map(\.version))
                     Divider()
-                    appRow(.claude, version: nil)
+                    appRow(.claude, version: store.installedVersions[.claude].map(\.version))
                 }
             }
             .padding(.top, 22)

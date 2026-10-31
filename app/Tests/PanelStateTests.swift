@@ -66,15 +66,24 @@ final class PanelStateTests: XCTestCase {
     }
 
     func testUpdateHeadlineMatchesWhatTheButtonWillDo() {
-        let ready = ChatGPTUpdate(state: .ready, currentBuild: 1, currentVersion: "1.0",
-                                  targetBuild: 2, targetVersion: "1.1", staleInstanceCount: 0)
-        let available = ChatGPTUpdate(state: .available, currentBuild: 1, currentVersion: "1.0",
-                                      targetBuild: 2, targetVersion: "1.1", staleInstanceCount: 0)
-        let stale = ChatGPTUpdate(state: .staleInstances, currentBuild: 2, currentVersion: "1.1",
-                                  targetBuild: 2, targetVersion: "1.1", staleInstanceCount: 1)
+        let ready = VendorUpdate(state: .ready, currentBuild: "1", currentVersion: "1.0",
+                                  targetBuild: "2", targetVersion: "1.1", staleInstanceCount: 0)
+        let available = VendorUpdate(state: .available, currentBuild: "1", currentVersion: "1.0",
+                                      targetBuild: "2", targetVersion: "1.1", staleInstanceCount: 0)
+        let stale = VendorUpdate(state: .staleInstances, currentBuild: "2", currentVersion: "1.1",
+                                  targetBuild: "2", targetVersion: "1.1", staleInstanceCount: 1)
         XCTAssertEqual(MenuContent.updateHeadline(ready), "ChatGPT 1.1 is ready to install")
         XCTAssertEqual(MenuContent.updateHeadline(available), "ChatGPT 1.1 is available")
-        XCTAssertEqual(MenuContent.updateHeadline(stale), "1 instance is out of date")
+        XCTAssertEqual(MenuContent.updateHeadline(stale), "1 ChatGPT instance is out of date")
+        let claude = VendorUpdate(app: .claude, state: .staleInstances, currentBuild: "4.4212.0",
+                                  currentVersion: "4.4212.0", targetBuild: "4.4212.0",
+                                  targetVersion: "4.4212.0", staleInstanceCount: 2)
+        XCTAssertEqual(MenuContent.updateHeadline(claude), "2 Claude instances are out of date")
+        XCTAssertTrue(MenuContent.updateDetail(claude).hasPrefix("Claude updated itself."))
+        XCTAssertNotEqual(claude.offerKey, VendorUpdate(state: .staleInstances, currentBuild: "4.4212.0",
+                                                        currentVersion: "4.4212.0", targetBuild: "4.4212.0",
+                                                        targetVersion: "4.4212.0", staleInstanceCount: 2).offerKey,
+                          "putting off one app's offer must not hide the other's")
     }
 
     func testRunningMatchUsesTheStandardisedBundlePath() {

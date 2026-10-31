@@ -6,18 +6,19 @@ import UserNotifications
 enum StatusMessages {
     /// The CLI reports no steps while it works, so this names the phase the
     /// app started rather than pretending to know how far along it is.
-    static func progress(for update: ChatGPTUpdate) -> String {
+    static func progress(for update: VendorUpdate) -> String {
+        let app = update.app.label
         switch update.state {
-        case .available: return "Downloading and verifying ChatGPT \(update.targetVersion)…"
-        case .ready: return "Installing ChatGPT \(update.targetVersion) and rebuilding every instance…"
+        case .available: return "Downloading and verifying \(app) \(update.targetVersion)…"
+        case .ready: return "Installing \(app) \(update.targetVersion) and rebuilding every instance…"
         case .staleInstances:
             return update.staleInstanceCount == 1
-                ? "Rebuilding 1 outdated instance…"
-                : "Rebuilding \(update.staleInstanceCount) outdated instances…"
+                ? "Rebuilding 1 outdated \(app) instance…"
+                : "Rebuilding \(update.staleInstanceCount) outdated \(app) instances…"
         }
     }
 
-    static func offer(_ update: ChatGPTUpdate) -> (title: String, body: String) {
+    static func offer(_ update: VendorUpdate) -> (title: String, body: String) {
         let action: String
         switch update.state {
         case .available: action = "Download it"
@@ -29,7 +30,7 @@ enum StatusMessages {
 
     /// A reconcile installs nothing, so saying an update was installed would be
     /// a claim the run never made.
-    static func completion(_ update: ChatGPTUpdate, output: String,
+    static func completion(_ update: VendorUpdate, output: String,
                            signingReady: Bool) -> (title: String, body: String) {
         let fields = InstanceStore.resultFields(output)
         let outcome = fields.first ?? "updated"
@@ -37,15 +38,16 @@ enum StatusMessages {
         let reopened = fields.count > 4 ? fields[4] : "the ones that were running"
         let signingNote = signingReady ? "" :
             " This Mac uses ad-hoc signing, so macOS may have forgotten their permissions. Set up secure signing in Settings before the next update."
+        let app = update.app.label
         switch outcome {
         case "reconciled":
-            return ("Instances rebuilt",
-                    "Doppel rebuilt \(verified) from ChatGPT \(update.targetVersion) and reopened \(reopened).\(signingNote)")
+            return ("\(app) instances rebuilt",
+                    "Doppel rebuilt \(verified) from \(app) \(update.targetVersion) and reopened \(reopened).\(signingNote)")
         case "current":
             return ("Nothing to rebuild",
-                    "No instance needed rebuilding for ChatGPT \(update.targetVersion), so nothing was closed.")
+                    "No instance needed rebuilding for \(app) \(update.targetVersion), so nothing was closed.")
         default:
-            return ("ChatGPT \(update.targetVersion) installed",
+            return ("\(app) \(update.targetVersion) installed",
                     "Doppel verified \(verified) and reopened \(reopened).\(signingNote)")
         }
     }
