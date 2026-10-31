@@ -27,6 +27,11 @@ qa-engine:
 qa-claude-engine:
     zsh ./qa/claude-engine.zsh
 
+# Set DOPPEL_QA_OPEN=1 to also check that an open instance is reopened; that
+# part raises a keychain prompt on the clone's first launch.
+qa-claude-update:
+    zsh ./qa/claude-update.zsh
+
 build-claude-qa:
     DOPPEL_BUNDLE_ID=ai.doppel.menubar.claudeqa DOPPEL_SINGLE_INSTANCE_LOCK_NAME=DoppelClaudeQA DOPPEL_VERSION=2.0.5-claude-dev ./app/build-app.zsh "{{justfile_directory()}}/qa/.build/claude-menu"
 

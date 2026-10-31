@@ -60,6 +60,12 @@ source "$ENGINE_SRC/vendor.zsh"
 readonly DOPPEL_HOME="${DOPPEL_HOME:-$DEFAULT_DOPPEL_HOME}"
 readonly INSTANCES_ROOT="$DOPPEL_HOME/instances"
 readonly BUILD_CACHE="$DOPPEL_HOME/build"
+# How the update path names the vendor app and the command that acts on it.
+if [[ "$DOPPEL_APP_KIND" == claude ]]; then
+    readonly VENDOR_LABEL="Claude" UPDATE_COMMAND="doppel --app claude update"
+else
+    readonly VENDOR_LABEL="ChatGPT" UPDATE_COMMAND="doppel update"
+fi
 # Codex publishes the same production appcast its Sparkle integration uses.
 readonly APPCAST_URL="${DOPPEL_APPCAST_URL:-https://persistent.oaistatic.com/codex-app-prod/appcast.xml}"
 readonly UPDATE_ROOT="${DOPPEL_UPDATE_ROOT:-$DOPPEL_HOME/updates}"
@@ -2378,7 +2384,7 @@ instance_build_drift() {
         if [[ "$recorded" == "$expected" ]]; then
             continue
         fi
-        if valid_build_number "$recorded" && (( recorded > expected )); then
+        if source_build_is_newer "$recorded" "$expected"; then
             ahead=$(( ahead + 1 ))
         else
             behind=$(( behind + 1 ))
@@ -2389,6 +2395,28 @@ instance_build_drift() {
 
 valid_build_number() {
     [[ "$1" == <1-> ]]
+}
+
+# ChatGPT records integer builds; Claude's CFBundleVersion is dotted (4.4212.0).
+valid_source_build() {
+    if [[ "$DOPPEL_APP_KIND" == claude ]]; then
+        [[ "$1" =~ '^[0-9]+(\.[0-9]+){1,3}$' ]]
+    else
+        valid_build_number "$1"
+    fi
+}
+
+# True when the recorded build is a readable one later than the expected one. A
+# build this cannot read is never newer, so it counts as behind.
+source_build_is_newer() {
+    local recorded="$1" expected="$2"
+    valid_source_build "$recorded" && [[ "$recorded" != "$expected" ]] || return 1
+    if [[ "$DOPPEL_APP_KIND" == claude ]]; then
+        autoload -Uz is-at-least
+        is-at-least "$expected" "$recorded"
+    else
+        (( recorded > expected ))
+    fi
 }
 
 # The requirement genuine vendor code has to satisfy, which is the vendor app's
@@ -2480,24 +2508,31 @@ update_metadata_value() {
 #   8 instances built from a newer build than the installed one
 #
 # Columns 2-6 mean the same thing in every state; the state word is what says
-# whether anything is worth doing. A reconcile targets the installed build in
+# whether anything is worth doing. Claude has no feed Doppel reads: its own
+# updater replaces the installed app, so columns 4-5 repeat the installed
+# version, column 6 is empty, and the state is only ever current or
+# stale-instances. A reconcile targets the installed build in
 # column 2, never the feed's, and only column 7 can produce one: an instance
 # ahead of the primary is reported, never rebuilt backwards.
 cmd_update_check() {
     local porcelain=0
     [[ "${1:-}" == "--porcelain" ]] && porcelain=1
     [[ -z "${1:-}" || "$porcelain" == "1" ]] || die "usage: doppel update check [--porcelain]"
-    validate_vendor_app "$PRIMARY_APP" || die "the primary ChatGPT app is missing or is not valid vendor-signed code"
+    validate_vendor_app "$PRIMARY_APP" || die "the primary $VENDOR_LABEL app is missing or is not valid vendor-signed code"
     local current current_short latest latest_version latest_short latest_url prepared update_state
     local drift stale ahead
     current="$(primary_version)"
     current_short="$(primary_short_version)"
-    latest="$(fetch_latest_update)"
-    IFS=$'\t' read -r latest_version latest_short latest_url <<< "$latest"
+    if [[ "$DOPPEL_APP_KIND" == claude ]]; then
+        latest_version="$current" latest_short="$current_short" latest_url=""
+    else
+        latest="$(fetch_latest_update)"
+        IFS=$'\t' read -r latest_version latest_short latest_url <<< "$latest"
+    fi
     update_state="current"
     stale=0
     ahead=0
-    if (( latest_version > current )); then
+    if [[ "$DOPPEL_APP_KIND" == chatgpt ]] && (( latest_version > current )); then
         update_state="available"
         prepared="$(prepared_update_app "$latest_version")"
         if validate_vendor_app "$prepared" "$latest_version"; then
@@ -2524,9 +2559,9 @@ cmd_update_check() {
         return 0
     fi
     if [[ "$update_state" == "stale-instances" ]]; then
-        print -r -- "ChatGPT $current_short ($current) is up to date, but $stale managed instance(s) were built from an older version; run 'doppel update apply' to rebuild them."
+        print -r -- "$VENDOR_LABEL $current_short ($current) is up to date, but $stale managed instance(s) were built from an older version; run '$UPDATE_COMMAND apply' to rebuild them."
     elif [[ "$update_state" == "current" ]]; then
-        print -r -- "ChatGPT $current_short ($current) is up to date."
+        print -r -- "$VENDOR_LABEL $current_short ($current) is up to date."
     elif [[ "$update_state" == "ready" ]]; then
         print -r -- "ChatGPT $latest_short ($latest_version) is downloaded and ready to install."
     else
@@ -2536,7 +2571,7 @@ cmd_update_check() {
     # offer. Rebuilding an instance onto an older primary is a downgrade, so it
     # stays a decision someone makes per instance.
     if (( ahead > 0 )); then
-        print -r -- "$ahead managed instance(s) were built from a newer build than the installed app; 'doppel update apply' leaves those alone. Use 'doppel rebuild <name>' to move one back to $current."
+        print -r -- "$ahead managed instance(s) were built from a newer build than the installed app; '$UPDATE_COMMAND apply' leaves those alone. Use '${UPDATE_COMMAND% update} rebuild <name>' to move one back to $current."
     fi
 }
 
@@ -2676,7 +2711,13 @@ abort_update_cleanup() {
 
 cmd_update_prepare() {
     [[ $# -eq 0 ]] || die "usage: doppel update prepare"
-    validate_vendor_app "$PRIMARY_APP" || die "the primary ChatGPT app is missing or is not valid vendor-signed code"
+    validate_vendor_app "$PRIMARY_APP" || die "the primary $VENDOR_LABEL app is missing or is not valid vendor-signed code"
+    # Claude's own updater is the only thing that installs Claude, so there is
+    # never a download to stage; the instances catch up through apply.
+    if [[ "$DOPPEL_APP_KIND" == claude ]]; then
+        print -r -- "already current"$'\t'"$(primary_version)"
+        return 0
+    fi
     local current latest latest_version latest_short latest_url prepared partial archive staging extracted metadata
     progress 2 "Checking OpenAI's update feed"
     current="$(primary_version)"
@@ -2748,7 +2789,11 @@ verify_managed_instance() {
     info="$app/Contents/Info.plist"
     [[ -x "$app/Contents/MacOS/$PRIMARY_EXECUTABLE" && -f "$info" ]] || return 1
     [[ "$(instance_source_build "$app")" == "$expected_version" ]] || return 1
-    [[ "$(/usr/bin/plutil -extract LSEnvironment.CODEX_SPARKLE_ENABLED raw "$info" 2>/dev/null)" == "false" ]] || return 1
+    if [[ "$DOPPEL_APP_KIND" == claude ]]; then
+        [[ -n "$(/usr/bin/plutil -extract LSEnvironment.CLAUDE_CONFIG_DIR raw "$info" 2>/dev/null)" ]] || return 1
+    else
+        [[ "$(/usr/bin/plutil -extract LSEnvironment.CODEX_SPARKLE_ENABLED raw "$info" 2>/dev/null)" == "false" ]] || return 1
+    fi
     "$app/Contents/MacOS/$PRIMARY_EXECUTABLE" --doppel-verify >/dev/null 2>&1 || return 1
     return 0
 }
@@ -2778,7 +2823,7 @@ collect_reconcile_targets() {
         # handed back to an earlier one. `doppel rebuild <name>` still does it
         # for someone who means to.
         recorded="$(instance_source_build "$app")"
-        if valid_build_number "$recorded" && (( recorded > expected )); then
+        if source_build_is_newer "$recorded" "$expected"; then
             continue
         fi
         verify_managed_instance "$dir" "$expected" || RECONCILE_STALE_DIRS+=("$dir")
@@ -2951,7 +2996,7 @@ rebuild_instance_for_update() {
 precheck_patch_compat() {
     local app="$1" scratch output
     local asar="$app/Contents/Resources/app.asar"
-    [[ -f "$asar" ]] || die "ChatGPT at $app has no app.asar to check; nothing was changed"
+    [[ -f "$asar" ]] || die "$VENDOR_LABEL at $app has no app.asar to check; nothing was changed"
     scratch="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/doppel-precheck.XXXXXXXX")" || \
         die "creating the compatibility check workspace failed; nothing was changed"
     # An APFS clone is instant and costs no space for a 600 MB archive; fall
@@ -2960,9 +3005,9 @@ precheck_patch_compat() {
         /bin/rm -rf "$scratch"
         die "copying app.asar for the compatibility check failed; nothing was changed"
     }
-    if ! output="$(/usr/bin/python3 "$ENGINE_SRC/patch-deep-link.py" patch "$scratch/app.asar" 2>&1 >/dev/null)"; then
+    if ! output="$(/usr/bin/python3 "$ENGINE_SRC/patch-deep-link.py" --app "$DOPPEL_APP_KIND" patch "$scratch/app.asar" 2>&1 >/dev/null)"; then
         /bin/rm -rf "$scratch"
-        die "this ChatGPT build is not compatible with Doppel yet (${output#patch-deep-link: }); nothing was changed and the current apps keep working"
+        die "this $VENDOR_LABEL build is not compatible with Doppel yet (${output#patch-deep-link: }); nothing was changed and the current apps keep working"
     fi
     /bin/rm -rf "$scratch"
 }
@@ -2972,26 +3017,37 @@ cmd_update_apply() {
     [[ $# -le 1 ]] || die "usage: doppel update apply [build]"
     local vendor_kind="none" vendor_dir=""
     local from_feed=0
-    if [[ -z "$version" ]]; then
+    local prepared prepared_root target_short current stamp backup restart_manifest
+    local reconcile_only=0 total_instances=0 stale_instances=0 noun=build
+    validate_vendor_app "$PRIMARY_APP" || die "the installed primary $VENDOR_LABEL app is not valid vendor-signed code"
+    current="$(primary_version)"
+    if [[ "$DOPPEL_APP_KIND" == claude ]]; then
+        # Claude installs itself. What Doppel can do is bring the instances up
+        # to the app already installed, so a named version has to be that one:
+        # anything else is a request this command cannot carry out.
+        noun=version
+        [[ -n "$version" ]] || version="$current"
+        [[ "$version" == "$current" ]] || \
+            die "Claude updates itself; Doppel can only rebuild instances from the installed Claude $current"
+    elif [[ -z "$version" ]]; then
         local latest latest_short latest_url
         latest="$(fetch_latest_update)"
         IFS=$'\t' read -r version latest_short latest_url <<< "$latest"
         from_feed=1
     fi
-    valid_build_number "$version" || die "the requested update build is invalid"
-    local prepared prepared_root target_short current stamp backup restart_manifest
-    local reconcile_only=0 total_instances=0 stale_instances=0
-    validate_vendor_app "$PRIMARY_APP" || die "the installed primary ChatGPT app is not valid vendor-signed code"
-    current="$(primary_version)"
+    valid_source_build "$version" || die "the requested update $noun is invalid"
     # Without a build to apply, the request is "make everything match", and a
     # feed that has fallen behind the installed primary is no reason to refuse
     # it. Naming an older build explicitly still is.
     if (( from_feed && version < current )); then
         version="$current"
     fi
-    prepared="$(prepared_update_app "$version")"
-    prepared_root="${prepared:h}"
-    if (( version == current )); then
+    prepared="" prepared_root=""
+    if [[ "$DOPPEL_APP_KIND" == chatgpt ]]; then
+        prepared="$(prepared_update_app "$version")"
+        prepared_root="${prepared:h}"
+    fi
+    if [[ "$version" == "$current" ]]; then
         # ChatGPT's own updater can install a build between Doppel staging it
         # and the user accepting the restart, and it only ever moves the
         # primary. Reconciling rebuilds the managed instances from the app that
@@ -3008,13 +3064,13 @@ cmd_update_apply() {
         (( version > current )) || die "ChatGPT $version is older than the installed build $current"
         validate_vendor_app "$prepared" "$version" || die "ChatGPT $version has not been downloaded and verified; run 'doppel update prepare' first"
     fi
-    progress 3 "Checking that this ChatGPT build can be patched"
+    progress 3 "Checking that this $VENDOR_LABEL $noun can be patched"
     if (( reconcile_only )); then
         precheck_patch_compat "$PRIMARY_APP"
     else
         precheck_patch_compat "$prepared"
     fi
-    target_short="$(update_metadata_value "$version" Version)"
+    [[ -z "$prepared_root" ]] || target_short="$(update_metadata_value "$version" Version)"
     if [[ -z "$target_short" ]] && (( reconcile_only )); then
         target_short="$(primary_short_version)"
     fi
@@ -3204,7 +3260,7 @@ cmd_update_apply() {
     local outcome="updated" summary="ChatGPT updated to $target_short"
     if (( reconcile_only )); then
         outcome="reconciled"
-        summary="ChatGPT $target_short was already installed"
+        summary="$VENDOR_LABEL $target_short was already installed"
     fi
     if (( ${#failures} > 0 )); then
         release_update_lock
@@ -3213,7 +3269,9 @@ cmd_update_apply() {
     fi
     /bin/rm -f "$restart_manifest"
     UPDATE_ABORT_MANIFEST=""
-    if (( reconcile_only )); then
+    if [[ -z "$prepared_root" ]]; then
+        : # Claude never stages anything, so there is nothing to clear.
+    elif (( reconcile_only )); then
         # A build the primary already carries can never be installed from
         # staging, so whatever a superseded prepare left there is dead weight.
         # Named piece by piece rather than removed wholesale: the same narrow
@@ -3228,7 +3286,7 @@ cmd_update_apply() {
         /bin/rm -f "$prepared_root/update.plist"
         /bin/rmdir "$prepared_root" 2>/dev/null || true
     fi
-    prune_update_storage "$version"
+    [[ "$DOPPEL_APP_KIND" == claude ]] || prune_update_storage "$version"
     release_update_lock
     trap - EXIT INT TERM
     printf '%s\t%s\t%s\t%s\t%s\n' "$outcome" "$current" "$version" "${#verified_apps}" "$reopened"
@@ -3236,7 +3294,7 @@ cmd_update_apply() {
 
 cmd_update_verify() {
     [[ $# -eq 0 ]] || die "usage: doppel update verify"
-    validate_vendor_app "$PRIMARY_APP" || die "the primary ChatGPT app failed vendor-signature verification"
+    validate_vendor_app "$PRIMARY_APP" || die "the primary $VENDOR_LABEL app failed vendor-signature verification"
     local version dir count=0 failed=0 name
     version="$(primary_version)"
     for dir in "$INSTANCES_ROOT"/*(N/); do
@@ -4185,7 +4243,7 @@ if [[ "${1:-}" == "__iab-worker" ]]; then
     readonly IAB_WORKER_OPERATION="$3"
     shift 3
     case "$IAB_WORKER_OPERATION" in
-        cmd_create|cmd_rebuild|cmd_edit) require_claude_auth_idle ;;
+        cmd_create|cmd_rebuild|cmd_edit|cmd_update_apply) require_claude_auth_idle ;;
     esac
     case "$IAB_WORKER_OPERATION" in
         cmd_import_sessions_apply|cmd_auth_claim|cmd_auth_release|cmd_create|cmd_launch|cmd_route_launch|cmd_route_launch_in_place|cmd_rebuild|cmd_edit|cmd_remove|cmd_browser_assign|cmd_browser_release|cmd_micro_change|cmd_update_apply)
@@ -4198,8 +4256,8 @@ fi
 
 if [[ "$DOPPEL_APP_KIND" == claude ]]; then
     case "${1:-}" in
-        update|browser|micro|native-tools|remote)
-            die "This command is only available for ChatGPT. Update the original Claude app, then rebuild its instances." ;;
+        browser|micro|native-tools|remote)
+            die "This command is only available for ChatGPT." ;;
     esac
 fi
 

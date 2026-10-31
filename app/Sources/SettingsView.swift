@@ -81,29 +81,15 @@ struct SettingsView: View {
     private var updates: some View {
         Form {
             Section {
-                BadgeRow(badge: StatusBadge(symbol: "arrow.down", color: .blue,
-                                            muted: store.chatGPTUpdate == nil),
-                         title: store.installedChatGPT.map { "ChatGPT \($0.display)" } ?? "ChatGPT",
-                         detail: store.chatGPTUpdate.map(MenuContent.updateHeadline)
-                             ?? "Doppel checks every six hours and updates every instance together.") {
-                    if store.busy.contains("update") {
-                        ProgressView().controlSize(.small)
-                    } else if let update = store.chatGPTUpdate {
-                        Button(MenuContent.bannerButtonTitle(update)) { store.beginKnownUpdate() }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(store.engineOperationBusy)
-                    } else {
-                        Button(store.checkingForUpdates ? "Checking…" : "Check Now") {
-                            store.checkForUpdates(userInitiated: true)
-                        }
-                        .disabled(store.checkingForUpdates)
-                    }
-                }
+                vendorRow(.chatgpt)
             } header: {
                 VStack(alignment: .leading, spacing: 18) {
                     updatesHero.heroHeader()
                     Text("ChatGPT")
                 }
+            }
+            if store.isInstalled(.claude) {
+                Section("Claude") { vendorRow(.claude) }
             }
             Section("Doppel") {
                 BadgeRow(badge: StatusBadge(symbol: "square.on.square", color: .indigo,
@@ -130,42 +116,97 @@ struct SettingsView: View {
         .formStyle(.grouped)
     }
 
-    /// The installed ChatGPT and the one waiting, as two keys with a lit path
-    /// between them when there is somewhere to go.
+    /// Doppel downloads ChatGPT itself; Claude updates itself and Doppel only
+    /// brings the instances up to it, so the idle captions say different things.
+    private func vendorRow(_ app: InstanceApp) -> some View {
+        let update = store.updates[app]
+        let idle = app == .chatgpt
+            ? "Doppel checks every six hours and updates every instance together."
+            : "Claude updates itself. Doppel checks every six hours and rebuilds the instances it left behind."
+        return BadgeRow(badge: StatusBadge(symbol: app == .chatgpt ? "arrow.down" : "arrow.triangle.2.circlepath",
+                                           color: app == .chatgpt ? .blue : Design.claude,
+                                           muted: update == nil),
+                        title: store.installedVersions[app].map { "\(app.label) \($0.display)" } ?? app.label,
+                        detail: update.map(MenuContent.updateHeadline) ?? idle) {
+            if store.busy.contains("update") && store.updatingApp == app {
+                ProgressView().controlSize(.small)
+            } else if let update {
+                Button(MenuContent.bannerButtonTitle(update)) { store.beginKnownUpdate(app) }
+                    .buttonStyle(.borderedProminent)
+                    .tint(app.accent)
+                    .disabled(store.engineOperationBusy)
+            } else {
+                Button(store.checkingForUpdates ? "Checking…" : "Check Now") {
+                    store.checkForUpdates(userInitiated: true)
+                }
+                .disabled(store.checkingForUpdates || store.busy.contains("update"))
+            }
+        }
+    }
+
+    private var heroApps: [InstanceApp] {
+        InstanceApp.allCases.filter { $0 == .chatgpt || store.isInstalled($0) }
+    }
+
+    /// Each installed vendor app and where it is going, as two keys with a lit
+    /// path between them when there is somewhere to go.
     private var updatesHero: some View {
-        let installed = store.installedChatGPT
-        let update = store.chatGPTUpdate
-        let current = store.instances.filter { $0.appKind == .chatgpt }
-        let stale = update?.state == .staleInstances ? update?.staleInstanceCount ?? 0 : 0
-        var legend = [
-            HeroLegend(color: installed == nil ? Design.idle : .green,
-                       label: "Installed", value: installed?.version ?? "Not found"),
-            HeroLegend(color: update == nil ? Design.idle : .blue, label: "Next",
-                       value: update.map { $0.state == .staleInstances ? "Rebuild only" : $0.targetVersion }
-                           ?? (store.lastCheckWasCurrent ? "Up to date" : "Nothing waiting")),
-        ]
-        if !current.isEmpty {
-            legend.append(HeroLegend(color: stale > 0 ? .orange : .green, label: "Instances",
+        let apps = heroApps
+        var legend: [HeroLegend] = apps.map { app in
+            let installed = store.installedVersions[app]
+            let update = store.updates[app]
+            let value: String
+            if let update {
+                value = update.state == .staleInstances ? "\(installed?.version ?? update.currentVersion), rebuild needed"
+                    : "\(installed?.version ?? update.currentVersion) → \(update.targetVersion)"
+            } else if let installed {
+                value = store.upToDateApps.contains(app) ? "\(installed.version), up to date" : installed.version
+            } else {
+                value = "Not checked"
+            }
+            return HeroLegend(color: update != nil ? app.accent : (installed == nil ? Design.idle : .green),
+                              label: app.label, value: value)
+        }
+        for app in apps {
+            let current = store.instances.filter { $0.appKind == app }
+            guard !current.isEmpty else { continue }
+            let update = store.updates[app]
+            let stale = update?.state == .staleInstances ? update?.staleInstanceCount ?? 0 : 0
+            legend.append(HeroLegend(color: stale > 0 ? .orange : .green, label: "\(app.label) instances",
                                      value: "\(current.count - stale) of \(current.count) current"))
         }
         legend.append(HeroLegend(color: .indigo, label: "Doppel", value: MenuContent.doppelVersionLabel))
-        return HeroCard(title: "Updates", subtitle: "ChatGPT is checked every six hours", legend: legend) {
-            HStack(spacing: 10) {
-                versionKey(installed.map { Self.shortVersion($0.version) } ?? "–",
-                           glow: installed == nil ? Design.idle : .green)
-                Image(systemName: "chevron.right.2")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(update == nil ? Design.idle : .blue)
-                versionKey(update.map { Self.shortVersion($0.targetVersion) } ?? "–",
-                           glow: update == nil ? Design.idle : .blue)
+        let subtitle = apps.count > 1 ? "Both apps are checked every six hours" : "ChatGPT is checked every six hours"
+        return HeroCard(title: "Updates", subtitle: subtitle, legend: legend) {
+            VStack(spacing: 10) {
+                ForEach(apps, id: \.self) { app in
+                    versionKeys(app, size: apps.count > 1 ? 56 : 64)
+                }
             }
             .heroPlate()
         }
     }
 
-    private func versionKey(_ label: String, glow: Color) -> some View {
-        HeroKey(glow: glow, size: 64) {
+    private func versionKeys(_ app: InstanceApp, size: CGFloat) -> some View {
+        let installed = store.installedVersions[app]
+        let update = store.updates[app]
+        return HStack(spacing: 10) {
+            versionKey(installed.map { Self.shortVersion($0.version) } ?? "–",
+                       glow: installed == nil ? Design.idle : .green, size: size)
+            Image(systemName: "chevron.right.2")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(update == nil ? Design.idle : app.accent)
+            versionKey(update.map { Self.shortVersion($0.targetVersion) } ?? "–",
+                       glow: update == nil ? Design.idle : app.accent, size: size)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(app.label) \(installed?.version ?? "not checked")")
+    }
+
+    private func versionKey(_ label: String, glow: Color, size: CGFloat = 64) -> some View {
+        HeroKey(glow: glow, size: size) {
             Text(label).font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                .lineLimit(1)
                 .minimumScaleFactor(0.7)
                 .padding(4)
         }

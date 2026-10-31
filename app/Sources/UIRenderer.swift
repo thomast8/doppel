@@ -74,8 +74,10 @@ enum UIRenderer {
             store.progressNote = "Installing ChatGPT 26.821.10230 and rebuilding every instance…"
             store.progress = CLIProgress(fraction: 0.59, label: "Rebuilt 2 of 3 instances")
             store.lastError = "ChatGPT Work could not reopen. Launch it again from Doppel."
+        } else if screen == "settings-updates" {
+            addSampleUpdates(to: store)
         } else if screen == "panel" {
-            store.lastCheckWasCurrent = true
+            store.upToDateApps = [.chatgpt, .claude]
         }
         let updater = DoppelUpdater(startingUpdater: false)
         let view: AnyView
@@ -117,7 +119,10 @@ enum UIRenderer {
         store.listLoaded = true
         store.primaryInstalled = true
         store.signingReady = !setup
-        store.installedChatGPT = InstalledChatGPT(build: 6662, version: "26.810.52044")
+        store.installedVersions = [
+            .chatgpt: InstalledVendor(build: "6662", version: "26.810.52044"),
+            .claude: InstalledVendor(app: .claude, build: "1.4212.0", version: "1.4212.0"),
+        ]
         if setup { return store }
         store.instances = [
             Instance(id: "personal", name: "ChatGPT Personal", appPath: "/Applications/ChatGPT Personal.app",
@@ -159,11 +164,20 @@ enum UIRenderer {
         if attention {
             store.busy = ["work"]
             store.instanceProgress["work"] = CLIProgress(fraction: 0.6, label: "Signing")
-            store.chatGPTUpdate = ChatGPTUpdate(state: .ready, currentBuild: 6662, currentVersion: "26.810.52044",
-                                                targetBuild: 6700, targetVersion: "26.821.10230",
-                                                staleInstanceCount: 0)
+            addSampleUpdates(to: store)
         }
         return store
+    }
+
+    /// A ChatGPT download waiting and a Claude instance left behind, so both
+    /// kinds of offer are drawn.
+    private static func addSampleUpdates(to store: InstanceStore) {
+        store.updates[.chatgpt] = VendorUpdate(state: .ready, currentBuild: "6662", currentVersion: "26.810.52044",
+                                               targetBuild: "6700", targetVersion: "26.821.10230",
+                                               staleInstanceCount: 0)
+        store.updates[.claude] = VendorUpdate(app: .claude, state: .staleInstances, currentBuild: "1.4212.0",
+                                              currentVersion: "1.4212.0", targetBuild: "1.4212.0",
+                                              targetVersion: "1.4212.0", staleInstanceCount: 1)
     }
 
     private static func write(_ bitmap: NSBitmapImageRep, to url: URL) {

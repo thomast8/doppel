@@ -50,9 +50,12 @@ final class InstanceStore: ObservableObject {
     @Published var primaryInstalled = false
     @Published var claudeInstalled = false
     @Published var signingReady = false
-    @Published var chatGPTUpdate: ChatGPTUpdate?
-    /// The installed vendor build, shown in the menu even when it is current.
-    @Published var installedChatGPT: InstalledChatGPT?
+    /// What each vendor app's last update check offered, if anything.
+    @Published var updates: [InstanceApp: VendorUpdate] = [:]
+    /// The installed vendor builds, shown in the menu even when they are current.
+    @Published var installedVersions: [InstanceApp: InstalledVendor] = [:]
+    /// Which app the running update belongs to, while `busy` holds "update".
+    @Published var updatingApp: InstanceApp?
     @Published var checkingForUpdates = false
     @Published var permissionStatuses: [PermissionIssue] = []
     @Published var checkingPermissions = false
@@ -69,8 +72,8 @@ final class InstanceStore: ObservableObject {
     /// False until the CLI has answered once, so an empty list at launch is
     /// not mistaken for a Mac with no instances.
     @Published var listLoaded = false
-    /// True only after a check that the CLI answered with "current".
-    @Published var lastCheckWasCurrent = false
+    /// The apps whose last check the CLI answered with "current".
+    @Published var upToDateApps: Set<InstanceApp> = []
     /// What long-running work is doing, for the panel's progress banner.
     @Published var progressNote: String?
     /// The latest step the CLI reported for that work, when it reports any.
@@ -588,8 +591,15 @@ final class InstanceStore: ObservableObject {
         NSWorkspace.shared.open(url)
     }
 
-    // MARK: - Coordinated ChatGPT updates
+    // MARK: - Coordinated vendor updates
 
+    /// Every app with an offer, ChatGPT first, so banners keep a stable order.
+    var pendingUpdates: [VendorUpdate] { InstanceApp.allCases.compactMap { updates[$0] } }
+
+    /// ChatGPT is always asked, as before: the CLI's own failure says when it is
+    /// missing. Claude is asked only when it is installed, so a Mac without it
+    /// has no failing check to hide. Each app's answer is handled on its own,
+    /// so one going wrong never clears the other's offer.
     func checkForUpdates(userInitiated: Bool = false) {
         guard !checkingForUpdates, !busy.contains("update") else { return }
         guard let cli = discoveredCLI else {
@@ -597,46 +607,65 @@ final class InstanceStore: ObservableObject {
             return
         }
         checkingForUpdates = true
+        let apps = InstanceApp.allCases.filter { $0 == .chatgpt || FileManager.default.fileExists(atPath: $0.path) }
         Task.detached { [weak self] in
-            let result = Self.runProcess(cli: cli, arguments: ["update", "check", "--porcelain"])
+            let results = apps.map { app in
+                (app, Self.runProcess(cli: cli, arguments: app.cliPrefix + ["update", "check", "--porcelain"]))
+            }
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.checkingForUpdates = false
-                switch result {
-                case .failure(let message):
-                    // A background check must stay quiet when the Mac is
-                    // offline. A check the user explicitly requested reports
-                    // the same actionable CLI failure.
-                    self.lastCheckWasCurrent = false
-                    if userInitiated { self.report(message, for: "update-check") }
-                case .success(let output):
-                    self.clearReport(for: "update-check")
-                    // Recorded whether or not there is an update to offer, so
-                    // the panel can show the installed build either way.
-                    self.installedChatGPT = InstalledChatGPT.parse(output)
-                    // Only the CLI saying "current" means current. A line this
-                    // version cannot read, a state word added by a newer CLI
-                    // than the app, proves nothing either way.
-                    self.lastCheckWasCurrent = Self.resultFields(output).first == "current"
-                    guard let update = ChatGPTUpdate.parse(output) else {
-                        self.chatGPTUpdate = nil
-                        if userInitiated && !self.lastCheckWasCurrent {
-                            self.report(Self.unreadableUpdateCheckMessage, for: "update-check")
-                        }
-                        return
-                    }
-                    self.chatGPTUpdate = update
-                    self.announce(update)
+                for app in InstanceApp.allCases where !apps.contains(app) {
+                    self.updates[app] = nil
+                    self.installedVersions[app] = nil
+                    self.upToDateApps.remove(app)
+                }
+                for (app, result) in results {
+                    self.recordUpdateCheck(result, for: app, userInitiated: userInitiated)
                 }
             }
+        }
+    }
+
+    private func recordUpdateCheck(_ result: ProcessResult, for app: InstanceApp, userInitiated: Bool) {
+        let reportKey = app == .chatgpt ? "update-check" : "update-check-\(app.rawValue)"
+        switch result {
+        case .failure(let message):
+            // A background check must stay quiet when the Mac is offline. A
+            // check the user explicitly requested reports the same actionable
+            // CLI failure.
+            upToDateApps.remove(app)
+            if userInitiated { report(message, for: reportKey) }
+        case .success(let output):
+            clearReport(for: reportKey)
+            // Recorded whether or not there is an update to offer, so the panel
+            // can show the installed build either way.
+            installedVersions[app] = InstalledVendor.parse(output, app: app)
+            // Only the CLI saying "current" means current. A line this version
+            // cannot read, a state word added by a newer CLI than the app,
+            // proves nothing either way.
+            if Self.resultFields(output).first == "current" {
+                upToDateApps.insert(app)
+            } else {
+                upToDateApps.remove(app)
+            }
+            guard let update = VendorUpdate.parse(output, app: app) else {
+                updates[app] = nil
+                if userInitiated && !upToDateApps.contains(app) {
+                    report(Self.unreadableUpdateCheckMessage, for: reportKey)
+                }
+                return
+            }
+            updates[app] = update
+            announce(update)
         }
     }
 
     /// The panel's banner is the offer. Acting on it starts the work at once:
     /// the banner already says what closes, and a second dialog repeating it
     /// was the modal the redesign set out to remove.
-    func beginKnownUpdate() {
-        guard let update = chatGPTUpdate else {
+    func beginKnownUpdate(_ app: InstanceApp = .chatgpt) {
+        guard let update = updates[app] else {
             checkForUpdates(userInitiated: true)
             return
         }
@@ -647,29 +676,31 @@ final class InstanceStore: ObservableObject {
     }
 
     /// One notification per offer and build, so the six-hourly check does not
-    /// repeat itself. Keyed by the state that produced it, so a reconcile offer
-    /// for the installed build is not hidden by an earlier download offer that
-    /// named the same number.
-    private func announce(_ update: ChatGPTUpdate) {
+    /// repeat itself. Keyed by the app and the state that produced it, so a
+    /// reconcile offer for the installed build is not hidden by an earlier
+    /// download offer that named the same number.
+    private func announce(_ update: VendorUpdate) {
         guard !announcedUpdates.contains(update.offerKey) else { return }
         announcedUpdates.insert(update.offerKey)
         let message = StatusMessages.offer(update)
         Notifier.post(message.title, message.body)
     }
 
-    private func prepareUpdate(_ update: ChatGPTUpdate) {
+    private func prepareUpdate(_ update: VendorUpdate) {
         guard let cli = discoveredCLI else {
             report(Self.missingCLIMessage, for: "cli")
             return
         }
         busy.insert("update")
+        updatingApp = update.app
         progressNote = StatusMessages.progress(for: update)
         Task.detached { [weak self] in
-            let result = Self.runProcess(cli: cli, arguments: ["update", "prepare"],
+            let result = Self.runProcess(cli: cli, arguments: update.app.cliPrefix + ["update", "prepare"],
                                          onProgress: self?.globalProgressSink())
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.busy.remove("update")
+                self.updatingApp = nil
                 self.progressNote = nil
                 self.progress = nil
                 switch result {
@@ -683,18 +714,19 @@ final class InstanceStore: ObservableObject {
                     // on that would apply a build the primary already has, so
                     // the state is re-read instead of assumed.
                     guard Self.resultFields(output).first == "ready" else {
-                        self.chatGPTUpdate = nil
+                        self.updates[update.app] = nil
                         self.checkForUpdates(userInitiated: true)
                         return
                     }
-                    let ready = ChatGPTUpdate(
+                    let ready = VendorUpdate(
+                        app: update.app,
                         state: .ready,
                         currentBuild: update.currentBuild,
                         currentVersion: update.currentVersion,
                         targetBuild: update.targetBuild,
                         targetVersion: update.targetVersion,
                         staleInstanceCount: 0)
-                    self.chatGPTUpdate = ready
+                    self.updates[update.app] = ready
                     self.announce(ready)
                 }
             }
@@ -710,20 +742,22 @@ final class InstanceStore: ObservableObject {
         return last.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
     }
 
-    private func applyUpdate(_ update: ChatGPTUpdate) {
+    private func applyUpdate(_ update: VendorUpdate) {
         guard let cli = discoveredCLI else {
             report(Self.missingCLIMessage, for: "cli")
             return
         }
         busy.insert("update")
+        updatingApp = update.app
         progressNote = StatusMessages.progress(for: update)
         Task.detached { [weak self] in
             let result = Self.runProcess(
-                cli: cli, arguments: ["update", "apply", String(update.targetBuild)],
+                cli: cli, arguments: update.app.cliPrefix + ["update", "apply", update.targetBuild],
                 onProgress: self?.globalProgressSink())
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.busy.remove("update")
+                self.updatingApp = nil
                 self.progressNote = nil
                 self.progress = nil
                 switch result {
@@ -733,11 +767,11 @@ final class InstanceStore: ObservableObject {
                     // would let the same doomed apply be retried from the panel;
                     // re-reading is also how a primary that moved underneath
                     // Doppel turns into the reconcile offer that fixes it.
-                    self.chatGPTUpdate = nil
+                    self.updates[update.app] = nil
                     self.checkForUpdates()
                 case .success(let output):
                     self.clearReport(for: "update")
-                    self.chatGPTUpdate = nil
+                    self.updates[update.app] = nil
                     self.reload()
                     let message = StatusMessages.completion(update, output: output,
                                                             signingReady: self.signingReady)
