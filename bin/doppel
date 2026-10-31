@@ -238,6 +238,10 @@ install_engine_assets() {
     local helpers; helpers="$(helper_dir)"
     /bin/cp "$helpers/doppel-launcher" "$helpers/doppel-alert" \
         "$helpers/doppel-url-handler" "$dir/bin/"
+    # Lets the engine recolour Claude's icon catalog from each new vendor build.
+    if [[ -x "$helpers/doppel-icon" ]]; then
+        /bin/cp "$helpers/doppel-icon" "$dir/bin/"
+    fi
 }
 
 # The name lands in a sourced config file, an Info.plist JSON fragment, and a
@@ -292,6 +296,9 @@ generate_icon() {
             die "tinting the icon failed"
         png_to_icns "$tinted_png" "$dir/assets/icon.icns"
         /bin/rm -f "$source_png"
+        # An edit restyles in place without reinstalling the engine assets.
+        mkdir -p "$dir/bin"
+        /bin/cp "$(helper_dir)/doppel-icon" "$dir/bin/" || die "installing the icon helper failed"
     fi
 }
 

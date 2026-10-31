@@ -71,6 +71,7 @@ readonly PIN_ROOT="${DOPPEL_PIN_ROOT:-$HOME/Library/Application Support/Doppel/p
 readonly LAUNCHER="$ASSET_ROOT/bin/doppel-launcher"
 readonly ALERT_HELPER="$ASSET_ROOT/bin/doppel-alert"
 readonly URL_HANDLER_HELPER="$ASSET_ROOT/bin/doppel-url-handler"
+readonly ICON_HELPER="$ASSET_ROOT/bin/doppel-icon"
 readonly ROUTER_CLI="$ASSET_ROOT/bin/doppel"
 readonly ROUTER_ENGINE="$ASSET_ROOT/engine/doppel-engine.zsh"
 readonly ROUTER_PATCHER="$ASSET_ROOT/engine/patch-deep-link.py"
@@ -221,6 +222,35 @@ is_doppel_instance() {
     [[ -x "$app/Contents/MacOS/$PRIMARY_EXECUTABLE.real" ]] && return 0
     [[ -n "$(plist_value "$app/Contents/Info.plist" DoppelSigningIdentifier)" ]] && return 0
     return 1
+}
+
+# Claude's icon is an Icon Composer asset catalog, the only icon form macOS
+# redraws for dark mode and the clear and tinted styles; a flat .icns looks the
+# same in all of them. Point the bundle at the vendor's catalog, recoloured to
+# the instance tint, and keep the vendor's own for the original icon. A custom
+# icon, a ChatGPT instance, an older instance without the helper, or a recolour
+# that fails all leave the flat .icns as the icon. The catalog also holds
+# runtime artwork, so it always starts from the pristine vendor copy.
+apply_icon_catalog() {
+    local app="$1"
+    local info="$app/Contents/Info.plist"
+    local catalog="$app/Contents/Resources/Assets.car"
+    local vendor_catalog="$app/Contents/Resources/Doppel/assets/vendor-Assets.car"
+    local icon_name
+    icon_name="$(plist_value "$info" DoppelVendorIconName)"
+    /usr/bin/plutil -remove CFBundleIconName "$info" 2>/dev/null || true
+    [[ "$DOPPEL_APP_KIND" == claude && -n "$icon_name" && -f "$vendor_catalog" ]] || return 0
+    /bin/cp "$vendor_catalog" "$catalog" || fail_closed "Restoring the vendor asset catalog failed."
+    if [[ "${DOPPEL_TINT:-}" =~ '^#?[0-9A-Fa-f]{6}$' && -x "$ICON_HELPER" ]]; then
+        if ! "$ICON_HELPER" --catalog "$vendor_catalog" "$catalog" "$DOPPEL_TINT" >/dev/null 2>&1; then
+            /bin/cp "$vendor_catalog" "$catalog" || fail_closed "Restoring the vendor asset catalog failed."
+            log_message "Could not recolour the icon catalog; using the flat tinted icon"
+            return 0
+        fi
+    elif [[ "${DOPPEL_TINT:-}" != original ]]; then
+        return 0
+    fi
+    /usr/bin/plutil -replace CFBundleIconName -string "$icon_name" "$info"
 }
 
 require_engine_assets() {
@@ -508,6 +538,17 @@ build_instance() {
         "$embedded/engine/doppel-engine.zsh"
     /bin/cp "$ICON_ICNS" "$ICON_PNG" "$embedded/assets/" || \
         fail_closed "Embedding the icon assets failed."
+    if [[ -x "$ICON_HELPER" ]]; then
+        /bin/cp "$ICON_HELPER" "$embedded/bin/" || fail_closed "Embedding the icon helper failed."
+    fi
+    local vendor_icon_name=""
+    if [[ "$DOPPEL_APP_KIND" == claude ]]; then
+        vendor_icon_name="$(plist_value "$target/Contents/Info.plist" CFBundleIconName)"
+    fi
+    if [[ -n "$vendor_icon_name" && -f "$target/Contents/Resources/Assets.car" ]]; then
+        /bin/cp "$target/Contents/Resources/Assets.car" "$embedded/assets/vendor-Assets.car" || \
+            fail_closed "Preserving the vendor asset catalog failed."
+    fi
 
     write_claude_config "$target" || fail_closed "Writing the Claude profile settings failed."
 
@@ -534,6 +575,10 @@ build_instance() {
     /bin/cp "$ICON_PNG" "$target/Contents/Resources/icon-chatgpt.png"
     patch_plist "$target/Contents/Info.plist" "$version" "$executable_hash" || \
         fail_closed "Patching the instance metadata failed."
+    if [[ -n "$vendor_icon_name" ]]; then
+        /usr/bin/plutil -replace DoppelVendorIconName -string "$vendor_icon_name" "$target/Contents/Info.plist"
+    fi
+    apply_icon_catalog "$target"
 
     # Keep launch-time registration instance-specific, but retain Google's
     # registered codex:// OAuth callback. The ASAR patch claims codex:// only
@@ -646,6 +691,9 @@ restyle_instance() {
             "$embedded/engine/doppel-engine.zsh"
         /bin/cp "$ICON_ICNS" "$embedded/assets/icon.icns" || fail_closed "Updating the embedded icon failed."
         /bin/cp "$ICON_PNG" "$embedded/assets/icon.png" || fail_closed "Updating the embedded icon failed."
+        if [[ -x "$ICON_HELPER" ]]; then
+            /bin/cp "$ICON_HELPER" "$embedded/bin/doppel-icon" || fail_closed "Updating the icon helper failed."
+        fi
         /bin/chmod 755 "$embedded/doppel-engine.zsh" 2>/dev/null || true
     fi
 
@@ -663,6 +711,7 @@ restyle_instance() {
     /usr/bin/plutil -replace CFBundleAlternateNames.0 -string "$DOPPEL_DISPLAY_NAME" "$info"
     /usr/bin/plutil -replace CFBundleURLTypes.0.CFBundleURLName -string "$DOPPEL_DISPLAY_NAME" "$info"
     /usr/bin/plutil -replace DoppelRouterSHA256 -string "$(sha256_file "$ROUTER_CLI")" "$info"
+    apply_icon_catalog "$app"
 
     /usr/bin/xattr -cr "$app" || fail_closed "Removing filesystem metadata failed."
     # The re-sign covers the launcher, so it must keep the device entitlements
