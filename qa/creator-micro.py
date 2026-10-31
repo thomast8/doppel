@@ -49,12 +49,15 @@ with tempfile.TemporaryDirectory(prefix="doppel-micro-") as scratch:
     run("status", "--bad-option", success=False)
     channels = root / "state" / "codex-micro-channels"
     assert run("channel") == "Creator Micro channels: none set\n"
+    # The menu bar app reads channels by slug, not by display name.
+    assert run("channel", "--porcelain") == "claude\toff\n"
     run("channel", "ChatGPT Veridue", "1")
     run("channel", "ChatGPT Personal", "3")
     assert run("channel") == "ChatGPT Personal: 3\nChatGPT Veridue: 1\n"
+    assert run("channel", "--porcelain") == "instance\tpersonal\t3\ninstance\tveridue\t1\nclaude\toff\n"
     assert (channels / "veridue").read_text() == "1\n"
     run("channel", "ChatGPT Personal", "1", success=False)
-    for invalid in ["0", "10", "x", "../1"]:
+    for invalid in ["0", "4", "9", "10", "x", "../1"]:
         run("channel", "ChatGPT Veridue", invalid, success=False)
     run("channel", "Missing Instance", "2", success=False)
     (channels / "removed-instance").write_text("2\n")
@@ -106,6 +109,7 @@ json.dump(data, open(path, "w"))
     assert run("claude") == "Claude Code: not set up\n"
     run("channel", "ChatGPT Veridue", "1")
     run("claude", "1", "--yes", success=False)
+    run("claude", "4", "--plan", success=False)
     plan = run("claude", "2", "--plan")
     for step in ["add the codex-micro marketplace from thomast8/codex-micro-for-claude-code",
                  "install the codex-micro plugin",
@@ -125,6 +129,7 @@ json.dump(data, open(path, "w"))
     assert data["theme"] == "dark"
     assert pad_config.read_text() == '[keys]\nfast = "approve"\n\n[pad]\nchannel = 2\n'
     assert run("claude") == "Claude Code: channel 2\n"
+    assert run("channel", "--porcelain") == "instance\tveridue\t1\nclaude\t2\n"
     assert "nothing to change" in run("claude", "2", "--plan")
     assert run("channel") == "ChatGPT Veridue: 1\nClaude Code: 2\n"
     run("channel", "ChatGPT Personal", "2", success=False)

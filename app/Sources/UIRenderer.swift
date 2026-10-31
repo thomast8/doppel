@@ -59,6 +59,130 @@ enum UIRenderer {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    static let screens = ["panel", "panel-attention", "panel-progress", "panel-setup", "instance", "settings",
+                          "settings-updates", "settings-integrations", "settings-micro", "onboarding", "onboarding-create"]
+
+    /// The newer screens are drawn from a fixed sample store rather than the
+    /// Mac's real instances, so a render shows every state on any machine and
+    /// never someone's account names. They use real AppKit controls, which
+    /// ImageRenderer cannot draw, so they render through an offscreen window's
+    /// view cache instead; that still needs no screen-capture permission.
+    static func render(screen: String, to url: URL) {
+        let store = sampleStore(attention: screen == "panel-attention", setup: screen == "panel-setup")
+        if screen == "panel-progress" {
+            store.busy = ["update"]
+            store.progressNote = "Installing ChatGPT 26.821.10230 and rebuilding every instance…"
+            store.progress = CLIProgress(fraction: 0.59, label: "Rebuilt 2 of 3 instances")
+            store.lastError = "ChatGPT Work could not reopen. Launch it again from Doppel."
+        } else if screen == "panel" {
+            store.lastCheckWasCurrent = true
+        }
+        let updater = DoppelUpdater(startingUpdater: false)
+        let view: AnyView
+        switch screen {
+        case "panel", "panel-attention", "panel-progress", "panel-setup":
+            view = AnyView(MenuContent(store: store, updaterController: updater, doppelUpdatesEnabled: true)
+                .background(Color(nsColor: .windowBackgroundColor)))
+        case "instance":
+            view = AnyView(InstanceDetailView(store: store, slug: "personal"))
+        case "settings", "settings-updates", "settings-integrations", "settings-micro":
+            view = AnyView(SettingsView(store: store, updaterController: updater, doppelUpdatesEnabled: true,
+                                        initialTab: ["settings", "settings-updates", "settings-integrations", "settings-micro"]
+                                            .firstIndex(of: screen) ?? 0))
+        case "onboarding":
+            view = AnyView(OnboardingView(store: store, initialStep: .welcome, renderingDocumentation: true))
+        case "onboarding-create":
+            view = AnyView(OnboardingView(store: store, initialStep: .create, renderingDocumentation: true))
+        default:
+            fail("unknown screen \(screen); expected one of \(screens.joined(separator: ", "))")
+        }
+
+        let host = NSHostingView(rootView: view)
+        let window = NSWindow(contentRect: NSRect(origin: .zero, size: host.fittingSize),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        host.frame = NSRect(origin: .zero, size: host.fittingSize)
+        host.layoutSubtreeIfNeeded()
+        // Lets SwiftUI finish its first update pass before the view is cached.
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
+            fail("render produced no image")
+        }
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        write(bitmap, to: url)
+    }
+
+    private static func sampleStore(attention: Bool, setup: Bool) -> InstanceStore {
+        let store = InstanceStore(testingWithoutStartup: true)
+        store.listLoaded = true
+        store.primaryInstalled = true
+        store.signingReady = !setup
+        store.installedChatGPT = InstalledChatGPT(build: 6662, version: "26.810.52044")
+        if setup { return store }
+        store.instances = [
+            Instance(id: "personal", name: "ChatGPT Personal", appPath: "/Applications/ChatGPT Personal.app",
+                     installed: true, tint: "F28C28", engine: .clone),
+            Instance(id: "claude/research", name: "Claude Research", appPath: "/Applications/Claude Research.app",
+                     installed: true, tint: "14B8A6", engine: .clone, appKind: .claude),
+            Instance(id: "veridue", name: "ChatGPT Veridue", appPath: "/Applications/ChatGPT Veridue.app",
+                     installed: true, tint: "A855F7", engine: .vendor),
+            Instance(id: "work", name: "ChatGPT Work", appPath: "/Applications/ChatGPT Work.app",
+                     installed: true, tint: "3B82F6", engine: .clone),
+        ]
+        store.runningAppPaths = ["/Applications/ChatGPT Personal.app", "/Applications/Claude Research.app"]
+        store.claudeInstalled = true
+        var tools = NativeToolsStatus()
+        tools.computerUse = .ready
+        tools.chronicle = .running
+        tools.chronicleHost = "ChatGPT Work"
+        tools.chronicleFrameAge = 4
+        tools.inAppBrowserInstanceID = "veridue"
+        tools.inAppBrowserInstanceName = "ChatGPT Veridue"
+        tools.inAppBrowserRunning = true
+        tools.inAppBrowserVendorValid = true
+        tools.browserHosts = [NativeToolsStatus.BrowserHost(browser: "Chrome", owner: "ChatGPT Work")]
+        tools.instancesWithBrowserHost = ["ChatGPT Work", "ChatGPT Personal"]
+        store.nativeToolsStatus = tools
+        store.creatorMicroStatusAvailable = true
+        store.creatorMicroOwnerID = "work"
+        store.microChannels = MicroChannels(instances: ["work": 1, "personal": 3], claude: .channel(2))
+        let statuses: [(String, String)] = [
+            ("microphone", attention ? "denied" : "granted"), ("screen-recording", "granted"),
+            ("notifications", "granted"), ("camera", "not-requested"), ("accessibility", "unconfirmed"),
+        ]
+        store.permissionStatuses = ["personal", "veridue", "work"].flatMap { id in
+            statuses.map { permission, status in
+                PermissionIssue(instanceID: id, instanceName: id, permission: permission,
+                                status: id == "personal" ? status : (permission == "camera" ? status : "granted"))
+            }
+        }
+        if attention {
+            store.busy = ["work"]
+            store.instanceProgress["work"] = CLIProgress(fraction: 0.6, label: "Signing")
+            store.chatGPTUpdate = ChatGPTUpdate(state: .ready, currentBuild: 6662, currentVersion: "26.810.52044",
+                                                targetBuild: 6700, targetVersion: "26.821.10230",
+                                                staleInstanceCount: 0)
+        }
+        return store
+    }
+
+    private static func write(_ bitmap: NSBitmapImageRep, to url: URL) {
+        guard let data = bitmap.representation(using: .png, properties: [:]) else {
+            fail("could not encode the image")
+        }
+        do {
+            try data.write(to: url)
+            print(url.path)
+        } catch {
+            fail(error.localizedDescription)
+        }
+    }
+
+    private static func fail(_ message: String) -> Never {
+        FileHandle.standardError.write(Data("\(message)\n".utf8))
+        exit(1)
+    }
+
     static func render(to url: URL, editing: Bool) {
         let store = InstanceStore()
         // Give the store a moment to populate from the CLI so the rendered

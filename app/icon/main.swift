@@ -6,9 +6,11 @@
 // same reasoning as the instance tinting — nothing here needs anything beyond
 // what macOS already has.
 //
-// The mark is two offset speech-bubble loops: conversation plus duplication,
-// expressed with Doppel's own asymmetric geometry. It deliberately avoids the
-// rotational symmetry and interwoven knot construction of OpenAI's mark.
+// The mark is the picture the app itself opens on: instances fanned out like
+// cards on a dark slab, each glowing in its own colour, the front one carrying
+// a speech bubble, and above them a light per instance as the menu bar panel
+// shows them. It deliberately avoids the rotational symmetry and interwoven
+// knot construction of OpenAI's mark.
 
 import CoreGraphics
 import Foundation
@@ -88,76 +90,122 @@ func bubblePath(in rect: CGRect) -> CGPath {
     return path
 }
 
-func drawIcon(size: Int) -> CGImage {
-    let side = CGFloat(size)
-    let context = makeContext(size: size)
+func roundedPath(_ rect: CGRect, radius: CGFloat) -> CGPath {
+    roundedPath(Tile(rect: rect, radius: radius))
+}
 
-    // One macOS tile gives the original mark a stable silhouette in Finder and
-    // the Dock. The paired bubbles carry duplication within it.
-    let margin = side * 0.075
-    let tile = Tile(rect: CGRect(x: margin, y: margin,
-                                 width: side - margin * 2, height: side - margin * 2),
-                    radius: side * 0.205)
+/// The dark slab every Doppel page opens on, on Apple's icon grid.
+func drawSlab(_ context: CGContext, side: CGFloat) -> CGRect {
+    let margin = side * 0.0977
+    let rect = CGRect(x: margin, y: margin, width: side - margin * 2, height: side - margin * 2)
+    let radius = side * 0.181
     context.saveGState()
-    context.setShadow(offset: CGSize(width: 0, height: -side * 0.025),
-                      blur: side * 0.055, color: colour(16, 20, 54, 0.44))
-    context.addPath(roundedPath(tile))
-    context.setFillColor(colour(42, 48, 112))
+    context.setShadow(offset: CGSize(width: 0, height: -side * 0.02), blur: side * 0.045,
+                      color: colour(0, 0, 0, 0.5))
+    context.addPath(roundedPath(rect, radius: radius))
+    context.setFillColor(colour(20, 20, 22))
     context.fillPath()
     context.restoreGState()
 
     context.saveGState()
-    context.addPath(roundedPath(tile))
+    context.addPath(roundedPath(rect, radius: radius))
     context.clip()
     context.drawLinearGradient(
-        gradient([colour(116, 129, 255), colour(61, 70, 173), colour(32, 37, 91)],
-                 [0, 0.48, 1]),
-        start: CGPoint(x: tile.rect.minX, y: tile.rect.maxY),
-        end: CGPoint(x: tile.rect.maxX, y: tile.rect.minY),
-        options: [])
-    context.drawLinearGradient(
-        gradient([colour(255, 255, 255, 0.24), colour(255, 255, 255, 0)], [0, 1]),
-        start: CGPoint(x: tile.rect.midX, y: tile.rect.maxY),
-        end: CGPoint(x: tile.rect.midX, y: tile.rect.midY),
+        gradient([colour(44, 44, 48), colour(22, 22, 25), colour(10, 10, 12)], [0, 0.5, 1]),
+        start: CGPoint(x: rect.minX, y: rect.maxY), end: CGPoint(x: rect.maxX, y: rect.minY),
         options: [])
     context.restoreGState()
 
-    let back = bubblePath(in: CGRect(x: side * 0.15, y: side * 0.38,
-                                     width: side * 0.56, height: side * 0.42))
-    let front = bubblePath(in: CGRect(x: side * 0.29, y: side * 0.20,
-                                      width: side * 0.56, height: side * 0.42))
+    // A hairline keeps the edge visible on a dark Dock or wallpaper.
+    context.addPath(roundedPath(rect.insetBy(dx: side * 0.002, dy: side * 0.002), radius: radius))
+    context.setStrokeColor(colour(255, 255, 255, 0.10))
+    context.setLineWidth(max(1, side * 0.004))
+    context.strokePath()
+    return rect
+}
 
-    context.setLineCap(.round)
-    context.setLineJoin(.round)
+struct Hue {
+    let top: CGColor
+    let bottom: CGColor
+    let glow: CGColor
+}
 
-    // The receding bubble is lavender and slightly quieter. A soft shadow keeps
-    // its outline legible against both ends of the background gradient.
+let purple = Hue(top: colour(196, 140, 255), bottom: colour(134, 66, 232), glow: colour(150, 80, 255, 0.75))
+let blue = Hue(top: colour(120, 170, 255), bottom: colour(54, 110, 240), glow: colour(70, 130, 255, 0.85))
+let orange = Hue(top: colour(255, 190, 110), bottom: colour(232, 126, 40), glow: colour(255, 140, 40, 0.75))
+
+/// One instance: a rounded tile in its colour, glowing, turned about its
+/// centre.
+func drawInstance(_ context: CGContext, center: CGPoint, size: CGFloat, angle: CGFloat,
+                  hue: Hue, side: CGFloat, bubble: Bool = false) {
     context.saveGState()
-    context.setShadow(offset: CGSize(width: 0, height: -side * 0.012),
-                      blur: side * 0.02, color: colour(18, 20, 64, 0.42))
-    context.addPath(back)
-    context.setStrokeColor(colour(187, 194, 255, 0.82))
-    context.setLineWidth(side * 0.055)
-    context.strokePath()
+    context.translateBy(x: center.x, y: center.y)
+    context.rotate(by: angle * .pi / 180)
+    let rect = CGRect(x: -size / 2, y: -size / 2, width: size, height: size)
+    let radius = size * 0.24
+
+    context.saveGState()
+    context.setShadow(offset: .zero, blur: side * 0.07, color: hue.glow)
+    context.addPath(roundedPath(rect, radius: radius))
+    context.setFillColor(hue.bottom)
+    context.fillPath()
     context.restoreGState()
 
-    // A wider background-coloured stroke first creates a seam, making the front
-    // bubble visibly pass over the back one rather than merging into it.
-    context.addPath(front)
-    context.setStrokeColor(colour(49, 56, 139, 0.96))
-    context.setLineWidth(side * 0.086)
-    context.strokePath()
-    context.addPath(front)
-    context.setStrokeColor(colour(246, 248, 255))
-    context.setLineWidth(side * 0.055)
+    context.saveGState()
+    context.addPath(roundedPath(rect, radius: radius))
+    context.clip()
+    context.drawLinearGradient(gradient([hue.top, hue.bottom], [0, 1]),
+                               start: CGPoint(x: 0, y: rect.maxY), end: CGPoint(x: 0, y: rect.minY),
+                               options: [])
+    context.drawLinearGradient(
+        gradient([colour(255, 255, 255, 0.28), colour(255, 255, 255, 0)], [0, 1]),
+        start: CGPoint(x: 0, y: rect.maxY), end: CGPoint(x: 0, y: 0), options: [])
+    context.restoreGState()
+
+    context.addPath(roundedPath(rect.insetBy(dx: size * 0.01, dy: size * 0.01), radius: radius))
+    context.setStrokeColor(colour(255, 255, 255, 0.22))
+    context.setLineWidth(max(1, size * 0.02))
     context.strokePath()
 
-    // A hairline on the outer tile keeps the edge crisp on similarly coloured
-    // wallpapers without turning it into another nested square.
-    context.addPath(roundedPath(tile))
-    context.setStrokeColor(colour(255, 255, 255, 0.18))
-    context.setLineWidth(max(1, side * 0.006))
-    context.strokePath()
+    if bubble {
+        context.saveGState()
+        context.setShadow(offset: CGSize(width: 0, height: -size * 0.015), blur: size * 0.04,
+                          color: colour(0, 0, 0, 0.25))
+        context.addPath(bubblePath(in: CGRect(x: -size * 0.27, y: -size * 0.25,
+                                              width: size * 0.54, height: size * 0.46)))
+        context.setFillColor(colour(255, 255, 255))
+        context.fillPath()
+        context.restoreGState()
+    }
+    context.restoreGState()
+}
+
+func drawIcon(size: Int) -> CGImage {
+    let side = CGFloat(size)
+    let context = makeContext(size: size)
+    let slab = drawSlab(context, side: side)
+    let tile = side * 0.385
+    let y = slab.midY - side * 0.04
+
+    drawInstance(context, center: CGPoint(x: slab.midX - side * 0.185, y: y - side * 0.01),
+                 size: tile * 0.88, angle: 13, hue: purple, side: side)
+    drawInstance(context, center: CGPoint(x: slab.midX + side * 0.185, y: y - side * 0.01),
+                 size: tile * 0.88, angle: -13, hue: orange, side: side)
+    drawInstance(context, center: CGPoint(x: slab.midX, y: y + side * 0.02),
+                 size: tile, angle: 0, hue: blue, side: side, bubble: true)
+
+    // The panel's lights, one per instance, in the same order.
+    let dot = side * 0.032
+    let gap = side * 0.058
+    for (index, hue) in [purple, blue, orange].enumerated() {
+        let x = slab.midX + CGFloat(index - 1) * gap
+        context.saveGState()
+        context.setShadow(offset: .zero, blur: side * 0.025, color: hue.bottom)
+        context.addEllipse(in: CGRect(x: x - dot / 2, y: slab.maxY - side * 0.135, width: dot, height: dot))
+        context.setFillColor(hue.bottom)
+        context.fillPath()
+        context.restoreGState()
+    }
 
     guard let image = context.makeImage() else { fail("could not render the icon") }
     return image

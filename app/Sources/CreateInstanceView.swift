@@ -56,6 +56,8 @@ struct CreateInstanceView: View {
                         Text(kind.label).tag(kind)
                     }
                 }
+                .pickerStyle(.segmented)
+                .labelsHidden()
                 .disabled(form.creating)
             }
             if !primaryInstalled && !isEditing { missingPrimaryNotice }
@@ -99,21 +101,17 @@ struct CreateInstanceView: View {
 
     // MARK: - Sections
 
+    /// The tile being made, on the dark slab the rest of the app uses, lit in
+    /// the colour being picked.
     private var header: some View {
-        HStack(alignment: .center, spacing: 16) {
-            IconTile(color: form.useOriginal ? Color(white: 0.97) : form.color,
-                     name: trimmedName, radius: Radius.tile,
+        let tint = form.useOriginal ? Color(white: 0.97) : form.color
+        return HeroCard(title: isEditing ? "Edit instance" : "New instance",
+                        subtitle: isEditing ? "Keeps its account and chats" : "Its own app, account and history",
+                        legend: [HeroLegend(color: form.appKind == .claude ? Design.claude : .white.opacity(0.7),
+                                            label: "App", value: form.appKind.label)]) {
+            IconTile(color: tint, name: trimmedName, radius: Radius.tile,
                      renderingDocumentation: renderingDocumentation)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(isEditing ? "Edit instance" : "New instance")
-                    .font(.system(size: 21, weight: .semibold))
-                Text(isEditing
-                     ? "Renaming keeps this instance's account and chats."
-                     : "Its own app, account and history.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 0)
+                .shadow(color: tint.opacity(0.6), radius: 14)
         }
     }
 
@@ -291,8 +289,9 @@ struct IconTile: View {
     let name: String
     let radius: CGFloat
     var renderingDocumentation = false
+    var size: CGFloat = 58
 
-    private var initials: String {
+    static func initials(for name: String) -> String {
         let letters = name.split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined()
         return letters.isEmpty ? "C" : letters.uppercased()
     }
@@ -305,12 +304,12 @@ struct IconTile: View {
             } else {
                 GlassBackground(cornerRadius: radius, tint: color, interactive: true)
             }
-            Text(initials)
-                .font(.system(size: 21, weight: .semibold, design: .rounded))
+            Text(Self.initials(for: name))
+                .font(.system(size: size * 0.36, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white)
                 .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
         }
-        .frame(width: 58, height: 58)
+        .frame(width: size, height: size)
     }
 }
 

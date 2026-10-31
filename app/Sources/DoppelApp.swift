@@ -40,9 +40,13 @@ struct DoppelApp: App {
 
         // Renders the window to a PNG without a screen or any capture
         // permission, so the UI can be reviewed as part of QA:
-        //   Doppel --render-ui <path.png> [edit]
+        //   Doppel --render-ui <path.png> [edit | panel | instance | settings | onboarding …]
         if let index = arguments.firstIndex(of: "--render-ui") {
             let path = index + 1 < arguments.count ? arguments[index + 1] : "/tmp/doppel-ui.png"
+            if let screen = arguments.first(where: UIRenderer.screens.contains) {
+                UIRenderer.render(screen: screen, to: URL(fileURLWithPath: path))
+                exit(0)
+            }
             let editing = arguments.contains("edit")
             UIRenderer.render(to: URL(fileURLWithPath: path), editing: editing)
             exit(0)
@@ -94,6 +98,7 @@ struct DoppelApp: App {
         } label: {
             MenuBarLabel(store: store)
         }
+        .menuBarExtraStyle(.window)
         Window("New Doppel Instance", id: "create-instance") {
             CreateInstanceView(store: store)
         }
@@ -104,6 +109,25 @@ struct DoppelApp: App {
             if let profileID {
                 RemoteAccessView(store: store, profileID: profileID)
             }
+        }
+        .windowResizability(.contentSize)
+        .windowStyle(.hiddenTitleBar)
+
+        WindowGroup("Doppel Instance", id: "instance", for: String.self) { $slug in
+            if let slug {
+                InstanceDetailView(store: store, slug: slug)
+            }
+        }
+        .windowResizability(.contentSize)
+
+        Window("Doppel Settings", id: "settings") {
+            SettingsView(store: store, updaterController: updaterController,
+                         doppelUpdatesEnabled: doppelUpdatesEnabled)
+        }
+        .windowResizability(.contentSize)
+
+        Window("Set Up Doppel", id: "onboarding") {
+            OnboardingView(store: store)
         }
         .windowResizability(.contentSize)
         .windowStyle(.hiddenTitleBar)
@@ -140,472 +164,93 @@ struct MenuBarLabel: View {
                 openWindow(id: "create-instance")
                 NSApp.activate(ignoringOtherApps: true)
             }
+            .onChange(of: store.listLoaded) { _, loaded in
+                let defaults = UserDefaults.standard
+                guard SetupProgress.shouldAutoOpen(
+                    listLoaded: loaded, instanceCount: store.instances.count,
+                    alreadyShown: defaults.bool(forKey: SetupProgress.shownDefaultsKey)) else { return }
+                defaults.set(true, forKey: SetupProgress.shownDefaultsKey)
+                openWindow(id: "onboarding")
+                NSApp.activate(ignoringOtherApps: true)
+            }
     }
 }
 
-/// Doppel's original mark at menu-bar scale: two asymmetric conversation
-/// bubbles, offset on the same diagonal as the app artwork. Keeping the geometry
-/// local means this identity has no dependency on another app's trademark.
+/// The app icon's mark at menu-bar scale: three instance tiles fanned out,
+/// the front one carrying a speech bubble. It is one colour so macOS can tint
+/// it for the menu bar, and the side tiles are half strength so the fan still
+/// reads at 18 pt. When something needs attention the same mark gains a dot
+/// rather than turning into a different symbol.
 private enum DoppelMenuBarMark {
+    static let image = mark(warning: false)
+    static let warningImage = mark(warning: true)
+
     /// NSImage's drawing handler is resolution-independent, so this stays sharp
     /// on Retina displays while presenting MenuBarExtra with the direct image it
     /// expects. `isTemplate` lets macOS supply the correct light/dark tint.
-    static let image: NSImage = {
-        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+    private static func mark(warning: Bool) -> NSImage {
+        let image = NSImage(size: NSSize(width: 22, height: 18), flipped: false) { _ in
             guard let context = NSGraphicsContext.current?.cgContext else { return false }
-            context.setLineCap(.round)
-            context.setLineJoin(.round)
-            context.setLineWidth(1.45)
-            context.setStrokeColor(NSColor.black.cgColor)
+            let front = tile(center: CGPoint(x: 11, y: 9), size: 9.8, degrees: 0)
+            context.setFillColor(NSColor.black.cgColor)
 
             context.saveGState()
-            context.setAlpha(0.46)
-            context.addPath(bubblePath(in: CGRect(x: 0.5, y: 6.8,
-                                                  width: 12.2, height: 9.4)))
-            context.strokePath()
+            context.setAlpha(0.5)
+            context.addPath(tile(center: CGPoint(x: 5.6, y: 8.2), size: 7.8, degrees: 14))
+            context.addPath(tile(center: CGPoint(x: 16.4, y: 8.2), size: 7.8, degrees: -14))
+            context.fillPath()
             context.restoreGState()
 
-            context.addPath(bubblePath(in: CGRect(x: 5.3, y: 1.4,
-                                                  width: 12.2, height: 9.4)))
+            // A gap around the front tile so it reads as lying on top.
+            context.setBlendMode(.clear)
+            context.addPath(front)
+            context.setLineWidth(2.2)
             context.strokePath()
+            context.setBlendMode(.normal)
+            context.addPath(front)
+            context.fillPath()
+
+            // The bubble is cut out of the front tile.
+            context.setBlendMode(.clear)
+            context.addPath(bubblePath(in: CGRect(x: 8.4, y: 6.6, width: 5.2, height: 4.8)))
+            context.fillPath()
+
+            if warning {
+                let dot = CGRect(x: 15.2, y: 13.2, width: 4.2, height: 4.2)
+                context.addEllipse(in: dot.insetBy(dx: -1.2, dy: -1.2))
+                context.fillPath()
+                context.setBlendMode(.normal)
+                context.addEllipse(in: dot)
+                context.fillPath()
+            }
+            context.setBlendMode(.normal)
             return true
         }
         image.isTemplate = true
         return image
-    }()
+    }
 
-    static let warningImage: NSImage = {
-        let image = NSImage(systemSymbolName: "exclamationmark.bubble.fill",
-                            accessibilityDescription: nil)
-            ?? NSImage(systemSymbolName: "exclamationmark.triangle.fill",
-                       accessibilityDescription: nil)!
-        image.isTemplate = true
-        return image
-    }()
+    private static func tile(center: CGPoint, size: CGFloat, degrees: CGFloat) -> CGPath {
+        var transform = CGAffineTransform(translationX: center.x, y: center.y)
+            .rotated(by: degrees * .pi / 180)
+        let rect = CGRect(x: -size / 2, y: -size / 2, width: size, height: size)
+        return CGPath(roundedRect: rect, cornerWidth: size * 0.26, cornerHeight: size * 0.26,
+                      transform: &transform)
+    }
 
+    /// A rounded bubble with a short tail at the lower left, simple enough to
+    /// survive at a few points across.
     private static func bubblePath(in rect: CGRect) -> CGPath {
         let path = CGMutablePath()
-        let tailHeight = rect.height * 0.20
-        let bodyBottom = rect.minY + tailHeight
-        let radius = min(rect.width * 0.16, (rect.height - tailHeight) * 0.30)
-        let tailStart = rect.minX + rect.width * 0.22
-        let tailTip = CGPoint(x: rect.minX + rect.width * 0.09, y: rect.minY)
-        let tailEnd = rect.minX + rect.width * 0.41
-
-        path.move(to: CGPoint(x: rect.minX + radius, y: bodyBottom))
-        path.addLine(to: CGPoint(x: tailStart, y: bodyBottom))
-        path.addQuadCurve(to: tailTip,
-                          control: CGPoint(x: tailStart - rect.width * 0.035,
-                                           y: bodyBottom - tailHeight * 0.48))
-        path.addQuadCurve(to: CGPoint(x: tailEnd, y: bodyBottom),
-                          control: CGPoint(x: tailTip.x + rect.width * 0.16,
-                                           y: tailTip.y + tailHeight * 0.36))
-        path.addLine(to: CGPoint(x: rect.maxX - radius, y: bodyBottom))
-        path.addQuadCurve(to: CGPoint(x: rect.maxX, y: bodyBottom + radius),
-                          control: CGPoint(x: rect.maxX, y: bodyBottom))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - radius))
-        path.addQuadCurve(to: CGPoint(x: rect.maxX - radius, y: rect.maxY),
-                          control: CGPoint(x: rect.maxX, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.minX + radius, y: rect.maxY))
-        path.addQuadCurve(to: CGPoint(x: rect.minX, y: rect.maxY - radius),
-                          control: CGPoint(x: rect.minX, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.minX, y: bodyBottom + radius))
-        path.addQuadCurve(to: CGPoint(x: rect.minX + radius, y: bodyBottom),
-                          control: CGPoint(x: rect.minX, y: bodyBottom))
+        let tail = rect.height * 0.24
+        let bottom = rect.minY + tail
+        let radius = rect.height * 0.28
+        path.addRoundedRect(in: CGRect(x: rect.minX, y: bottom, width: rect.width, height: rect.height - tail),
+                            cornerWidth: radius, cornerHeight: radius)
+        path.move(to: CGPoint(x: rect.minX + rect.width * 0.22, y: bottom + 0.2))
+        path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.12, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.48, y: bottom + 0.2))
         path.closeSubpath()
         return path
     }
-}
-
-struct MenuContent: View {
-    @ObservedObject var store: InstanceStore
-    @ObservedObject var updaterController: DoppelUpdater
-    let doppelUpdatesEnabled: Bool
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some View {
-        if store.instances.isEmpty {
-            Text("No instances yet")
-            Text("Create one with `doppel create`")
-        }
-        ForEach(store.instances) { instance in
-            let issues = store.permissionIssues.filter { $0.instanceID == instance.id }
-            let permissions = store.permissionStatuses.filter { $0.instanceID == instance.id }
-            let engineBusy = store.engineOperationBusy
-            Menu {
-                // The Doppel engine is the normal case and needs no label; only
-                // the fallback is worth surfacing at the top.
-                if instance.usesBuiltInBrowser {
-                    Label("Engine — Official ChatGPT (fallback)", systemImage: "checkmark.shield.fill")
-                    Button("Switch Back to Doppel Engine") {
-                        store.releaseBuiltInBrowser()
-                    }
-                    .disabled(engineBusy)
-                    Divider()
-                }
-                Menu(instance.usesBuiltInBrowser
-                     ? "Fallback Doppel Permissions"
-                     : "Privacy Permissions") {
-                    if instance.usesBuiltInBrowser {
-                        Text("Official ChatGPT uses its own macOS permissions.")
-                        Text("These grants apply after switching back to the Doppel engine.")
-                        Divider()
-                    }
-                    if permissions.isEmpty {
-                        Text(store.checkingPermissions ? "Checking…" : "No status available")
-                    } else {
-                        ForEach(permissions) { permission in
-                            if permission.action != .unavailable {
-                                Button {
-                                    store.handlePermission(permission)
-                                } label: {
-                                    Label("\(permission.label) — \(permission.statusLabel)",
-                                          systemImage: permission.systemImage)
-                                }
-                                .disabled(store.busy.contains("permissions"))
-                            } else {
-                                Label("\(permission.label) — \(permission.statusLabel)",
-                                      systemImage: permission.systemImage)
-                                    .disabled(true)
-                            }
-                        }
-                    }
-                    Divider()
-                    if store.busy.contains("permissions") {
-                        Text("Waiting for macOS…")
-                    } else {
-                        Text("Select Not requested to ask macOS for this instance.")
-                    }
-                }
-                Divider()
-                Button(instance.usesBuiltInBrowser
-                       ? "Launch on Official ChatGPT"
-                       : "Launch") { store.launch(instance) }
-                    .disabled(engineBusy)
-                Button("Rebuild & Reopen") { store.rebuild(instance) }
-                    .disabled(engineBusy)
-                if instance.appKind == .claude {
-                    Button("Import Existing Code History…") { store.importClaudeSessions(instance) }
-                        .disabled(engineBusy)
-                }
-                Button("Rename or Recolour…") {
-                    openWindow(id: "edit-instance", value: instance.id)
-                    NSApp.activate(ignoringOtherApps: true)
-                }
-                .disabled(engineBusy)
-                if instance.appKind == .chatgpt {
-                    Button("Remote Access…") {
-                        openWindow(id: "remote-access", value: instance.id)
-                        NSApp.activate(ignoringOtherApps: true)
-                    }
-                    .disabled(engineBusy)
-                }
-                if instance.appKind == .chatgpt && !instance.usesBuiltInBrowser {
-                    Menu("Fallback Engine") {
-                        Text("Only if a ChatGPT update breaks this clone.")
-                        Button("Run on Official ChatGPT Instead") {
-                            store.assignBuiltInBrowser(to: instance)
-                        }
-                        .disabled(engineBusy || !store.primaryInstalled)
-                    }
-                }
-                Divider()
-                Button("Remove…") { confirmRemove(instance) }
-                    .disabled(engineBusy)
-                if store.busy.contains(instance.id) {
-                    Text("Working…")
-                }
-            } label: {
-                if issues.isEmpty {
-                    Text(instance.name)
-                } else {
-                    Label(instance.name, systemImage: "exclamationmark.triangle.fill")
-                }
-            }
-        }
-        Divider()
-        if !store.permissionIssues.isEmpty {
-            Button("Permissions Need Attention (\(store.permissionIssues.count))…") {
-                store.showPermissionIssues()
-            }
-        } else if store.checkingPermissions {
-            Text("Checking Managed App Permissions…")
-        }
-        Menu("Creator Micro") {
-            if store.checkingCreatorMicro {
-                Text("Checking assignment…")
-            } else if !store.creatorMicroStatusAvailable {
-                Text("Assignment unavailable")
-            } else if let owner = store.instances.first(where: { $0.id == store.creatorMicroOwnerID }) {
-                Text("Assigned to \(owner.name)")
-            } else {
-                Text("No Doppel instance assigned")
-            }
-            Divider()
-            ForEach(store.instances.filter { $0.appKind == .chatgpt }) { instance in
-                Button {
-                    store.assignCreatorMicro(to: instance)
-                } label: {
-                    if store.creatorMicroOwnerID == instance.id {
-                        Label(instance.name, systemImage: "checkmark")
-                    } else {
-                        Text(instance.name)
-                    }
-                }
-                .disabled(store.checkingCreatorMicro || store.engineOperationBusy)
-            }
-            Button("Release Assignment") { store.releaseCreatorMicro() }
-                .disabled(store.checkingCreatorMicro || store.engineOperationBusy)
-            Divider()
-            Menu("Use with Claude Code") {
-                if let status = store.claudeMicroStatus {
-                    Text(status)
-                    Divider()
-                }
-                ForEach(1...9, id: \.self) { channel in
-                    Button("Bluetooth Channel \(channel)…") { store.setUpClaudeMicro(channel: String(channel)) }
-                }
-                Button("Every Channel…") { store.setUpClaudeMicro(channel: "any") }
-            }
-            .disabled(store.checkingCreatorMicro || store.engineOperationBusy)
-            Divider()
-            Text("Running affected instances restart automatically.")
-            Text("Official ChatGPT also uses the keypad when running.")
-        }
-        Menu("Native Tools") {
-            if let status = store.nativeToolsStatus {
-                Label(status.computerUse == .ready
-                      ? "Computer Use — Ready"
-                      : "Computer Use — Available on demand",
-                      systemImage: status.computerUse == .ready
-                          ? "checkmark.circle.fill" : "circle.dotted")
-                if status.chronicle == .running {
-                    Label(status.chronicleIsFresh
-                          ? "Chronicle — Recording"
-                          : "Chronicle — Recording is stale",
-                          systemImage: status.chronicleIsFresh
-                              ? "record.circle.fill" : "exclamationmark.circle")
-                    if !status.chronicleHost.isEmpty {
-                        Text("Shared recorder: \(status.chronicleHost)")
-                    }
-                } else {
-                    Label("Chronicle — Not running", systemImage: "pause.circle")
-                }
-                Divider()
-                // Owning a registration is not what lets an instance browse:
-                // any instance can use a running extension host. It decides
-                // whose host Chrome launches, which matters when that one is
-                // missing or older than the rest.
-                if status.inAppBrowserAssignmentConflicted {
-                    Label("Built-in browser — Assignment mismatch",
-                          systemImage: "exclamationmark.triangle.fill")
-                    Text("Assigned: \(status.inAppBrowserInstanceName)")
-                    Text("Actually running: \(status.inAppBrowserRuntimeInstanceName)")
-                    Text("Quit official ChatGPT, then launch the profile from Doppel.")
-                } else if !status.inAppBrowserInstanceName.isEmpty {
-                    Label(status.inAppBrowserRunning
-                          ? (status.inAppBrowserRunningOutsideDoppel
-                             ? "Built-in browser — Running outside Doppel"
-                             : "Built-in browser — Running")
-                          : "Built-in browser — Assigned",
-                          systemImage: status.inAppBrowserVendorValid
-                              ? "checkmark.circle.fill" : "exclamationmark.circle")
-                    Text(status.inAppBrowserInstanceName)
-                    if !status.inAppBrowserVendorValid {
-                        Text("Official ChatGPT failed signature verification.")
-                    }
-                } else if status.inAppBrowserRunningOutsideDoppel {
-                    Label("Built-in browser — Running outside Doppel",
-                          systemImage: "exclamationmark.circle")
-                    Text(status.inAppBrowserRuntimeInstanceName)
-                    Text("Quit official ChatGPT so this profile launches through Doppel.")
-                } else if status.inAppBrowserUnavailable {
-                    Label("In-app browser — Not available in instances",
-                          systemImage: "xmark.circle")
-                    Text("ChatGPT only opens it for an app signed by OpenAI.")
-                }
-                if status.browserHosts.isEmpty {
-                    Label("Browser extension — Not installed", systemImage: "circle.dotted")
-                } else {
-                    // Only instances that already have an extension host of
-                    // their own are offered: the CLI refuses the rest rather
-                    // than pointing the registration at a path that is not
-                    // there, so offering them would be a dead end.
-                    let eligible = store.instances.filter {
-                        $0.appKind == .chatgpt && $0.installed && status.instancesWithBrowserHost.contains($0.name)
-                    }
-                    let hidden = store.instances.filter {
-                        $0.appKind == .chatgpt && $0.installed && !status.instancesWithBrowserHost.contains($0.name)
-                    }
-                    // Each browser is assigned on its own, because each has its
-                    // own registration and so two instances can browse at the
-                    // same time in two different browsers.
-                    ForEach(status.browserHosts, id: \.browser) { host in
-                        if eligible.isEmpty {
-                            Label("\(host.browser) — \(host.owner)",
-                                  systemImage: "checkmark.circle.fill")
-                        } else {
-                            Menu("\(host.browser) — \(host.owner)") {
-                                ForEach(eligible) { instance in
-                                    Button(instance.name) {
-                                        store.claimBrowserHost(for: instance, browser: host.browser)
-                                    }
-                                    .disabled(host.ownerNames.contains(instance.name)
-                                              || store.busy.contains("native-tools"))
-                                }
-                            }
-                        }
-                    }
-                    if status.browserHosts.count > 1, !eligible.isEmpty {
-                        Menu("Give Every Browser To") {
-                            ForEach(eligible) { instance in
-                                Button(instance.name) {
-                                    store.claimBrowserHost(for: instance)
-                                }
-                                .disabled(status.browserOwnerNames.contains(instance.name)
-                                          || store.busy.contains("native-tools"))
-                            }
-                        }
-                    }
-                    if !hidden.isEmpty {
-                        Text(hidden.count == 1
-                             ? "\(hidden[0].name) must run once before it can hold one."
-                             : "\(hidden.count) instances must run once before they can hold one.")
-                    }
-                    Text("Any instance can use a running one; this picks whose host starts it.")
-                }
-                Divider()
-                if status.discoverableRollbacks > 0 {
-                    let noun = status.discoverableRollbacks == 1 ? "Entry" : "Entries"
-                    Button("Repair \(status.discoverableRollbacks) Duplicate App \(noun)") {
-                        store.repairNativeTools()
-                    }
-                    .disabled(store.busy.contains("native-tools"))
-                } else {
-                    Label("App discovery — Clean", systemImage: "checkmark.circle.fill")
-                }
-                Text("Managed instances are resolved by exact installed path.")
-            } else {
-                Text(store.checkingNativeTools ? "Checking…" : "Status unavailable")
-            }
-        }
-        Button("New Instance…") {
-            openWindow(id: "create-instance")
-            NSApp.activate(ignoringOtherApps: true)
-        }
-        .disabled(store.engineOperationBusy)
-        Button("Refresh") { store.reload() }
-        if store.busy.contains("update") {
-            Text("Updating ChatGPT and managed instances…")
-        } else if let update = store.chatGPTUpdate {
-            Button(Self.updateButtonTitle(update)) {
-                store.beginKnownUpdate()
-            }
-        } else {
-            Button(store.checkingForUpdates
-                   ? "Checking for ChatGPT Updates…"
-                   : "Check for ChatGPT Updates…") {
-                store.checkForUpdates(userInitiated: true)
-            }
-            .disabled(store.checkingForUpdates)
-        }
-        if !store.signingReady {
-            Button(store.busy.contains("signing")
-                   ? "Setting up secure signing…"
-                   : "Set Up Secure Signing…") { store.setUpSigning() }
-                .disabled(store.busy.contains("signing"))
-        }
-        Toggle("Start at Login", isOn: Binding(
-            get: { store.loginItemEnabled },
-            set: { store.setLoginItem($0) }
-        ))
-        Toggle("Receive Beta Updates", isOn: Binding(
-            get: { updaterController.receivesBetaUpdates },
-            set: { updaterController.setReceivesBetaUpdates($0) }
-        ))
-        .disabled(!doppelUpdatesEnabled)
-        .help("Beta updates may be less reliable. Turning this off waits for a newer stable release; it does not downgrade.")
-        Button("Check for Doppel Updates…") { updaterController.checkForUpdates() }
-            .disabled(!doppelUpdatesEnabled)
-        Divider()
-        // Which Doppel, and which ChatGPT it is managing. Both matter when
-        // reporting a problem, and the vendor build is the one number that
-        // explains why an instance might be mid-rebuild or flagged outdated.
-        Text(Self.doppelVersionLabel)
-        if let installed = store.installedChatGPT {
-            Text("ChatGPT \(installed.display)")
-        }
-        Divider()
-        Button("Quit Doppel") { NSApplication.shared.terminate(nil) }
-    }
-
-    /// What the one update button offers. A stale-instance row is not an
-    /// available version: nothing is downloaded and the primary is left alone,
-    /// so offering to install a version the Mac already has would misdescribe
-    /// the work.
-    static func updateButtonTitle(_ update: ChatGPTUpdate) -> String {
-        switch update.state {
-        case .ready:
-            return "Restart to Install ChatGPT \(update.targetVersion)…"
-        case .available:
-            return "Install ChatGPT \(update.targetVersion)…"
-        case .staleInstances:
-            let noun = update.staleInstanceCount == 1 ? "Instance" : "Instances"
-            return "Rebuild \(update.staleInstanceCount) Outdated \(noun)…"
-        }
-    }
-
-    /// Doppel's own marketing version and build, from the bundle it is running
-    /// out of.
-    static let doppelVersionLabel: String = versionLabel(
-        short: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
-        build: Bundle.main.infoDictionary?["CFBundleVersion"] as? String)
-
-    /// Split from the bundle lookup so the formatting is testable. A build from
-    /// source with missing or blank version keys still has to read sensibly
-    /// rather than showing "Doppel  ()".
-    static func versionLabel(short: String?, build: String?) -> String {
-        func cleaned(_ value: String?) -> String? {
-            guard let trimmed = value?.trimmingCharacters(in: .whitespaces),
-                  !trimmed.isEmpty else { return nil }
-            return trimmed
-        }
-        switch (cleaned(short), cleaned(build)) {
-        case let (short?, build?): return "Doppel \(short) (\(build))"
-        case let (short?, .none): return "Doppel \(short)"
-        case let (.none, build?): return "Doppel build \(build)"
-        case (.none, .none): return "Doppel (version unknown)"
-        }
-    }
-
-    /// Removal moves the app to the Trash and keeps account data unless the
-    /// user explicitly opts into deleting it, so the dialog states both.
-    private func confirmRemove(_ instance: Instance) {
-        NSApp.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.messageText = "Remove “\(instance.name)”?"
-        alert.informativeText = """
-            The app moves to the Trash and can be rebuilt at any time.
-            Its account data (chats and login) is kept unless you tick below.
-            """
-        if instance.appKind == .chatgpt {
-            alert.informativeText += "\nRemote Access is disabled first, interrupting any remote tasks."
-        }
-        alert.alertStyle = .warning
-        let purge = NSButton(checkboxWithTitle: "Also move this account's data to the Trash", target: nil, action: nil)
-        purge.state = .off
-        alert.accessoryView = purge
-        alert.addButton(withTitle: "Remove")
-        alert.addButton(withTitle: "Cancel")
-        // Keep Remove where a destructive action belongs, on the right, but
-        // move the Return key to Cancel: a dialog that appears over whatever
-        // else you were doing should not delete an account because you were
-        // mid-keystroke.
-        alert.buttons[0].keyEquivalent = ""
-        alert.buttons[0].hasDestructiveAction = true
-        alert.buttons[1].keyEquivalent = "\r"
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        store.remove(instance, purgeData: purge.state == .on)
-    }
-
 }
