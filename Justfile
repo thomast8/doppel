@@ -27,6 +27,9 @@ qa-engine:
 qa-claude-engine:
     zsh ./qa/claude-engine.zsh
 
+qa-claude-icon:
+    zsh ./qa/claude-icon.zsh
+
 build-claude-qa:
     DOPPEL_BUNDLE_ID=ai.doppel.menubar.claudeqa DOPPEL_SINGLE_INSTANCE_LOCK_NAME=DoppelClaudeQA DOPPEL_VERSION=2.0.5-claude-dev ./app/build-app.zsh "{{justfile_directory()}}/qa/.build/claude-menu"
 
@@ -44,7 +47,7 @@ qa-icons:
     swiftc qa/icon-tint.swift -o qa/.build/icon-tint/check
     sips -s format png /Applications/Claude.app/Contents/Resources/electron.icns --out qa/.build/icon-tint/claude.png
     sips -s format png /Applications/ChatGPT.app/Contents/Resources/electron.icns --out qa/.build/icon-tint/chatgpt.png
-    qa/.build/icon-tint/check qa/.build/icon-tint/doppel-icon qa/.build/icon-tint/legacy qa/.build/icon-tint qa/.build/icon-tint/claude.png qa/.build/icon-tint/chatgpt.png
+    qa/.build/icon-tint/check qa/.build/icon-tint/doppel-icon qa/.build/icon-tint/legacy qa/.build/icon-tint qa/.build/icon-tint/claude.png qa/.build/icon-tint/chatgpt.png /Applications/Claude.app/Contents/Resources/Assets.car
 
 # A local build is ad hoc and carries no Sparkle public key, so build-app.zsh
 # leaves the feed URL out and disables update checks entirely. Installing one
