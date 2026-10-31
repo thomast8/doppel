@@ -37,6 +37,16 @@ struct OnboardingView: View {
         return trimmed.isEmpty ? "\(kind.label) Work" : trimmed
     }
 
+    /// Keeps the chosen app when it is installed, otherwise switches to the
+    /// one that is. The guide picks once when it opens, but an app can be
+    /// installed while it is on screen.
+    static func availableApp(current: InstanceApp, chatGPT: Bool, claude: Bool) -> InstanceApp {
+        switch current {
+        case .chatgpt: return !chatGPT && claude ? .claude : .chatgpt
+        case .claude: return !claude && chatGPT ? .chatgpt : .claude
+        }
+    }
+
     private var nameToCreate: String { Self.instanceName(typed: model.name, kind: model.appKind) }
     private var shownName: String { model.createdName ?? nameToCreate }
     private var createdInstance: Instance? {
@@ -339,6 +349,10 @@ struct OnboardingView: View {
 
     private func move(_ delta: Int) {
         guard let next = OnboardingStep(rawValue: model.step.rawValue + delta) else { return }
+        if next == .create {
+            model.appKind = Self.availableApp(current: model.appKind, chatGPT: store.primaryInstalled,
+                                              claude: store.claudeInstalled)
+        }
         model.step = next
     }
 

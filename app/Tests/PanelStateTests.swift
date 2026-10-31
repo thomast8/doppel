@@ -91,4 +91,13 @@ final class PanelStateTests: XCTestCase {
         XCTAssertEqual(OnboardingView.instanceName(typed: "", kind: .claude), "Claude Work")
         XCTAssertEqual(OnboardingView.instanceName(typed: " Research ", kind: .claude), "Research")
     }
+
+    func testTheGuideSwitchesToTheAppThatIsActuallyInstalled() {
+        XCTAssertEqual(OnboardingView.availableApp(current: .chatgpt, chatGPT: false, claude: true), .claude,
+                       "installing only Claude mid-setup must not leave Create pointing at ChatGPT")
+        XCTAssertEqual(OnboardingView.availableApp(current: .claude, chatGPT: true, claude: false), .chatgpt)
+        XCTAssertEqual(OnboardingView.availableApp(current: .claude, chatGPT: true, claude: true), .claude,
+                       "a choice that is still installed is kept")
+        XCTAssertEqual(OnboardingView.availableApp(current: .chatgpt, chatGPT: false, claude: false), .chatgpt)
+    }
 }

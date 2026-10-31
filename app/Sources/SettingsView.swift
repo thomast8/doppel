@@ -84,7 +84,7 @@ struct SettingsView: View {
                 BadgeRow(badge: StatusBadge(symbol: "arrow.down", color: .blue,
                                             muted: store.chatGPTUpdate == nil),
                          title: store.installedChatGPT.map { "ChatGPT \($0.display)" } ?? "ChatGPT",
-                         detail: store.chatGPTUpdate.map(MenuContent.updateHeadline)
+                         detail: store.chatGPTUpdate.map { "\(MenuContent.updateHeadline($0)). \(MenuContent.updateDetail($0))" }
                              ?? "Doppel checks every six hours and updates every instance together.") {
                     if store.busy.contains("update") {
                         ProgressView().controlSize(.small)

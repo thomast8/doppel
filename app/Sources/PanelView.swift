@@ -62,17 +62,30 @@ struct MenuContent: View {
                     .textCase(.uppercase)
                     .padding(.horizontal, 16)
                     .padding(.bottom, 4)
-                // ponytail: no scrolling; a Mac with more than a dozen
-                // instances would want a ScrollView with a measured height.
-                VStack(spacing: 4) {
-                    ForEach(store.instances) { instance in row(instance) }
-                }
-                .padding(.horizontal, 8)
+                instanceList
             }
             Divider().padding(.horizontal, 16).padding(.top, 10)
             footer
         }
         .frame(width: 360)
+    }
+
+    /// Rows are about 54 pt. Past what fits in most of the screen the list
+    /// scrolls, so the footer and the last rows stay reachable however many
+    /// instances there are.
+    @ViewBuilder
+    private var instanceList: some View {
+        let rows = VStack(spacing: 4) {
+            ForEach(store.instances) { instance in row(instance) }
+        }
+        .padding(.horizontal, 8)
+        let available = (NSScreen.main?.visibleFrame.height ?? 800) * 0.55
+        let estimated = CGFloat(store.instances.count) * 58
+        if estimated > available {
+            ScrollView { rows }.frame(height: available)
+        } else {
+            rows
+        }
     }
 
     // MARK: - Header
