@@ -70,3 +70,7 @@ sparkle-key:
 # NOTARY_KEYCHAIN_PROFILE. DOPPEL_ALLOW_ADHOC=1 builds an ad-hoc release instead.
 package-release version build:
     DOPPEL_VERSION="{{version}}" DOPPEL_BUILD="{{build}}" ./script/package-release.zsh
+
+# Real browser QA uses only caller-supplied disposable Chrome fixtures.
+qa-chrome source id_a id_b root="":
+    DOPPEL_CHROME_QA_ROOT="{{root}}" DOPPEL_CHROME_QA_SOURCE="{{source}}" DOPPEL_CHROME_QA_A="{{id_a}}" DOPPEL_CHROME_QA_B="{{id_b}}" ./app/test.zsh --filter ChromeProfilesTests/testLiveIsolatedLaunch

@@ -134,6 +134,10 @@ official process is open. Those are shapes it cannot put back exactly as it
 found them, and the refusal names the window to quit. A reconcile never closes
 the official window, so it never asks.
 
+## Separate Chrome profiles
+
+Doppel's **Chrome Profiles** menu creates independent browser profiles using your installed Chrome. Each keeps its own logins and extensions; bridge setup and one-time pairing let an agent reconnect to the same profile after restart. See [Chrome profile setup](docs/chrome-profiles.md).
+
 ## Usage
 
 ### iPhone Remote Access

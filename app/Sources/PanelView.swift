@@ -423,6 +423,7 @@ struct MenuContent: View {
 
     private var footer: some View {
         VStack(alignment: .leading, spacing: 9) {
+            ChromeProfilesMenu()
             HStack(spacing: 8) {
                 legendDot(store.chatGPTUpdate != nil ? .blue : (store.installedChatGPT == nil ? .secondary : .green))
                 Text(chatGPTLine).lineLimit(1)
