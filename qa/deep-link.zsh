@@ -182,6 +182,20 @@ oauth = {
     "6321": b'"app-connect-oauth-callback-url":async()=>({callbackUrl:`${r.u(l.app.isPackaged)}://connector/oauth_callback`})',
     "6662": b'"app-connect-oauth-callback-url":async()=>({callbackUrl:`${r.K(l.app.isPackaged)}://connector/oauth_callback`})',
     "51333": b'y_e=class extends u.Nt{async getCallbackUrl(){return`${_.M(O.app.isPackaged)}://connector/oauth_callback`}}',
+    # 61615 moved to a different bundler: double-quoted strings and the helper
+    # reached as ``(0,ns.name)(...)``.
+    "61615": b'class FS extends eo.TF{async getCallbackUrl(){return`${(0,Fb.xz)(ea.app.isPackaged)}://connector/oauth_callback`}}',
+}
+protocol = {
+    "51333": b"function se(e,t=process.platform){return e||t===`win32`||t===`linux`?le:ue}",
+    "61615": b'function D(e,t=process.platform){return e||"win32"===t||"linux"===t?"codex":"codex-dev"}',
+}
+inline = {
+    "61615": b'if(r){I(r),"wakeQueuedThread"!==r.kind&&g?.(G(r,t)),n?.preventDefault();return}let i=W(t);i&&(C(i),n?.preventDefault())};for(let e of(t.on("open-url",(e,t)=>{r(t,e)}),(0,m._t)(t,e=>(r(e),!0)),(0,h.Z1)()))r(e)}',
+}
+micro_starts = {
+    "51333": b"start(){if(this.lifecycleState!==`started`){this.lifecycleState=`started`",
+    "61615": b'start(){if("started"!==this.lifecycleState){this.lifecycleState="started",this.resolvePendingDeviceRpcs?.()',
 }
 queued = {
     "6321": b'if(i){let n=(e,t)=>{let n=XW(e);if(n){m(n),l?.(eG(n)?e:void 0),t?.preventDefault();return}let r=fG(e);r&&(h(r),t?.preventDefault())};e.on(`open-url`,(e,t)=>{n(t,e)});',
@@ -198,10 +212,14 @@ runtime_roots = {
     # Not shipped yet: longer minified names must not be wrapped a second time
     # from their second letter.
     "long names": b"installRoot:n=ab.default.join(uv.default.homedir(),`.cache`,`codex-runtimes`),osRelease:r",
+    "61615": b'installRoot:r=d().join(u().homedir(),".cache","codex-runtimes"),osRelease:n',
+    "61615 worker": b'function h2(e){return c1().join(e??c1().join(cJ().homedir(),".cache","codex-runtimes"),"codex-primary-runtime")}',
 }
 not_runtime_roots = {
     "21421 plugins": b"let n=C.default.join(T.default.homedir(),`.cache`,`codex-runtimes`,l.I,`plugins`,C.default.basename(e))",
     "21421 language servers": b"this.cacheRoot=e.cacheRoot??C.default.join(T.default.homedir(),`.cache`,`codex-runtimes`,`language-servers`)",
+    "61615 plugins": b'let n=ei().join(ef().homedir(),".cache","codex-runtimes","codex-texlive"),o=1',
+    "61615 language servers": b'this.cacheRoot=e.cacheRoot??ei().join(ef().homedir(),".cache","codex-runtimes","language-servers")',
 }
 missed = []
 for build, sample in runtime_roots.items():
@@ -215,6 +233,43 @@ for build, sample in not_runtime_roots.items():
 for build, sample in oauth.items():
     if len(patcher.OAUTH_CALLBACK_HANDLER.findall(sample)) + len(patcher.OAUTH_CALLBACK_GETTER.findall(sample)) != 1:
         missed.append(f"oauth {build}")
+# The vendor's last bundler change swapped backtick strings for double quotes
+# without changing behaviour. Every shipped shape must therefore also match
+# with its quotes swapped, so the next such change cannot fail a clone build.
+def requoted(sample):
+    return sample.replace(b"`", b'"')
+for build, sample in protocol.items():
+    if len(patcher.PROTOCOL_HELPER.findall(requoted(sample))) != 1:
+        missed.append(f"requoted protocol helper {build}")
+for build, sample in queued.items():
+    if len(patcher.QUEUED_OPEN_URL_HANDLER.findall(requoted(sample))) != 1:
+        missed.append(f"requoted open-url {build}")
+for build, sample in drained.items():
+    if len(patcher.DRAINED_OPEN_URL_HANDLER.findall(requoted(sample))) != 1:
+        missed.append(f"requoted open-url {build}")
+for build, sample in inline.items():
+    if len(patcher.INLINE_OPEN_URL_HANDLER.findall(requoted(sample))) != 1:
+        missed.append(f"requoted open-url {build}")
+for build, sample in micro_starts.items():
+    if len(patcher.MICRO_START.findall(requoted(sample))) != 1:
+        missed.append(f"requoted micro start {build}")
+for build, sample in runtime_roots.items():
+    if len(patcher.UNPATCHED_RUNTIME_ROOT.findall(requoted(sample))) != 1:
+        missed.append(f"requoted runtime root {build}")
+for build, sample in not_runtime_roots.items():
+    if patcher.UNPATCHED_RUNTIME_ROOT.findall(requoted(sample)):
+        missed.append(f"requoted runtime root overmatch {build}")
+for build, sample in protocol.items():
+    if len(patcher.PROTOCOL_HELPER.findall(sample)) != 1:
+        missed.append(f"protocol helper {build}")
+for build, sample in inline.items():
+    if len(patcher.INLINE_OPEN_URL_HANDLER.findall(sample)) != 1:
+        missed.append(f"open-url {build}")
+for build, sample in micro_starts.items():
+    if len(patcher.MICRO_START.findall(sample)) != 1:
+        missed.append(f"micro start {build}")
+    if len(patcher.MICRO_PATCHED_START.findall(patcher.patched_micro_start(sample))) != 1 or patcher.MICRO_START.search(patcher.patched_micro_start(sample)):
+        missed.append(f"micro start patch {build}")
 for build, sample in queued.items():
     if len(patcher.QUEUED_OPEN_URL_HANDLER.findall(sample)) != 1:
         missed.append(f"open-url {build}")
