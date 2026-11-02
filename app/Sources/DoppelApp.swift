@@ -16,6 +16,7 @@ struct DoppelApp: App {
             || arguments.contains("--render-ui")
             || arguments.contains("--remote-access-qa")
             || arguments.contains("--create-instance-qa")
+            || arguments.contains("--instance-qa")
         doppelUpdatesEnabled = !(Bundle.main.object(
             forInfoDictionaryKey: "SUPublicEDKey") as? String ?? "").isEmpty
         updaterController = DoppelUpdater(
@@ -65,6 +66,8 @@ struct DoppelApp: App {
         if let index = arguments.firstIndex(of: "--remote-access-qa"), index + 1 < arguments.count {
             let profileID = arguments[index + 1]
             UIRenderer.scheduleRemoteAccessQA(profileID: profileID)
+        } else if let index = arguments.firstIndex(of: "--instance-qa"), index + 1 < arguments.count {
+            UIRenderer.scheduleInstanceQA(instanceID: arguments[index + 1])
         } else if arguments.contains("--create-instance-qa") {
             UIRenderer.scheduleCreateInstanceQA()
         }
