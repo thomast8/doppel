@@ -59,7 +59,7 @@ REQUIRED_NEIGHBOURS = (
 PROTOCOL_HELPER = re.compile(
     rb"function (?P<function>[A-Za-z_$][A-Za-z0-9_$]*)"
     rb"\(e,t=process\.platform\)\{return "
-    rb"e\|\|(?:t===`win32`|\"win32\"===t)\|\|(?:t===`linux`|\"linux\"===t)\?"
+    rb"e\|\|(?:t===[`\"']win32[`\"']|[`\"']win32[`\"']===t)\|\|(?:t===[`\"']linux[`\"']|[`\"']linux[`\"']===t)\?"
     rb"(?P<production>[A-Za-z_$][A-Za-z0-9_$]*|`[a-z-]+`|\"[a-z-]+\"):"
     rb"(?P<development>[A-Za-z_$][A-Za-z0-9_$]*|`[a-z-]+`|\"[a-z-]+\")\}"
 )
@@ -100,7 +100,7 @@ OAUTH_PATCHED_CALLBACKS = (
 
 OPEN_URL_HANDLER = re.compile(
     rb"return (?P<mac>[A-Za-z_$][A-Za-z0-9_$]*)&&"
-    rb"(?P<app>[A-Za-z_$][A-Za-z0-9_$]*)\.on\(`open-url`,\("
+    rb"(?P<app>[A-Za-z_$][A-Za-z0-9_$]*)\.on\([`\"']open-url[`\"'],\("
     rb"(?P<event>[A-Za-z_$][A-Za-z0-9_$]*),(?P<url>[A-Za-z_$][A-Za-z0-9_$]*)"
     rb"\)=>\{let (?P<route>[A-Za-z_$][A-Za-z0-9_$]*)="
     rb"(?P<parse>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=url)\);(?P=route)&&\("
@@ -135,7 +135,7 @@ QUEUED_OPEN_URL_HANDLER = re.compile(
     rb"(?P<parse_path>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=url)\);"
     rb"(?P=path)&&\((?P<open_path>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=path)\),"
     rb"(?P=event)\?\.preventDefault\(\)\)\};"
-    rb"(?P<app>[A-Za-z_$][A-Za-z0-9_$]*)\.on\(`open-url`,\("
+    rb"(?P<app>[A-Za-z_$][A-Za-z0-9_$]*)\.on\([`\"']open-url[`\"'],\("
     rb"(?P<listener_event>[A-Za-z_$][A-Za-z0-9_$]*),"
     rb"(?P<listener_url>[A-Za-z_$][A-Za-z0-9_$]*)\)=>\{"
     rb"(?P=handler)\((?P=listener_url),(?P=listener_event)\)\}\);)"
@@ -168,7 +168,7 @@ DRAINED_OPEN_URL_HANDLER = re.compile(
     rb"\)=>\{let (?P<route>[A-Za-z_$][A-Za-z0-9_$]*)="
     rb"(?P<parse>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=url)\);if\((?P=route)\)\{"
     rb"(?P<queue>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=route)\),"
-    rb"(?:(?P=route)\.kind!==`[A-Za-z]+`&&)?"
+    rb"(?:(?P=route)\.kind!==[`\"'][A-Za-z]+[`\"']&&)?"
     rb"(?P<callback>[A-Za-z_$][A-Za-z0-9_$]*)\?\.\("
     rb"(?P<source>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=route)(?:,(?P=url))?\)\)),"
     rb"(?P<suffix>(?P=event)\?\.preventDefault\(\);return\}let "
@@ -176,7 +176,7 @@ DRAINED_OPEN_URL_HANDLER = re.compile(
     rb"(?P<parse_http>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=url)\);"
     rb"(?P=http)&&\((?P<queue_http>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=http)\),"
     rb"(?P=event)\?\.preventDefault\(\)\)\};"
-    rb"(?P<app>[A-Za-z_$][A-Za-z0-9_$]*)\.on\(`open-url`,\("
+    rb"(?P<app>[A-Za-z_$][A-Za-z0-9_$]*)\.on\([`\"']open-url[`\"'],\("
     rb"(?P<listener_event>[A-Za-z_$][A-Za-z0-9_$]*),"
     rb"(?P<listener_url>[A-Za-z_$][A-Za-z0-9_$]*)\)=>\{"
     rb"(?P=handler)\((?P=listener_url),(?P=listener_event)\)\}\)"
@@ -210,7 +210,7 @@ INLINE_OPEN_URL_HANDLER = re.compile(
     rb"(?P=http)&&\([A-Za-z_$][A-Za-z0-9_$]*\((?P=http)\),"
     rb"(?P=event)\?\.preventDefault\(\)\)\};"
     rb"for\(let [A-Za-z_$][A-Za-z0-9_$]* of\("
-    rb"[A-Za-z_$][A-Za-z0-9_$]*\.on\(\"open-url\",)"
+    rb"[A-Za-z_$][A-Za-z0-9_$]*\.on\([`\"']open-url[`\"'],)"
 )
 
 
@@ -576,14 +576,14 @@ def locate_restore_member(archive: Archive) -> tuple[Member, bytes, bool]:
 MICRO_PATCH_MARKER = b"process.env.DOPPEL_CODEX_MICRO"
 MICRO_SERVICE_NEIGHBOUR = b"CodexMicroService"
 MICRO_START = re.compile(
-    rb"start\(\)\{if\((?:this\.lifecycleState!==`started`|\"started\"!==this\.lifecycleState)\)\{"
+    rb"start\(\)\{if\((?:this\.lifecycleState!==[`\"']started[`\"']|[`\"']started[`\"']!==this\.lifecycleState)\)\{"
 )
 MICRO_GATE = (
     b"if(" + MICRO_PATCH_MARKER + b"!==`1`){this.lifecycleState=`stopped`;return}"
 )
 MICRO_PATCHED_START = re.compile(
     rb"start\(\)\{" + re.escape(MICRO_GATE) + rb"if\("
-    rb"(?:this\.lifecycleState!==`started`|\"started\"!==this\.lifecycleState)\)\{"
+    rb"(?:this\.lifecycleState!==[`\"']started[`\"']|[`\"']started[`\"']!==this\.lifecycleState)\)\{"
 )
 
 

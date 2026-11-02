@@ -233,6 +233,32 @@ for build, sample in not_runtime_roots.items():
 for build, sample in oauth.items():
     if len(patcher.OAUTH_CALLBACK_HANDLER.findall(sample)) + len(patcher.OAUTH_CALLBACK_GETTER.findall(sample)) != 1:
         missed.append(f"oauth {build}")
+# The vendor's last bundler change swapped backtick strings for double quotes
+# without changing behaviour. Every shipped shape must therefore also match
+# with its quotes swapped, so the next such change cannot fail a clone build.
+def requoted(sample):
+    return sample.replace(b"`", b'"')
+for build, sample in protocol.items():
+    if len(patcher.PROTOCOL_HELPER.findall(requoted(sample))) != 1:
+        missed.append(f"requoted protocol helper {build}")
+for build, sample in queued.items():
+    if len(patcher.QUEUED_OPEN_URL_HANDLER.findall(requoted(sample))) != 1:
+        missed.append(f"requoted open-url {build}")
+for build, sample in drained.items():
+    if len(patcher.DRAINED_OPEN_URL_HANDLER.findall(requoted(sample))) != 1:
+        missed.append(f"requoted open-url {build}")
+for build, sample in inline.items():
+    if len(patcher.INLINE_OPEN_URL_HANDLER.findall(requoted(sample))) != 1:
+        missed.append(f"requoted open-url {build}")
+for build, sample in micro_starts.items():
+    if len(patcher.MICRO_START.findall(requoted(sample))) != 1:
+        missed.append(f"requoted micro start {build}")
+for build, sample in runtime_roots.items():
+    if len(patcher.UNPATCHED_RUNTIME_ROOT.findall(requoted(sample))) != 1:
+        missed.append(f"requoted runtime root {build}")
+for build, sample in not_runtime_roots.items():
+    if patcher.UNPATCHED_RUNTIME_ROOT.findall(requoted(sample)):
+        missed.append(f"requoted runtime root overmatch {build}")
 for build, sample in protocol.items():
     if len(patcher.PROTOCOL_HELPER.findall(sample)) != 1:
         missed.append(f"protocol helper {build}")
