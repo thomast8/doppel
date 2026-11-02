@@ -11,9 +11,12 @@ enum ChromeBridge: String, Codable, CaseIterable {
 
 struct ChromeProfile: Codable, Identifiable, Equatable {
     let id: UUID
-    let name: String
+    var name: String
     var bridgeID: UUID?
     var bridges: [ChromeBridge]?
+    var ownerID: String?
+    var ownerAgentHome: String?
+    var accountConfirmed: Bool?
     var enabledBridges: [ChromeBridge] { bridges ?? [.chatgpt] }
 }
 
@@ -40,7 +43,9 @@ final class ChromeProfiles: ObservableObject {
             let file = self.root.appendingPathComponent("profiles.json")
             if FileManager.default.fileExists(atPath: file.path) {
                 profiles = try JSONDecoder().decode([ChromeProfile].self, from: Data(contentsOf: file))
-                guard Set(profiles.map(\.id)).count == profiles.count else {
+                let owners = profiles.compactMap(\.ownerID)
+                guard Set(profiles.map(\.id)).count == profiles.count,
+                      Set(owners).count == owners.count else {
                     throw failure("Duplicate Chrome profiles in saved settings.")
                 }
             }
@@ -81,15 +86,86 @@ final class ChromeProfiles: ObservableObject {
         return profile
     }
 
-    func addBridge(_ bridge: ChromeBridge, to profile: ChromeProfile) throws -> ChromeProfile {
-        guard let index = profiles.firstIndex(where: { $0.id == profile.id }) else { throw failure("Unknown Chrome profile.") }
-        var updated = profiles[index]
-        if !updated.enabledBridges.contains(bridge) { updated.bridges = updated.enabledBridges + [bridge] }
-        try prepare(updated)
+    func profile(for instance: Instance) -> ChromeProfile? {
+        profiles.first { $0.ownerID == instance.id }
+    }
+
+    @discardableResult
+    func ensureProfile(for instance: Instance) throws -> ChromeProfile {
+        guard let home = instance.agentHome, home.hasPrefix("/") else {
+            throw failure("The instance's account directory is unavailable. Update or reopen Doppel before setting up its browser.")
+        }
+        let bridge: ChromeBridge = instance.appKind == .chatgpt ? .chatgpt : .claude
+        if let index = profiles.firstIndex(where: { $0.ownerID == instance.id }) {
+            var values = profiles
+            var updated = values[index]
+            if updated.ownerAgentHome != home || updated.enabledBridges != [bridge] {
+                guard try !isRunning(updated) else { throw failure("Quit this browser normally before changing its account directory.") }
+                updated.accountConfirmed = false
+            }
+            updated.name = instance.name
+            updated.ownerAgentHome = home
+            updated.bridges = [bridge]
+            if updated != values[index] {
+                values[index] = updated
+                try save(values)
+            }
+            return updated
+        }
+        let value = ChromeProfile(id: UUID(), name: instance.name, bridges: [bridge],
+                                  ownerID: instance.id, ownerAgentHome: home, accountConfirmed: false)
+        try save(profiles + [value])
+        return value
+    }
+
+    func link(_ profile: ChromeProfile, to instance: Instance) throws {
+        guard let home = instance.agentHome, home.hasPrefix("/"),
+              let index = profiles.firstIndex(where: { $0.id == profile.id }),
+              profiles[index].ownerID == nil, self.profile(for: instance) == nil else {
+            throw failure("Only an unlinked browser can be linked to an instance without a browser. No data was moved.")
+        }
+        guard try !isRunning(profiles[index]) else {
+            throw failure("Quit this browser normally before linking it to a managed account. Its data will be retained.")
+        }
         var values = profiles
-        values[index] = updated
+        values[index].ownerID = instance.id
+        values[index].ownerAgentHome = home
+        values[index].name = instance.name
+        values[index].bridges = [instance.appKind == .chatgpt ? .chatgpt : .claude]
+        values[index].accountConfirmed = false
         try save(values)
-        return updated
+    }
+
+    func confirmAccount(_ profile: ChromeProfile, confirmed: Bool) throws {
+        guard let index = profiles.firstIndex(where: { $0.id == profile.id }), profiles[index].ownerID != nil else {
+            throw failure("Link this browser to a managed instance first.")
+        }
+        var values = profiles
+        values[index].accountConfirmed = confirmed
+        try save(values)
+    }
+
+    private func isRunning(_ profile: ChromeProfile) throws -> Bool {
+        let pids = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == "com.google.Chrome" }
+            .map { String($0.processIdentifier) }
+        guard !pids.isEmpty else { return false }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = ["-p", pids.joined(separator: ","), "-o", "command="]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { throw failure("Could not check whether this browser is open. Quit Chrome's test profile and retry.") }
+        return String(decoding: data, as: UTF8.self).contains("--user-data-dir=" + directory(profile).path)
+    }
+
+    static func codeCommand(agentHome: String) -> String? {
+        guard agentHome.hasPrefix("/") else { return nil }
+        let quoted = "'" + agentHome.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        return "CLAUDE_CONFIG_DIR=\(quoted) claude --chrome"
     }
 
     func pair(_ profile: ChromeProfile, id: String) throws {
@@ -119,28 +195,64 @@ final class ChromeProfiles: ObservableObject {
                   let host = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   host["name"] as? String == bridge.hostName,
                   host["type"] as? String == "stdio",
-                  let executable = host["path"] as? String,
-                  executable.hasPrefix("/"), FileManager.default.isExecutableFile(atPath: executable),
+                  let templatePath = host["path"] as? String,
                   let origins = host["allowed_origins"] as? [String],
                   origins.contains("chrome-extension://\(bridge.extensionID)/") else {
                 throw failure("The \(bridge.label) browser bridge is unavailable. \(help)")
             }
-            manifests.append((bridge, data))
+            var registration = host
+            var executable = templatePath
+            if profile.ownerID != nil {
+                guard let home = profile.ownerAgentHome, home.hasPrefix("/") else {
+                    throw failure("This browser has no managed account directory. Open it from its instance page.")
+                }
+                if bridge == .claude {
+                    executable = URL(fileURLWithPath: home).appendingPathComponent("chrome/chrome-native-host").path
+                } else {
+                    let hosts = URL(fileURLWithPath: home).appendingPathComponent(
+                        "plugins/cache/openai-bundled/chrome/latest/extension-host/macos")
+                    let candidates = (try? FileManager.default.contentsOfDirectory(at: hosts, includingPropertiesForKeys: nil)) ?? []
+                    executable = candidates.map { $0.appendingPathComponent("ChatGPT for Chrome").path }
+                        .sorted().first(where: FileManager.default.isExecutableFile(atPath:)) ?? ""
+                }
+            }
+            guard executable.hasPrefix("/"), FileManager.default.isExecutableFile(atPath: executable) else {
+                throw failure("The \(bridge.label) host for \(profile.name) is unavailable. Set up the browser bridge in that managed account first.")
+            }
+            registration["path"] = executable
+            manifests.append((bridge, profile.ownerID == nil ? data : try JSONSerialization.data(withJSONObject: registration)))
         }
+        try prepareFiles(profile)
+        let destination = directory(profile)
+        let registrations = destination.appendingPathComponent("NativeMessagingHosts")
+        try FileManager.default.createDirectory(at: registrations, withIntermediateDirectories: true)
+        for (bridge, data) in manifests {
+            try data.write(to: registrations.appendingPathComponent(bridge.hostName + ".json"), options: .atomic)
+        }
+    }
+
+    private func prepareFiles(_ profile: ChromeProfile) throws {
+        guard profiles.contains(where: { $0.id == profile.id }) else { throw failure("Unknown Chrome profile.") }
         let destination = directory(profile)
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true,
                                                attributes: [.posixPermissions: 0o700])
+        if profile.ownerID != nil {
+            // Keep old registrations outside Chrome's lookup path when adopting a profile.
+            for bridge in ChromeBridge.allCases where !profile.enabledBridges.contains(bridge) {
+                let old = destination.appendingPathComponent("NativeMessagingHosts/" + bridge.hostName + ".json")
+                if FileManager.default.fileExists(atPath: old.path) {
+                    let archive = destination.appendingPathComponent("previous-bridge-registrations")
+                    try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
+                    try FileManager.default.moveItem(at: old, to: archive.appendingPathComponent(UUID().uuidString + ".json"))
+                }
+            }
+        }
         let defaultProfile = destination.appendingPathComponent("Default")
         if !FileManager.default.fileExists(atPath: defaultProfile.path) {
             try FileManager.default.createDirectory(at: defaultProfile, withIntermediateDirectories: true)
             let preferences: [String: Any] = ["profile": ["name": profile.name]]
             try JSONSerialization.data(withJSONObject: preferences).write(
                 to: defaultProfile.appendingPathComponent("Preferences"), options: .atomic)
-        }
-        let registrations = destination.appendingPathComponent("NativeMessagingHosts")
-        try FileManager.default.createDirectory(at: registrations, withIntermediateDirectories: true)
-        for (bridge, data) in manifests {
-            try data.write(to: registrations.appendingPathComponent(bridge.hostName + ".json"), options: .atomic)
         }
         let safeName = profile.name.replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;").replacingOccurrences(of: ">", with: "&gt;")
@@ -163,13 +275,19 @@ final class ChromeProfiles: ObservableObject {
         return args
     }
 
-    func launch(_ profile: ChromeProfile, setup: Bool = false, completion: ((Error?) -> Void)? = nil) {
+    func launchEnvironment(_ profile: ChromeProfile) -> [String: String] {
+        guard profile.ownerID != nil, let home = profile.ownerAgentHome, home.hasPrefix("/") else { return [:] }
+        return [profile.enabledBridges == [.claude] ? "CLAUDE_CONFIG_DIR" : "CODEX_HOME": home]
+    }
+
+    func launch(_ profile: ChromeProfile, setup: Bool = false, signInOnly: Bool = false, completion: ((Error?) -> Void)? = nil) {
         do {
             guard FileManager.default.fileExists(atPath: Self.chrome.path) else { throw failure("Install Google Chrome in Applications first.") }
-            try prepare(profile)
+            if signInOnly { try prepareFiles(profile) } else { try prepare(profile) }
             let configuration = NSWorkspace.OpenConfiguration()
             configuration.createsNewApplicationInstance = true
             configuration.arguments = launchArguments(profile, setup: setup)
+            configuration.environment = launchEnvironment(profile)
             NSWorkspace.shared.openApplication(at: Self.chrome, configuration: configuration) { _, error in
                 Task { @MainActor in
                     if let completion { completion(error) }
@@ -183,7 +301,11 @@ final class ChromeProfiles: ObservableObject {
 
     func instructions(_ profile: ChromeProfile, bridge: ChromeBridge = .chatgpt) -> String {
         if bridge == .claude {
-            return "Use Claude in Chrome only in my Doppel profile. In Claude Code, use /chrome > Select browser to choose it. Before any browser action, confirm the selected browser contains this exact connection tab: \(marker(profile).absoluteString). If the tab is absent or selection cannot be confirmed, stop and ask me to select the correct profile. Never use main Chrome as a fallback. Recheck after reconnecting."
+            let scopedCommand = profile.ownerAgentHome.flatMap(Self.codeCommand(agentHome:))
+            if profile.ownerID != nil && scopedCommand == nil { return "Stop: this managed instance's Code configuration directory is unavailable." }
+            let command = scopedCommand ?? "claude --chrome"
+            return "Use the Chrome profile belonging to Doppel instance \(profile.name). Start Claude Code with this instance's configuration: \(command). Confirm that Code and the browser extension are signed into the matching account. Use /chrome > Select browser. Browser N labels alone do not prove identity. Claude's browser tools see only their session tab group: do not assume the separately opened connection tab is visible. If no group exists, stop and ask me to confirm the selected isolated browser before creating one. Never use main Chrome as a fallback. Reconfirm selection after reconnecting. Connection tab for manual identification: \(marker(profile).absoluteString)."
+
         }
         if let id = profile.bridgeID {
             return "Use only the Chrome bridge with extensionInstanceId \(id.uuidString.lowercased()). Select it explicitly with cua.getBrowser({extensionInstanceId: '\(id.uuidString.lowercased())'}). If unavailable, stop and ask me to open this Doppel profile. Never fall back to generic Chrome or another browser."
@@ -192,37 +314,16 @@ final class ChromeProfiles: ObservableObject {
     }
 
     func copyInstructions(_ profile: ChromeProfile, bridge: ChromeBridge = .chatgpt) {
+        guard profile.ownerID != nil, profile.accountConfirmed == true else {
+            showError(failure("Confirm that the browser and its managed instance use the same account before connecting an agent."))
+            return
+        }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(instructions(profile, bridge: bridge), forType: .string)
     }
 
-    func addClaudeBridge(_ profile: ChromeProfile) {
-        perform { launch(try addBridge(.claude, to: profile), setup: true) }
-    }
-
-    func promptCreate() {
-        PanelWindow.close()
-        let alert = NSAlert()
-        alert.messageText = "New Chrome Profile"
-        alert.informativeText = "Name the profile and choose its browser bridges. Chrome asks you to confirm each extension installation."
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
-        field.placeholderString = "Work"
-        let picker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 300, height: 28))
-        picker.addItems(withTitles: ["ChatGPT", "Claude Code", "ChatGPT and Claude Code"])
-        let accessory = NSStackView(views: [field, picker])
-        accessory.orientation = .vertical
-        accessory.frame = NSRect(x: 0, y: 0, width: 300, height: 64)
-        alert.accessoryView = accessory
-        alert.addButton(withTitle: "Create")
-        alert.addButton(withTitle: "Cancel")
-        NSApp.activate(ignoringOtherApps: true)
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let bridges: [ChromeBridge] = picker.indexOfSelectedItem == 2 ? ChromeBridge.allCases
-            : [picker.indexOfSelectedItem == 1 ? .claude : .chatgpt]
-        perform { launch(try create(name: field.stringValue, bridges: bridges), setup: true) }
-    }
-
     func promptPair(_ profile: ChromeProfile) {
+        guard profile.ownerID != nil, profile.accountConfirmed == true else { return }
         PanelWindow.close()
         let alert = NSAlert()
         alert.messageText = "Pair ChatGPT Bridge: \(profile.name)"
@@ -249,30 +350,19 @@ final class ChromeProfiles: ObservableObject {
 }
 
 struct ChromeProfilesMenu: View {
-    @StateObject private var store = ChromeProfiles()
+    @ObservedObject var store: ChromeProfiles
     var body: some View {
-        Menu("Chrome Profiles") {
-            if let error = store.loadError { Text(error) }
-            ForEach(store.profiles) { profile in
-                Menu(profile.name) {
-                    Text(profile.enabledBridges.map(\.label).joined(separator: " + "))
-                    Button("Open") { store.launch(profile) }
-                    Button("Set Up Bridge…") { store.launch(profile, setup: true) }
-                    if profile.enabledBridges.contains(.chatgpt) {
-                        Text(profile.bridgeID == nil ? "ChatGPT bridge needs pairing" : "ChatGPT bridge paired")
-                        Button("Copy ChatGPT Instructions") { store.copyInstructions(profile) }
-                        Button("Pair ChatGPT Bridge…") { store.promptPair(profile) }
-                    }
-                    if profile.enabledBridges.contains(.claude) {
-                        Button("Copy Claude Code Instructions") { store.copyInstructions(profile, bridge: .claude) }
-                    } else {
-                        Button("Add Claude Code Bridge…") { store.addClaudeBridge(profile) }
+        let unlinked = store.profiles.filter { $0.ownerID == nil }
+        if !unlinked.isEmpty {
+            Menu("Unlinked Chrome Profiles") {
+                Text("Link these from a managed instance's Browser section.")
+                ForEach(unlinked) { profile in
+                    Menu(profile.name) {
+                        Button("Open") { store.launch(profile) }
+                        Text("Browser data is retained.")
                     }
                 }
             }
-            Divider()
-            Button("New Chrome Profile…") { store.promptCreate() }
-                .disabled(store.loadError != nil)
         }
     }
 }

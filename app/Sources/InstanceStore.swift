@@ -28,6 +28,7 @@ struct Instance: Identifiable {
     /// The profile is stable; only the process used to open it changes.
     let engine: InstanceEngine
     var appKind: InstanceApp = .chatgpt
+    var agentHome: String? = nil
 
     var usesBuiltInBrowser: Bool { engine == .vendor }
 }
@@ -45,6 +46,7 @@ extension InstanceStore {
 /// the menu-bar app and the CLI cannot drift apart on config parsing.
 @MainActor
 final class InstanceStore: ObservableObject {
+    let chromeProfiles = ChromeProfiles()
     @Published var instances: [Instance] = []
     @Published var busy: Set<String> = []
     @Published var primaryInstalled = false
@@ -921,7 +923,8 @@ final class InstanceStore: ObservableObject {
                 engine: fields.count > 5
                     ? InstanceEngine(rawValue: String(fields[5])) ?? .clone
                     : .clone,
-                appKind: appKind
+                appKind: appKind,
+                agentHome: fields.count > 6 ? Data(base64Encoded: String(fields[6])).flatMap { String(data: $0, encoding: .utf8) } : nil
             )
         }
     }

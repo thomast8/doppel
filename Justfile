@@ -78,3 +78,7 @@ qa-chrome source id_a id_b root="":
 # Opens a fresh disposable profile using the installed Claude Code host.
 qa-claude-chrome:
     DOPPEL_CLAUDE_CHROME_QA=1 ./app/test.zsh --filter ChromeProfilesTests/testLiveClaudeCodeSetup
+
+# Uses a real managed instance, but writes only to a disposable browser store.
+qa-owned-browser kind slug:
+    DOPPEL_MANAGED_BROWSER_QA_KIND="{{kind}}" DOPPEL_MANAGED_BROWSER_QA_SLUG="{{slug}}" ./app/test.zsh --filter ChromeProfilesTests/testLiveManagedInstanceBrowser

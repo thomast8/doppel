@@ -21,6 +21,15 @@ final class UpdateParsingTests: XCTestCase {
         XCTAssertFalse(claude.usesBuiltInBrowser)
     }
 
+    func testAgentHomeFieldIsOptionalAndPreservesDelimiterCharacters() {
+        let row = "one\tOne\t/Applications/One.app\tinstalled\t\tclone"
+        XCTAssertNil(InstanceStore.parsePorcelain(row).first?.agentHome)
+        let home = "/tmp/Account\twith\nseparators"
+        let encoded = Data(home.utf8).base64EncodedString()
+        XCTAssertEqual(InstanceStore.parsePorcelain(row + "\t" + encoded).first?.agentHome, home)
+        XCTAssertNil(InstanceStore.parsePorcelain(row + "\tnot-base64!").first?.agentHome)
+    }
+
     func testCreatorMicroAssignmentParsing() {
         XCTAssertEqual(InstanceStore.parseCreatorMicroOwner("owner\tchatgpt-veridue\n"), "chatgpt-veridue")
         XCTAssertNil(InstanceStore.parseCreatorMicroOwner("owner\t\n"))
