@@ -136,7 +136,7 @@ the official window, so it never asks.
 
 ## Separate Chrome profiles
 
-Doppel's **Chrome Profiles** menu creates independent browser profiles using your installed Chrome. Each keeps its own logins and extensions; bridge setup and one-time pairing let an agent reconnect to the same profile after restart. See [Chrome profile setup](docs/chrome-profiles.md).
+Doppel's **Chrome Profiles** menu creates independent browser profiles using your installed Chrome. Each keeps its own logins and extensions; ChatGPT and Claude Code bridge setup help agents connect to the intended profile. See [Chrome profile setup](docs/chrome-profiles.md).
 
 ## Usage
 

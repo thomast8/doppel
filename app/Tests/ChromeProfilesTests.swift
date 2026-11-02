@@ -53,6 +53,41 @@ final class ChromeProfilesTests: XCTestCase {
         XCTAssertThrowsError(try store.prepare(a))
     }
 
+    func testClaudeOnlySetupAndAddingClaudePreserveChatGPTPairing() throws {
+        let (store, root) = try fixture()
+        let claudeManifest = root.appendingPathComponent("claude-host.json")
+        let host: [String: Any] = ["name": ChromeBridge.claude.hostName, "type": "stdio", "path": "/usr/bin/true",
+                                   "allowed_origins": ["chrome-extension://\(ChromeBridge.claude.extensionID)/"]]
+        try JSONSerialization.data(withJSONObject: host).write(to: claudeManifest)
+        let both = ChromeProfiles(root: store.root, hostManifest: store.hostManifest, claudeHostManifest: claudeManifest)
+        let existing = try both.create(name: "Existing")
+        let pairID = UUID()
+        try both.pair(existing, id: pairID.uuidString)
+        let upgraded = try both.addBridge(.claude, to: existing)
+        XCTAssertEqual(upgraded.bridgeID, pairID)
+        XCTAssertEqual(upgraded.enabledBridges, [.chatgpt, .claude])
+        XCTAssertEqual(both.directory(existing), both.directory(upgraded))
+        XCTAssertEqual(try Data(contentsOf: both.directory(upgraded).appendingPathComponent(
+            "NativeMessagingHosts/" + ChromeBridge.claude.hostName + ".json")), try Data(contentsOf: claudeManifest))
+        let onlyClaude = try both.create(name: "Claude", bridges: [.claude])
+        let absentChatGPT = ChromeProfiles(root: store.root, hostManifest: root.appendingPathComponent("absent"), claudeHostManifest: claudeManifest)
+        try absentChatGPT.prepare(onlyClaude)
+        XCTAssertThrowsError(try absentChatGPT.pair(onlyClaude, id: UUID().uuidString))
+        XCTAssertEqual(absentChatGPT.launchArguments(onlyClaude, setup: true).last, ChromeBridge.claude.storeURL)
+        let instructions = absentChatGPT.instructions(onlyClaude, bridge: .claude)
+        XCTAssertTrue(instructions.contains("/chrome > Select browser"))
+        XCTAssertTrue(instructions.contains(absentChatGPT.marker(onlyClaude).absoluteString))
+        XCTAssertFalse(instructions.contains("cua.getBrowser"))
+        XCTAssertFalse(instructions.contains("Cowork"))
+    }
+
+    func testLegacyProfilesStillDefaultToChatGPT() throws {
+        let id = UUID()
+        let data = Data("[{\"id\":\"\(id.uuidString)\",\"name\":\"Legacy\"}]".utf8)
+        let profiles = try JSONDecoder().decode([ChromeProfile].self, from: data)
+        XCTAssertEqual(profiles[0].enabledBridges, [.chatgpt])
+    }
+
     func testInvalidNamesAndCorruptStateAreNotOverwritten() throws {
         let (store, _) = try fixture()
         XCTAssertThrowsError(try store.create(name: "\n"))
@@ -69,6 +104,24 @@ final class ChromeProfilesTests: XCTestCase {
 }
 
 extension ChromeProfilesTests {
+    func testLiveClaudeCodeSetup() async throws {
+        guard ProcessInfo.processInfo.environment["DOPPEL_CLAUDE_CHROME_QA"] == "1" else {
+            throw XCTSkip("Opt-in Claude Code native-host setup in a fresh disposable profile.")
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let live = ChromeProfiles(root: root)
+        let profile = try live.create(name: "Doppel Claude Code QA", bridges: [.claude])
+        try live.prepare(profile)
+        let launched = expectation(description: "Claude Code QA browser opened")
+        live.launch(profile, setup: true) { error in
+            XCTAssertNil(error)
+            launched.fulfill()
+        }
+        await fulfillment(of: [launched], timeout: 20)
+        print("CLAUDE_CHROME_QA_ROOT=\(root.path)")
+        print("CLAUDE_CHROME_QA_PROFILE=\(live.directory(profile).path)")
+    }
+
     func testLiveIsolatedLaunch() async throws {
         let env = ProcessInfo.processInfo.environment
         guard let source = env["DOPPEL_CHROME_QA_SOURCE"],

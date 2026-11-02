@@ -1,10 +1,20 @@
 import AppKit
 import SwiftUI
 
+enum ChromeBridge: String, Codable, CaseIterable {
+    case chatgpt, claude
+    var label: String { self == .chatgpt ? "ChatGPT" : "Claude Code" }
+    var hostName: String { self == .chatgpt ? "com.openai.codexextension" : "com.anthropic.claude_code_browser_extension" }
+    var extensionID: String { self == .chatgpt ? "hehggadaopoacecdllhhajmbjkdcmajg" : "fcoeoabgfenejglbffodgkkbkcdhcgfn" }
+    var storeURL: String { "https://chromewebstore.google.com/detail/\(self == .chatgpt ? "chatgpt" : "claude")/\(extensionID)" }
+}
+
 struct ChromeProfile: Codable, Identifiable, Equatable {
     let id: UUID
     let name: String
     var bridgeID: UUID?
+    var bridges: [ChromeBridge]?
+    var enabledBridges: [ChromeBridge] { bridges ?? [.chatgpt] }
 }
 
 /// Browser profiles never enter the clone/update/permission machinery.
@@ -14,15 +24,18 @@ final class ChromeProfiles: ObservableObject {
     @Published private(set) var loadError: String?
     let root: URL
     let hostManifest: URL
-    static let extensionID = "hehggadaopoacecdllhhajmbjkdcmajg"
-    static let storeURL = "https://chromewebstore.google.com/detail/chatgpt/\(extensionID)"
+    let claudeHostManifest: URL
+    static let extensionID = ChromeBridge.chatgpt.extensionID
+    static let storeURL = ChromeBridge.chatgpt.storeURL
     static let chrome = URL(fileURLWithPath: "/Applications/Google Chrome.app")
 
-    init(root: URL? = nil, hostManifest: URL? = nil) {
+    init(root: URL? = nil, hostManifest: URL? = nil, claudeHostManifest: URL? = nil) {
         let home = FileManager.default.homeDirectoryForCurrentUser
         self.root = root ?? home.appendingPathComponent("Library/Application Support/Doppel/chrome")
         self.hostManifest = hostManifest ?? home.appendingPathComponent(
             "Library/Application Support/Google/Chrome/NativeMessagingHosts/com.openai.codexextension.json")
+        self.claudeHostManifest = claudeHostManifest ?? home.appendingPathComponent(
+            "Library/Application Support/Google/Chrome/NativeMessagingHosts/com.anthropic.claude_code_browser_extension.json")
         do {
             let file = self.root.appendingPathComponent("profiles.json")
             if FileManager.default.fileExists(atPath: file.path) {
@@ -55,7 +68,7 @@ final class ChromeProfiles: ObservableObject {
     }
 
     @discardableResult
-    func create(name: String) throws -> ChromeProfile {
+    func create(name: String, bridges: [ChromeBridge] = [.chatgpt]) throws -> ChromeProfile {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, name.count <= 80, !name.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
             throw failure("Use a profile name of 1–80 characters without control characters.")
@@ -63,12 +76,24 @@ final class ChromeProfiles: ObservableObject {
         guard !profiles.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else {
             throw failure("A Chrome profile with that name already exists.")
         }
-        let profile = ChromeProfile(id: UUID(), name: name)
+        let profile = ChromeProfile(id: UUID(), name: name, bridges: bridges)
         try save(profiles + [profile])
         return profile
     }
 
+    func addBridge(_ bridge: ChromeBridge, to profile: ChromeProfile) throws -> ChromeProfile {
+        guard let index = profiles.firstIndex(where: { $0.id == profile.id }) else { throw failure("Unknown Chrome profile.") }
+        var updated = profiles[index]
+        if !updated.enabledBridges.contains(bridge) { updated.bridges = updated.enabledBridges + [bridge] }
+        try prepare(updated)
+        var values = profiles
+        values[index] = updated
+        try save(values)
+        return updated
+    }
+
     func pair(_ profile: ChromeProfile, id: String) throws {
+        guard profile.enabledBridges.contains(.chatgpt) else { throw failure("This profile uses Claude Code. Select it through /chrome instead.") }
         guard let uuid = UUID(uuidString: id.trimmingCharacters(in: .whitespacesAndNewlines)) else {
             throw failure("Paste the extensionInstanceId returned by the browser tool.")
         }
@@ -84,17 +109,23 @@ final class ChromeProfiles: ObservableObject {
     /// Refresh the registration only inside this profile, never in main Chrome.
     func prepare(_ profile: ChromeProfile) throws {
         guard profiles.contains(where: { $0.id == profile.id }) else { throw failure("Unknown Chrome profile.") }
-        guard let data = try? Data(contentsOf: hostManifest) else {
-            throw failure("The ChatGPT browser bridge is unavailable. Install the Browser plugin in ChatGPT, then try again.")
-        }
-        guard let host = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              host["name"] as? String == "com.openai.codexextension",
-              host["type"] as? String == "stdio",
-              let executable = host["path"] as? String,
-              executable.hasPrefix("/"), FileManager.default.isExecutableFile(atPath: executable),
-              let origins = host["allowed_origins"] as? [String],
-              origins.contains("chrome-extension://\(Self.extensionID)/") else {
-            throw failure("The ChatGPT browser bridge is unavailable. Install or repair the Browser plugin in ChatGPT, then try again.")
+        var manifests: [(ChromeBridge, Data)] = []
+        for bridge in profile.enabledBridges {
+            let source = bridge == .chatgpt ? hostManifest : claudeHostManifest
+            let help = bridge == .chatgpt
+                ? "Install or repair the Browser plugin in ChatGPT."
+                : "Enable Chrome in Claude Code with /chrome to install its native host."
+            guard let data = try? Data(contentsOf: source),
+                  let host = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  host["name"] as? String == bridge.hostName,
+                  host["type"] as? String == "stdio",
+                  let executable = host["path"] as? String,
+                  executable.hasPrefix("/"), FileManager.default.isExecutableFile(atPath: executable),
+                  let origins = host["allowed_origins"] as? [String],
+                  origins.contains("chrome-extension://\(bridge.extensionID)/") else {
+                throw failure("The \(bridge.label) browser bridge is unavailable. \(help)")
+            }
+            manifests.append((bridge, data))
         }
         let destination = directory(profile)
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true,
@@ -108,22 +139,27 @@ final class ChromeProfiles: ObservableObject {
         }
         let registrations = destination.appendingPathComponent("NativeMessagingHosts")
         try FileManager.default.createDirectory(at: registrations, withIntermediateDirectories: true)
-        try data.write(to: registrations.appendingPathComponent("com.openai.codexextension.json"), options: .atomic)
+        for (bridge, data) in manifests {
+            try data.write(to: registrations.appendingPathComponent(bridge.hostName + ".json"), options: .atomic)
+        }
         let safeName = profile.name.replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;").replacingOccurrences(of: ">", with: "&gt;")
+        let installLinks = profile.enabledBridges.map {
+            "<p><a href=\"\($0.storeURL)\">Install the official \($0.label) extension</a></p>"
+        }.joined()
         let html = """
         <!doctype html><meta charset="utf-8"><title>Doppel Chrome: \(safeName)</title>
         <h1>\(safeName)</h1><p>This is your separate Doppel Chrome profile.</p>
         <p>Keep this connection tab open while pairing the browser bridge.</p>
-        <p>In Doppel, choose Copy Browser Instructions to connect your agent to this profile.</p>
-        <p><a href="\(Self.storeURL)">Install the official ChatGPT extension</a> if it is not already installed.</p>
+        <p>In Doppel, copy this profile’s ChatGPT or Claude Code instructions to connect your agent.</p>
+        \(installLinks)
         """
         try Data(html.utf8).write(to: marker(profile), options: .atomic)
     }
 
     func launchArguments(_ profile: ChromeProfile, setup: Bool = false) -> [String] {
         var args = ["--user-data-dir=\(directory(profile).path)", "--no-first-run", "--no-default-browser-check", marker(profile).absoluteString]
-        if setup { args.append(Self.storeURL) }
+        if setup { args.append(contentsOf: profile.enabledBridges.map(\.storeURL)) }
         return args
     }
 
@@ -145,38 +181,52 @@ final class ChromeProfiles: ObservableObject {
         }
     }
 
-    func instructions(_ profile: ChromeProfile) -> String {
+    func instructions(_ profile: ChromeProfile, bridge: ChromeBridge = .chatgpt) -> String {
+        if bridge == .claude {
+            return "Use Claude in Chrome only in my Doppel profile. In Claude Code, use /chrome > Select browser to choose it. Before any browser action, confirm the selected browser contains this exact connection tab: \(marker(profile).absoluteString). If the tab is absent or selection cannot be confirmed, stop and ask me to select the correct profile. Never use main Chrome as a fallback. Recheck after reconnecting."
+        }
         if let id = profile.bridgeID {
             return "Use only the Chrome bridge with extensionInstanceId \(id.uuidString.lowercased()). Select it explicitly with cua.getBrowser({extensionInstanceId: '\(id.uuidString.lowercased())'}). If unavailable, stop and ask me to open this Doppel profile. Never fall back to generic Chrome or another browser."
         }
-        return "Pair my Doppel Chrome profile. List connected extension browsers and their tabs. Find exactly one whose tabs contain this exact URL: \(marker(profile).absoluteString). Return that browser's metadata.extensionInstanceId for me to paste into Doppel's Pair Bridge dialog. If none or multiple match, stop. Do not select by generic Chrome, display name, or URL-based getBrowser, and do not control another browser."
+        return "Pair my Doppel Chrome profile. List connected extension browsers and their tabs. Find exactly one whose tabs contain this exact URL: \(marker(profile).absoluteString). Return that browser's metadata.extensionInstanceId for me to paste into Doppel's Pair ChatGPT Bridge dialog. If none or multiple match, stop. Do not select by generic Chrome, display name, or URL-based getBrowser, and do not control another browser."
     }
 
-    func copyInstructions(_ profile: ChromeProfile) {
+    func copyInstructions(_ profile: ChromeProfile, bridge: ChromeBridge = .chatgpt) {
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(instructions(profile), forType: .string)
+        NSPasteboard.general.setString(instructions(profile, bridge: bridge), forType: .string)
+    }
+
+    func addClaudeBridge(_ profile: ChromeProfile) {
+        perform { launch(try addBridge(.claude, to: profile), setup: true) }
     }
 
     func promptCreate() {
         PanelWindow.close()
         let alert = NSAlert()
         alert.messageText = "New Chrome Profile"
-        alert.informativeText = "Give this separate browser profile a name. Chrome will ask you to confirm installation of the official ChatGPT extension."
+        alert.informativeText = "Name the profile and choose its browser bridges. Chrome asks you to confirm each extension installation."
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
         field.placeholderString = "Work"
-        alert.accessoryView = field
+        let picker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 300, height: 28))
+        picker.addItems(withTitles: ["ChatGPT", "Claude Code", "ChatGPT and Claude Code"])
+        let accessory = NSStackView(views: [field, picker])
+        accessory.orientation = .vertical
+        accessory.frame = NSRect(x: 0, y: 0, width: 300, height: 64)
+        alert.accessoryView = accessory
         alert.addButton(withTitle: "Create")
         alert.addButton(withTitle: "Cancel")
         NSApp.activate(ignoringOtherApps: true)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        perform { launch(try create(name: field.stringValue), setup: true) }
+        let bridges: [ChromeBridge] = picker.indexOfSelectedItem == 2 ? ChromeBridge.allCases
+            : [picker.indexOfSelectedItem == 1 ? .claude : .chatgpt]
+        perform { launch(try create(name: field.stringValue, bridges: bridges), setup: true) }
     }
 
     func promptPair(_ profile: ChromeProfile) {
         PanelWindow.close()
         let alert = NSAlert()
-        alert.messageText = "Pair Bridge: \(profile.name)"
-        alert.informativeText = "First use Copy Browser Instructions with your agent. Paste the extensionInstanceId it returns. Confirm it belongs to this profile, not your main Chrome."
+        alert.messageText = "Pair ChatGPT Bridge: \(profile.name)"
+        alert.informativeText = "First use Copy ChatGPT Instructions with your agent. Paste the extensionInstanceId it returns. Confirm it belongs to this profile, not your main Chrome."
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 340, height: 24))
         field.stringValue = profile.bridgeID?.uuidString.lowercased() ?? ""
         alert.accessoryView = field
@@ -205,11 +255,19 @@ struct ChromeProfilesMenu: View {
             if let error = store.loadError { Text(error) }
             ForEach(store.profiles) { profile in
                 Menu(profile.name) {
-                    Text(profile.bridgeID == nil ? "Bridge needs pairing" : "Bridge paired")
+                    Text(profile.enabledBridges.map(\.label).joined(separator: " + "))
                     Button("Open") { store.launch(profile) }
                     Button("Set Up Bridge…") { store.launch(profile, setup: true) }
-                    Button("Copy Browser Instructions") { store.copyInstructions(profile) }
-                    Button("Pair Bridge…") { store.promptPair(profile) }
+                    if profile.enabledBridges.contains(.chatgpt) {
+                        Text(profile.bridgeID == nil ? "ChatGPT bridge needs pairing" : "ChatGPT bridge paired")
+                        Button("Copy ChatGPT Instructions") { store.copyInstructions(profile) }
+                        Button("Pair ChatGPT Bridge…") { store.promptPair(profile) }
+                    }
+                    if profile.enabledBridges.contains(.claude) {
+                        Button("Copy Claude Code Instructions") { store.copyInstructions(profile, bridge: .claude) }
+                    } else {
+                        Button("Add Claude Code Bridge…") { store.addClaudeBridge(profile) }
+                    }
                 }
             }
             Divider()
