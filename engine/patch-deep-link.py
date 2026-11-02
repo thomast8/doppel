@@ -52,12 +52,22 @@ REQUIRED_NEIGHBOURS = (
 # Minified symbol names change between vendor releases. Match the behavior,
 # not today's names: the protocol helper returns production or development
 # scheme depending on app.isPackaged and platform.
+#
+# Build 61615 moved to a different bundler: strings are double-quoted, the
+# platform comparisons put the constant first, and the two schemes are inlined
+# as literals instead of named constants. Both layouts are accepted.
 PROTOCOL_HELPER = re.compile(
     rb"function (?P<function>[A-Za-z_$][A-Za-z0-9_$]*)"
     rb"\(e,t=process\.platform\)\{return "
-    rb"e\|\|t===`win32`\|\|t===`linux`\?"
-    rb"(?P<production>[A-Za-z_$][A-Za-z0-9_$]*):"
-    rb"(?P<development>[A-Za-z_$][A-Za-z0-9_$]*)\}"
+    rb"e\|\|(?:t===`win32`|\"win32\"===t)\|\|(?:t===`linux`|\"linux\"===t)\?"
+    rb"(?P<production>[A-Za-z_$][A-Za-z0-9_$]*|`[a-z-]+`|\"[a-z-]+\"):"
+    rb"(?P<development>[A-Za-z_$][A-Za-z0-9_$]*|`[a-z-]+`|\"[a-z-]+\")\}"
+)
+
+# The helper is called as ``ns.name(`` or, since build 61615, ``(0,ns.name)(``.
+PROTOCOL_CALLEE = (
+    rb"(?:[A-Za-z_$][A-Za-z0-9_$]*\.[A-Za-z_$][A-Za-z0-9_$]*"
+    rb"|\(0,[A-Za-z_$][A-Za-z0-9_$]*\.[A-Za-z_$][A-Za-z0-9_$]*\))\("
 )
 
 # The member holding the protocol helper is minified too, and it is renamed on
@@ -68,8 +78,7 @@ PROTOCOL_HELPER = re.compile(
 # ``isPackaged`` argument either side of it, not the name in the middle.
 OAUTH_CALLBACK_HANDLER = re.compile(
     rb'"app-connect-oauth-callback-url":async\(\)=>\(\{callbackUrl:`\$\{'
-    rb"(?P<protocol>[A-Za-z_$][A-Za-z0-9_$]*)"
-    rb"\.(?P<helper>[A-Za-z_$][A-Za-z0-9_$]*)\("
+    + PROTOCOL_CALLEE +
     rb"(?P<electron>[A-Za-z_$][A-Za-z0-9_$]*)\.app\.isPackaged\)"
     rb"\}://connector/oauth_callback`\}\)"
 )
@@ -80,8 +89,7 @@ OAUTH_CALLBACK_HANDLER = re.compile(
 # still rebuilt from archived bundles and the patcher must recognise either.
 OAUTH_CALLBACK_GETTER = re.compile(
     rb"async getCallbackUrl\(\)\{return`\$\{"
-    rb"(?P<protocol>[A-Za-z_$][A-Za-z0-9_$]*)"
-    rb"\.(?P<helper>[A-Za-z_$][A-Za-z0-9_$]*)\("
+    + PROTOCOL_CALLEE +
     rb"(?P<electron>[A-Za-z_$][A-Za-z0-9_$]*)\.app\.isPackaged\)"
     rb"\}://connector/oauth_callback`\}"
 )
@@ -180,6 +188,29 @@ DRAINED_OPEN_URL_HANDLER = re.compile(
     rb"(?P<queue_module>[A-Za-z_$][A-Za-z0-9_$]*)\."
     rb"(?P<flush>[A-Za-z_$][A-Za-z0-9_$]*)\(\)\)"
     rb"(?P=handler)\((?P=drained)\)\})"
+)
+
+
+# Build 61615 stopped declaring the deep-link and http(s) branches as separate
+# statements the earlier shapes shared: the handler gains a leading space-page
+# branch and the codex-route branch is now just ``if(route){...}``. Only that
+# branch is matched, anchored by what must follow it (the http(s) fallback and
+# the ``open-url`` registration inside the startup drain), so the leading
+# space-page code can change without breaking the patch. The wake guard is
+# written ``"kind"!==route.kind&&`` here, and optional, as in 31256.
+INLINE_OPEN_URL_HANDLER = re.compile(
+    rb"(?P<prefix>if\((?P<route>[A-Za-z_$][A-Za-z0-9_$]*)\)\{"
+    rb"(?P<queue>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=route)\),"
+    rb"(?:[\"`][A-Za-z]+[\"`]!==(?P=route)\.kind&&)?"
+    rb"(?P<callback>[A-Za-z_$][A-Za-z0-9_$]*)\?\.\("
+    rb"(?P<source>[A-Za-z_$][A-Za-z0-9_$]*)\((?P=route)(?:,[A-Za-z_$][A-Za-z0-9_$]*)?\)\)),"
+    rb"(?P<suffix>(?P<event>[A-Za-z_$][A-Za-z0-9_$]*)\?\.preventDefault\(\);return\}"
+    rb"let (?P<http>[A-Za-z_$][A-Za-z0-9_$]*)="
+    rb"(?P<parse_http>[A-Za-z_$][A-Za-z0-9_$]*)\([A-Za-z_$][A-Za-z0-9_$]*\);"
+    rb"(?P=http)&&\([A-Za-z_$][A-Za-z0-9_$]*\((?P=http)\),"
+    rb"(?P=event)\?\.preventDefault\(\)\)\};"
+    rb"for\(let [A-Za-z_$][A-Za-z0-9_$]* of\("
+    rb"[A-Za-z_$][A-Za-z0-9_$]*\.on\(\"open-url\",)"
 )
 
 
@@ -465,6 +496,22 @@ def patched_drained_open_url_handler(match: re.Match[bytes]) -> bytes:
     )
 
 
+def patched_inline_open_url_handler(match: re.Match[bytes]) -> bytes:
+    route = match.group("route")
+    return (
+        match.group("prefix")
+        + b";if("
+        + route
+        + b".kind===`connectorOAuthCallback`&&process.env."
+        + RESTORE_PATCH_MARKER
+        + b"&&process.env.DOPPEL_PRIMARY_APP&&process.env.DOPPEL_PRIMARY_BUNDLE_ID)try{"
+        + b'require("node:child_process").spawn(process.env.'
+        + RESTORE_PATCH_MARKER
+        + b",[`set`,`codex`,process.env.DOPPEL_PRIMARY_APP,process.env.DOPPEL_PRIMARY_BUNDLE_ID],{detached:!0,stdio:`ignore`}).unref()}catch{};"
+        + match.group("suffix")
+    )
+
+
 def locate_restore_member(archive: Archive) -> tuple[Member, bytes, bool]:
     patched: list[tuple[Member, bytes]] = []
     unpatched: list[tuple[Member, bytes, str, re.Match[bytes]]] = []
@@ -487,6 +534,8 @@ def locate_restore_member(archive: Archive) -> tuple[Member, bytes, bool]:
             ("queued", match) for match in QUEUED_OPEN_URL_HANDLER.finditer(data)
         ] + [
             ("drained", match) for match in DRAINED_OPEN_URL_HANDLER.finditer(data)
+        ] + [
+            ("inline", match) for match in INLINE_OPEN_URL_HANDLER.finditer(data)
         ]
         if not handler_matches:
             continue
@@ -506,6 +555,8 @@ def locate_restore_member(archive: Archive) -> tuple[Member, bytes, bool]:
             replacement = patched_open_url_handler(match)
         elif handler_kind == "queued":
             replacement = patched_queued_open_url_handler(match)
+        elif handler_kind == "inline":
+            replacement = patched_inline_open_url_handler(match)
         else:
             replacement = patched_drained_open_url_handler(match)
         return member, data[: match.start()] + replacement + data[match.end() :], False
@@ -524,11 +575,20 @@ def locate_restore_member(archive: Archive) -> tuple[Member, bytes, bool]:
 # also makes ``updateLighting`` a no-op.
 MICRO_PATCH_MARKER = b"process.env.DOPPEL_CODEX_MICRO"
 MICRO_SERVICE_NEIGHBOUR = b"CodexMicroService"
-MICRO_START = b"start(){if(this.lifecycleState!==`started`){"
-MICRO_PATCHED_START = (
-    b"start(){if(" + MICRO_PATCH_MARKER + b"!==`1`){this.lifecycleState=`stopped`;return}"
-    b"if(this.lifecycleState!==`started`){"
+MICRO_START = re.compile(
+    rb"start\(\)\{if\((?:this\.lifecycleState!==`started`|\"started\"!==this\.lifecycleState)\)\{"
 )
+MICRO_GATE = (
+    b"if(" + MICRO_PATCH_MARKER + b"!==`1`){this.lifecycleState=`stopped`;return}"
+)
+MICRO_PATCHED_START = re.compile(
+    rb"start\(\)\{" + re.escape(MICRO_GATE) + rb"if\("
+    rb"(?:this\.lifecycleState!==`started`|\"started\"!==this\.lifecycleState)\)\{"
+)
+
+
+def patched_micro_start(data: bytes) -> bytes:
+    return MICRO_START.sub(lambda match: b"start(){" + MICRO_GATE + match.group(0)[len(b"start(){"):], data)
 
 
 # Each Bluetooth channel of the pad enumerates as its own device whose product
@@ -576,13 +636,13 @@ def locate_micro_member(archive: Archive) -> tuple[Member, bytes, bool] | None:
         data = read_member(archive, member)
         if MICRO_SERVICE_NEIGHBOUR not in data or b"@worklouder/device-kit-oai" not in data:
             continue
-        if data.count(MICRO_PATCH_MARKER) == 1 and data.count(MICRO_PATCHED_START) == 1:
+        if data.count(MICRO_PATCH_MARKER) == 1 and len(MICRO_PATCHED_START.findall(data)) == 1:
             data, channel_patched = patched_micro_discovery(member, data)
             found.append((member, data, channel_patched))
-        elif MICRO_PATCH_MARKER not in data and data.count(MICRO_START) == 1:
-            data, _ = patched_micro_discovery(member, data.replace(MICRO_START, MICRO_PATCHED_START))
+        elif MICRO_PATCH_MARKER not in data and len(MICRO_START.findall(data)) == 1:
+            data, _ = patched_micro_discovery(member, patched_micro_start(data))
             found.append((member, data, False))
-        elif MICRO_PATCH_MARKER not in data and MICRO_START not in data:
+        elif MICRO_PATCH_MARKER not in data and not MICRO_START.search(data):
             # A reshaped service only costs the pad its single owner; failing
             # here would leave every clone unbuildable after a vendor update.
             print(f"patch-deep-link: warning: Codex Micro start not found in {member.path}; "
@@ -606,8 +666,9 @@ RUNTIME_ROOT_PREFIX = b"(process.env.DOPPEL_CODEX_RUNTIMES_ROOT||"
 RUNTIME_ROOT_SITES = 4
 UNPATCHED_RUNTIME_ROOT = re.compile(
     rb"(?<![A-Za-z0-9_$.])(?<!DOPPEL_CODEX_RUNTIMES_ROOT\|\|)"
-    rb"[A-Za-z_$][A-Za-z0-9_$]*\.default\.join\("
-    rb"[A-Za-z_$][A-Za-z0-9_$]*\.default\.homedir\(\),`\.cache`,`codex-runtimes`\)"
+    rb"(?:[A-Za-z_$][A-Za-z0-9_$]*\.default|[A-Za-z_$][A-Za-z0-9_$]*\(\))\.join\("
+    rb"(?:[A-Za-z_$][A-Za-z0-9_$]*\.default|[A-Za-z_$][A-Za-z0-9_$]*\(\))\.homedir\(\),"
+    rb"(?:`\.cache`,`codex-runtimes`|\"\.cache\",\"codex-runtimes\")\)"
 )
 
 
@@ -623,7 +684,7 @@ def runtime_root_members(archive: Archive) -> tuple[list[tuple[Member, bytes, bo
         if not member.path.endswith(".js") or member.size == 0:
             continue
         data = read_member(archive, member)
-        if b"`codex-runtimes`" not in data:
+        if b"`codex-runtimes`" not in data and b'"codex-runtimes"' not in data:
             continue
         patched = data.count(RUNTIME_ROOT_PREFIX)
         unpatched = len(UNPATCHED_RUNTIME_ROOT.findall(data))
