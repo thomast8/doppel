@@ -6,6 +6,21 @@
         <description>Signed Doppel releases</description>
         <language>en</language>
         <item>
+            <title>2.1.1</title>
+            <pubDate>Mon, 02 Nov 2026 10:30:54 +0000</pubDate>
+            <link>https://github.com/thomast8/doppel</link>
+            <sparkle:version>42</sparkle:version>
+            <sparkle:shortVersionString>2.1.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Doppel 2.1.1
+
+- Doppel can update to ChatGPT 26.1027 and newer again. That build changed how the app is packaged, and Doppel refused to update with "this ChatGPT build is not compatible with Doppel yet". Your existing ChatGPT apps were never touched and kept working.
+- Doppel is now less likely to break the next time ChatGPT repackages itself. A plain change in how the app writes its code no longer stops an update.
+- Developers can run `just qa-vendor` to check the installed and any downloaded ChatGPT build against Doppel before applying an update.
+]]></description>
+            <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.1.1/Doppel-2.1.1-macOS.zip" length="7806498" type="application/octet-stream" sparkle:edSignature="p9DSEJGaPahEWfJg5yLsCdG9PQvUXhGJmeX2UKxvgY7lkMp4I95igM1I58/dRh9NK9TioyXdoH51aXsOjnaOCw=="/>
+        </item>
+        <item>
             <title>2.1.0</title>
             <pubDate>Fri, 30 Oct 2026 13:11:20 +0000</pubDate>
             <link>https://github.com/thomast8/doppel</link>
@@ -35,21 +50,6 @@ After signing in and opening Code, use Import Existing Code History to bring ove
 - `doppel prune` with no name now tidies the updates folder too and includes it in the size it reports. Run it once after updating to clear what earlier versions left behind.
 ]]></description>
             <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.5/Doppel-2.0.5-macOS.zip" length="7802352" type="application/octet-stream" sparkle:edSignature="Pmc0GdecbeVqGcy6pLHDzM5NyTvc4dKHqNaZXOkqzHGaRTaoh0jIrTSkYFZ8nYWiWHMq1fGp6j8BVPSPyLN1Cg=="/>
-        </item>
-        <item>
-            <title>2.0.4</title>
-            <pubDate>Wed, 28 Oct 2026 12:20:11 +0000</pubDate>
-            <link>https://github.com/thomast8/doppel</link>
-            <sparkle:version>39</sparkle:version>
-            <sparkle:shortVersionString>2.0.4</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[# Doppel 2.0.4
-
-- New **Use with Claude Code** in the Creator Micro menu, and `doppel micro claude <channel>` on the command line. Doppel installs the codex-micro Claude Code plugin, turns on the setting the Claude app's Code tab needs, and keeps the plugin to its own Bluetooth channel, so ChatGPT and Claude Code share the pad by channel.
-- Doppel shows everything it will change and only goes ahead once you confirm.
-- A ChatGPT instance and Claude Code can no longer be given the same channel, and `doppel micro channel` now lists Claude Code too.
-]]></description>
-            <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.0.4/Doppel-2.0.4-macOS.zip" length="7801126" type="application/octet-stream" sparkle:edSignature="wiHZN/5J/JMBZQwhPRTvkVOrM3MDOnJ9kWdbCdu+/fGcOpvAbOpEUT721dE1bRiKgZj5LyJprJ60uKsth3hjAQ=="/>
         </item>
     </channel>
 </rss>
