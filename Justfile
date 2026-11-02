@@ -16,6 +16,9 @@ qa:
     ./qa/update-reconcile.zsh
     ./qa/retention.zsh
 
+qa-vendor:
+    ./qa/vendor-compat.zsh
+
 qa-edge:
     ./qa/edge.zsh
 
