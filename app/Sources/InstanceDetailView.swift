@@ -74,6 +74,8 @@ struct InstanceDetailView: View {
                 }
             }
 
+            InstanceBrowserSection(instance: instance, browsers: store.chromeProfiles)
+
             Section("Maintenance") {
                 BadgeRow(badge: StatusBadge(symbol: "hammer.fill", color: .gray),
                          title: "Rebuild and reopen",

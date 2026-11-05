@@ -1346,7 +1346,7 @@ remove_partial_instance() {
 
 cmd_list() {
     # --porcelain: stable machine-readable output, one instance per line:
-    # slug<TAB>name<TAB>app-path<TAB>installed|missing<TAB>tint<TAB>clone|vendor
+    # slug<TAB>name<TAB>app-path<TAB>installed|missing<TAB>tint<TAB>clone|vendor<TAB>agent-home-base64
     # Instance names cannot contain tabs (create validates them), so tab-
     # separated fields are unambiguous. The menu-bar app consumes this instead
     # of parsing config files itself, so the CLI stays the single source of truth.
@@ -1362,8 +1362,9 @@ cmd_list() {
         engine="clone"
         instance_uses_vendor_engine "$dir" && engine="vendor"
         if (( porcelain )); then
-            printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${dir:t}" "$name" "$app" "$state" \
-                "$(config_value "$dir" DOPPEL_TINT)" "$engine"
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${dir:t}" "$name" "$app" "$state" \
+                "$(config_value "$dir" DOPPEL_TINT)" "$engine" \
+                "$(printf '%s' "$(config_value "$dir" "$AGENT_HOME_KEY")" | /usr/bin/base64 | /usr/bin/tr -d '\n')"
         elif [[ "$state" == "installed" && "$engine" == "vendor" ]]; then
             print -r -- "$name  ->  $app  [built-in browser]"
         elif [[ "$state" == "installed" ]]; then

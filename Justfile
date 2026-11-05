@@ -70,3 +70,15 @@ sparkle-key:
 # NOTARY_KEYCHAIN_PROFILE. DOPPEL_ALLOW_ADHOC=1 builds an ad-hoc release instead.
 package-release version build:
     DOPPEL_VERSION="{{version}}" DOPPEL_BUILD="{{build}}" ./script/package-release.zsh
+
+# Real browser QA uses only caller-supplied disposable Chrome fixtures.
+qa-chrome source id_a id_b root="":
+    DOPPEL_CHROME_QA_ROOT="{{root}}" DOPPEL_CHROME_QA_SOURCE="{{source}}" DOPPEL_CHROME_QA_A="{{id_a}}" DOPPEL_CHROME_QA_B="{{id_b}}" ./app/test.zsh --filter ChromeProfilesTests/testLiveIsolatedLaunch
+
+# Opens a fresh disposable profile using the installed Claude Code host.
+qa-claude-chrome:
+    DOPPEL_CLAUDE_CHROME_QA=1 ./app/test.zsh --filter ChromeProfilesTests/testLiveClaudeCodeSetup
+
+# Uses a real managed instance, but writes only to a disposable browser store.
+qa-owned-browser kind slug:
+    DOPPEL_MANAGED_BROWSER_QA_KIND="{{kind}}" DOPPEL_MANAGED_BROWSER_QA_SLUG="{{slug}}" ./app/test.zsh --filter ChromeProfilesTests/testLiveManagedInstanceBrowser

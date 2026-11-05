@@ -134,6 +134,10 @@ official process is open. Those are shapes it cannot put back exactly as it
 found them, and the refusal names the window to quit. A reconcile never closes
 the official window, so it never asks.
 
+## Browsers for managed instances
+
+Each managed ChatGPT or Claude instance can own its own Chrome profile, opened from the instance's Browser section. Setup uses that instance's bridge runtime and account directory; browser sign-in is separate and must match the managed account. Existing standalone browser profiles can be explicitly linked without moving their data. See [browser setup](docs/chrome-profiles.md).
+
 ## Usage
 
 ### iPhone Remote Access

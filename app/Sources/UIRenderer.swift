@@ -17,6 +17,21 @@ enum UIRenderer {
         scheduleQA { showRemoteAccessQA(profileID: profileID) }
     }
 
+    static func scheduleInstanceQA(instanceID: String) {
+        scheduleQA {
+            NSApp.setActivationPolicy(.regular)
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 580, height: 680),
+                                  styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            window.title = "Doppel Instance QA: " + instanceID
+            window.isReleasedWhenClosed = false
+            window.contentViewController = NSHostingController(rootView: InstanceDetailView(
+                store: InstanceStore(), slug: instanceID))
+            remoteQAWindow = window
+            window.center(); window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+    }
+
     static func scheduleCreateInstanceQA() {
         scheduleQA {
             NSApp.setActivationPolicy(.regular)
