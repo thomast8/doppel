@@ -11,7 +11,7 @@
 set -u
 setopt PIPE_FAIL
 
-readonly ENGINE_VERSION="33"
+readonly ENGINE_VERSION="34"
 
 # When this engine copy runs from inside an installed bundle, environment
 # overrides are ignored: otherwise a same-uid process could point a
@@ -585,6 +585,11 @@ build_instance() {
         done
         /usr/bin/codesign --force --sign "$SIGN_IDENTITY" --options runtime \
             "$framework" >/dev/null || fail_closed "Signing the patched Electron framework failed."
+    fi
+
+    if [[ "$DOPPEL_APP_KIND" == chatgpt ]]; then
+        install_node_repl_layer "$target" || \
+            fail_closed "Installing the in-app browser process layer failed."
     fi
 
     # Finder provenance and resource-fork metadata are not executable content

@@ -3626,7 +3626,10 @@ cmd_native_tools_claim_browser() {
 # its parent and its grandparent, and a clone's re-signed app has no OpenAI
 # team. Since build 12553 an extra vendor process sits between them, which puts
 # the clone outside that window, so iab works in clones by accident of process
-# layout. If that layer goes away the app logs this exact refusal again. The
+# layout. ChatGPT 26.1029 dropped that layer for the computer-use tool, so the
+# engine now installs one itself (install_node_repl_layer). That refusal is
+# logged as dynamic_app_tools_peer_rejected, which other app-tools clients also
+# produce all day, so it cannot be told apart here and is not counted. The
 # check reads the running clone's own log (one file set per pid, the first
 # naming the app's path) and reports the latest iab event: "served", "refused",
 # or "unused" when nothing has touched the browser since launch.
