@@ -163,7 +163,7 @@ print -r -- "an empty field in a runtime snapshot does not shift the ones after 
 # The unmanaged and ambiguous rows carry no slug. `read` used to lose that
 # empty field, because tab is an IFS whitespace character in zsh and runs of
 # them collapse, so the process ID slid into the name and the menu offered to
-# assign a built-in browser profile called "701". Only the parsing is driven
+# assign a official engine profile called "701". Only the parsing is driven
 # here; which row gets built needs live ChatGPT processes.
 snapshot_fields() {
     SNAPSHOT_CLI="$CLI" SNAPSHOT_ROW="$1" /bin/zsh -c '
@@ -190,9 +190,9 @@ check "no official process at all reads as none" \
     "$(snapshot_fields none)" "none|||"
 
 print -r -- ""
-print -r -- "an aborted update puts the built-in browser's own engine back"
+print -r -- "an aborted update puts the official engine's own engine back"
 # The restart manifest used to hold app paths only, so anything official came
-# back as the bare primary. The profile assigned the built-in browser is not
+# back as the bare primary. The profile assigned the official engine is not
 # that shape: reopening it bare would drop CODEX_HOME and hand the profile back
 # to the vendor's own Sparkle updater. The slug is read off disk, so it gets
 # the same charset check the engine slot gets, for the same reason. Only the
