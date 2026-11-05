@@ -122,7 +122,7 @@ newest download, the newest two primary rollbacks (always including the one for
 the installed build) and the one prepared build still waiting to be installed;
 see the rollback notes under `prune` for the details and the knob.
 
-The profile assigned the built-in browser is running through the untouched
+The profile assigned the official engine is running through the untouched
 official app rather than through a clone, so the restart manifest records it as
 that profile rather than as the bare primary. Doppel quits it with everything
 else and reopens it the way it was started, on the same Electron root and
@@ -215,9 +215,9 @@ bin/doppel create --name "ChatGPT Personal" \
 
 bin/doppel list
 bin/doppel launch "ChatGPT Personal"
-bin/doppel browser assign "ChatGPT Personal"  # give this profile the built-in browser
-bin/doppel browser status
-bin/doppel browser release
+bin/doppel engine assign "ChatGPT Personal"  # run this profile on the official engine (appshots, Computer history)
+bin/doppel engine status
+bin/doppel engine release
 bin/doppel micro assign "ChatGPT Personal"    # this clone answers the Creator Micro pad
 bin/doppel micro status
 bin/doppel micro channel "ChatGPT Personal" 3 # this clone uses Bluetooth channel 3
@@ -341,19 +341,21 @@ installs the instance into `~/Applications`, and stores the instance definition 
 
 Doppel treats an account profile and the process that opens it as separate
 things. By default a profile uses its own locally signed Doppel app, and current
-ChatGPT builds serve the built-in browser there too. That works only because of
-how ChatGPT happens to launch its browser helper today, so one profile at a time
-can still use the untouched `/Applications/ChatGPT.app` as its engine, keeping
-the OpenAI signature chain intact if a vendor update closes that gap again:
+ChatGPT builds serve the in-app browser there too. That works only because of
+how ChatGPT happens to launch its browser helper today. Appshots and Computer
+history never work in a clone, because the Computer Use service rejects Apple
+Events from anything not signed by OpenAI (error -10000). So one profile at a
+time can use the untouched `/Applications/ChatGPT.app` as its engine, which keeps
+the OpenAI signature chain intact and enables those features:
 
 ```sh
-bin/doppel browser assign "ChatGPT Personal"
+bin/doppel engine assign "ChatGPT Personal"
 bin/doppel launch "ChatGPT Personal"
 ```
 
 Assignment does not close an app by default. If a conflicting engine is open,
 the app offers **Restart and Assign** with a warning about unfinished drafts; the
-equivalent explicit CLI form is `browser assign --quit-running <name>`. Other
+equivalent explicit CLI form is `engine assign --quit-running <name>`. Other
 Doppel clones stay open. When the untouched official app is already using the
 target managed profile, Doppel adopts that exact PID and start identity without
 restarting it. Opening the assigned profile's branded app directly from Finder
@@ -395,7 +397,7 @@ app has not asked yet, **Allow** first runs Apple's native request as that one
 managed instance. That request is what registers an otherwise absent app in
 the Microphone, Camera, Screen Recording, or Accessibility list. Doppel then
 refreshes the status; it never requests unrelated permissions at the same time.
-When a profile is assigned Built-in Browser, the section is labelled
+When a profile is assigned Official engine, the section is labelled
 **Privacy permissions for the Doppel engine**: official ChatGPT has its own macOS permission
 identity and these grants apply only after the profile returns to its clone.
 
@@ -427,7 +429,7 @@ the age of its latest screen frame, and whether an old rollback is still being
 discovered as a duplicate app.
 
 `doppel native-tools status` additionally reports the profile assigned the
-official built-in-browser engine and which app owns each ChatGPT
+official official engine and which app owns each ChatGPT
 browser-extension registration. A locally signed engine still uses the extension
 as its route to a real browser; the assigned profile is launched through the
 untouched OpenAI-signed app instead. The extension arrives through one
@@ -661,7 +663,7 @@ genuinely weaker than the app it was copied from is in
   `native-tools status` therefore reports, for each running clone, whether its
   latest in-app browser use was served or refused, read from that clone's own
   vendor log. A refusal means the layout changed and the profile needs the
-  built-in-browser slot again. That slot launches the selected profile through
+  official-engine slot again. That slot launches the selected profile through
   the untouched official app. It remains the same Doppel account profile, but
   macOS shows the official ChatGPT identity while it runs. The browser extension
   is unaffected either way: its check stops at the parent process, so browser

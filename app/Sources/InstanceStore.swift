@@ -339,7 +339,7 @@ final class InstanceStore: ObservableObject {
                 of: "the Browser assignment needs running ChatGPT apps to quit: ",
                 with: "")
         alert.informativeText = """
-            Doppel will close the affected ChatGPT apps and reopen running managed instances after assigning the built-in Browser to \(instance.name). Other Doppel clones will stay open.
+            Doppel will close the affected ChatGPT apps and reopen running managed instances after assigning the official engine to \(instance.name). Other Doppel clones will stay open.
 
             \(reason)
 

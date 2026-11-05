@@ -232,7 +232,7 @@ struct SettingsView: View {
         return HeroCard(title: "Integrations", subtitle: "Once per Mac, handed to one instance", legend: [
             HeroLegend(color: tint(of: browserOwner), label: "Extension",
                        value: browserOwner.isEmpty ? "Nobody" : browserOwner),
-            HeroLegend(color: builtIn.isEmpty ? Design.idle : tint(of: builtIn), label: "Built-in browser",
+            HeroLegend(color: builtIn.isEmpty ? Design.idle : tint(of: builtIn), label: "Official engine",
                        value: builtIn.isEmpty ? "None" : builtIn),
             HeroLegend(color: computerUseReady ? .green : Design.idle, label: "Computer Use",
                        value: computerUseReady ? "Ready" : "On demand"),
@@ -338,7 +338,7 @@ struct SettingsView: View {
                 || (!status.inAppBrowserInstanceName.isEmpty && !status.inAppBrowserVendorValid)
             BadgeRow(badge: StatusBadge(symbol: "safari.fill", color: tint(of: status.inAppBrowserInstanceName, fallback: .gray),
                                         muted: status.inAppBrowserInstanceName.isEmpty),
-                     title: "Built-in browser",
+                     title: "Official engine",
                      detail: builtInBrowserDetail(status) + " Change it from an instance's Engine setting.",
                      detailColor: failing ? .red : .secondary) {
                 Text(status.inAppBrowserInstanceName.isEmpty ? "None" : status.inAppBrowserInstanceName)

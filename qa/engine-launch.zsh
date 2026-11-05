@@ -173,7 +173,7 @@ readonly IMPOSTOR_APP="$FIXTURE_HOME/Applications/ChatGPT Impostor.app"
 readonly EXPLICIT_ROOT="$FIXTURE_HOME/Library/Application Support/Engine QA"
 /bin/mkdir -p "$INSTANCE_APP/Contents/MacOS"
 
-# An assigned Built-in Browser profile runs as the official app pointed at the
+# An assigned Official engine profile runs as the official app pointed at the
 # instance's own root, so the explicit argument is the shape to detect there.
 print -r -- "the official app holding the profile explicitly is activated"
 write_instance_assets "$EXPLICIT_ROOT"

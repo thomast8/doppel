@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Isolated contract test for the movable built-in-browser engine slot.
+# Isolated contract test for the movable official engine slot.
 #
 # It uses the real installed vendor signature, but all Doppel state, instance
 # definitions, app placeholders and profile paths live under one temporary
@@ -84,6 +84,8 @@ run_cli() {
 
 expect "$(run_cli browser status --porcelain)" "unassigned" \
     "a fresh state root should have no engine assignment"
+expect "$(run_cli engine status --porcelain)" "unassigned" \
+    "engine should be an alias of browser"
 
 # Assignment promises that Finder/Dock launches are transparent too. A clone
 # from before the embedded router existed must be rebuilt before it can own the
@@ -91,9 +93,9 @@ expect "$(run_cli browser status --porcelain)" "unassigned" \
 PERSONAL_INFO="$FIXTURE_HOME/Applications/ChatGPT Personal QA.app/Contents/Info.plist"
 /usr/bin/plutil -replace DoppelEngineVersion -string "23" "$PERSONAL_INFO"
 if old_router_output="$(run_cli browser assign "ChatGPT Personal QA" 2>&1)"; then
-    fail "a pre-router clone should not be assigned the built-in browser"
+    fail "a pre-router clone should not be assigned the official engine"
 fi
-[[ "$old_router_output" == *"not ready for transparent Built-in Browser routing"* ]] || \
+[[ "$old_router_output" == *"not ready for transparent Official engine routing"* ]] || \
     fail "the pre-router refusal should explain that a rebuild is required"
 expect "$(run_cli browser status --porcelain)" "unassigned" \
     "a failed pre-router assignment must leave the slot empty"
