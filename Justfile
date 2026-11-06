@@ -15,9 +15,11 @@ qa:
     ./qa/engine-launch.zsh
     ./qa/update-reconcile.zsh
     ./qa/retention.zsh
+    ./qa/node-repl-layer.zsh
 
 qa-vendor:
     ./qa/vendor-compat.zsh
+    ./qa/node-repl-layer.zsh
 
 qa-edge:
     ./qa/edge.zsh

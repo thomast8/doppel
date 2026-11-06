@@ -182,7 +182,7 @@ check "registered OAuth callback scheme remains eligible" \
     "$(plist "$APP" CFBundleURLTypes.0.CFBundleURLSchemes.1)" "codex"
 check "deep-link patch recorded" "$(plist "$APP" DoppelDeepLinkScheme)" "codex-$SLUG"
 ROUTER_HASH="$(/usr/bin/shasum -a 256 "$CLI" | /usr/bin/awk '{print $1}')"
-check "transparent engine router version" "$(plist "$APP" DoppelEngineVersion)" "33"
+check "transparent engine router version" "$(plist "$APP" DoppelEngineVersion)" "34"
 check "transparent engine router hash recorded" "$(plist "$APP" DoppelRouterSHA256)" "$ROUTER_HASH"
 if [[ -x "$APP/Contents/Resources/Doppel/bin/doppel" && \
       -x "$APP/Contents/Resources/Doppel/engine/doppel-engine.zsh" && \
@@ -202,6 +202,15 @@ if /usr/bin/codesign --verify --deep --strict "$APP" >/dev/null 2>&1; then
     pass "signature valid"
 else
     fail "signature valid" "codesign rejected the bundle"
+fi
+REPL_BIN="$APP/Contents/Resources/cua_node/bin"
+if [[ ! -e "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl" ]]; then
+    pass "node_repl layer (vendor has no node_repl)"
+elif [[ -x "$REPL_BIN/node_repl-vendor" && -f "$REPL_BIN/doppel-node-repl.cjs" && \
+        "$(/usr/bin/head -c 2 "$REPL_BIN/node_repl")" == "#!" ]]; then
+    pass "node_repl runs under the vendor's signed node"
+else
+    fail "node_repl layer" "the clone's node_repl was not wrapped"
 fi
 got="$(icon_hex "$APP/Contents/Resources/icon-chatgpt.png")"
 if colour_near "$got" "EC4899"; then pass "icon tinted pink ($got)"; else fail "icon tinted pink" "got $got"; fi
