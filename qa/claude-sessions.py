@@ -1,6 +1,9 @@
 """Test account-scoped history copying against real files, without vendor accounts."""
 import importlib.util
 import json
+import os
+import subprocess
+import shutil
 from pathlib import Path
 import tempfile
 
@@ -93,4 +96,61 @@ with tempfile.TemporaryDirectory(prefix='doppel-history-qa-') as temporary:
     assert conflict.read_text() == 'new destination work'
     assert not (destination / ('local_' + session + '.json')).exists()
 
-print('Claude history QA passed: account isolation, existing work, credentials, sidecars, idempotence, active sessions, missing history, symlinks, source changes and collisions')
+    # Automatic import runs at launch, so every refusal must leave no files and
+    # no marker, letting a later launch try again once the instance is ready.
+    roots, source, destination = fixture(root / 'auto-signed-out')
+    for scope in (roots[2] / 'claude-code-sessions').iterdir():
+        shutil.rmtree(scope)
+    state = root / 'auto-signed-out-state'
+    assert module.auto_import(*roots, state, active=set()).startswith('waiting')
+    assert not (state / 'auto-import.json').exists()
+
+    roots, source, destination = fixture(root / 'auto-mismatch')
+    shutil.rmtree(roots[2] / 'claude-code-sessions' / account)
+    (roots[2] / 'claude-code-sessions' / '66666666-6666-4666-8666-666666666666' / org).mkdir(parents=True)
+    state = root / 'auto-mismatch-state'
+    assert module.auto_import(*roots, state, active=set()).startswith('waiting')
+    assert not (state / 'auto-import.json').exists()
+    assert not list((roots[2] / 'claude-code-sessions').rglob('local_' + session + '.json')), 'Another account received history'
+
+    roots, source, destination = fixture(root / 'auto-active')
+    state = root / 'auto-active-state'
+    assert module.auto_import(*roots, state, active={session}).startswith('waiting')
+    assert not (state / 'auto-import.json').exists()
+    assert not (destination / ('local_' + session + '.json')).exists()
+    assert module.auto_import(*roots, state, active=set()).startswith('imported 1')
+    assert (destination / ('local_' + session + '.json')).exists()
+    assert json.loads((state / 'auto-import.json').read_text())['scope'] == f'{account}/{org}'
+
+    later = '77777777-7777-4777-8777-777777777777'
+    (source / ('local_' + later + '.json')).write_text(json.dumps(dict(sessionId='local_' + later, cliSessionId=later)))
+    (roots[1] / 'projects/project' / (later + '.jsonl')).write_text('{"message":"Later work"}\n')
+    assert module.auto_import(*roots, state, active=set()) == 'already imported'
+    assert not (destination / ('local_' + later + '.json')).exists(), 'Automatic import ran twice'
+
+    roots, source, destination = fixture(root / 'auto-nothing')
+    (destination / ('local_' + session + '.json')).write_bytes((source / ('local_' + session + '.json')).read_bytes())
+    state = root / 'auto-nothing-state'
+    assert module.auto_import(*roots, state, active=set()).startswith('imported 0')
+    assert (state / 'auto-import.json').exists()
+
+    # Slugs are reused when an instance is recreated under the same name, so
+    # removing one must take its import marker along with its definition.
+    home = root / 'remove-home'
+    instance = home / 'instances/qa-claude'
+    instance.mkdir(parents=True)
+    (instance / 'instance-config.zsh').write_text(
+        f"DOPPEL_APP_KIND=claude\nDOPPEL_DISPLAY_NAME='QA Claude'\nDOPPEL_BUNDLE_ID=ai.doppel.qa.removed\n"
+        f"DOPPEL_PROFILE_ROOT='{root / 'remove-profile'}'\nDOPPEL_CLAUDE_CONFIG_DIR='{root / 'remove-code'}'\n")
+    (instance / 'install-root').write_text(str(root / 'remove-apps') + '\n')
+    imports = home / 'state/imports/qa-claude'
+    imports.mkdir(parents=True)
+    (imports / 'auto-import.json').write_text('{}')
+    env = dict(os.environ, DOPPEL_DEV='1', DOPPEL_IAB_DRY_RUN='1', DOPPEL_HOME=str(home))
+    removed = subprocess.run([str(Path(__file__).resolve().parents[1] / 'bin/doppel'), '--app', 'claude', 'remove', 'QA Claude'],
+                             env=env, capture_output=True, text=True)
+    assert removed.returncode == 0, removed.stderr
+    assert not imports.exists(), 'A removed instance left its import marker for the next instance with that name'
+    assert list((home / 'state/Removed').glob('qa-claude.*/imports/auto-import.json')), 'The import record was not kept with the removed definition'
+
+print('Claude history QA passed: account isolation, existing work, credentials, sidecars, idempotence, active sessions, missing history, symlinks, source changes, collisions, automatic import and removal')
