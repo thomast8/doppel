@@ -6,6 +6,21 @@
         <description>Signed Doppel releases</description>
         <language>en</language>
         <item>
+            <title>2.3.1</title>
+            <pubDate>Thu, 12 Nov 2026 11:26:24 +0000</pubDate>
+            <link>https://github.com/thomast8/doppel</link>
+            <sparkle:version>46</sparkle:version>
+            <sparkle:shortVersionString>2.3.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Doppel 2.3.1
+
+Doppel now checks for new Claude Desktop releases and opens Claude when an update is available. After Claude updates, click **Check now** in Doppel and choose **Rebuild** to bring older instances up to date.
+
+This release also fixes rebuilding instances from Claude Desktop 5.1231.2.
+]]></description>
+            <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.3.1/Doppel-2.3.1-macOS.zip" length="8739163" type="application/octet-stream" sparkle:edSignature="WwKXF2T/s/AtBcBFNyhUjaMAPEPbVvX0c0Kxwbhrg4GadCWHTk1Tcc+6QIs9fpQOZLSFEQBw+qHiT92JeXy8Bg=="/>
+        </item>
+        <item>
             <title>2.3.0</title>
             <pubDate>Fri, 06 Nov 2026 09:53:12 +0000</pubDate>
             <link>https://github.com/thomast8/doppel</link>
@@ -32,21 +47,6 @@
 - The in-app browser works in your ChatGPT instances again. ChatGPT 26.1029 changed how its computer-use tool starts, and every browser request from an instance failed with "native pipe closed before response". Instances rebuild themselves with the fix the next time they open.
 ]]></description>
             <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.2.1/Doppel-2.2.1-macOS.zip" length="8678821" type="application/octet-stream" sparkle:edSignature="IlOm71d4g1pN1CTRocQyOfiq5xg1fFKgfQFsiTVU9W/A5qkEoNZsjNIj5Uonheb6SV8ZujD85owPTGBdUlzCDg=="/>
-        </item>
-        <item>
-            <title>2.2.0</title>
-            <pubDate>Thu, 05 Nov 2026 09:39:59 +0000</pubDate>
-            <link>https://github.com/thomast8/doppel</link>
-            <sparkle:version>43</sparkle:version>
-            <sparkle:shortVersionString>2.2.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[# Doppel 2.2.0
-
-- Each ChatGPT and Claude instance now has a Browser section with its own Chrome profile. The profile stays tied to the instance when you rename it, and your main Chrome is not touched. Claude One, for example, gets a Claude Code launch command that uses its own configuration folder.
-- You confirm that the app and its browser are signed in to the same account before Doppel shows connection steps or pairs the ChatGPT extension. Existing standalone profiles are kept and can be linked to an instance once the profile is closed. Doppel never deletes browser data.
-- The profile that runs on the official ChatGPT app is now called the official engine, and `doppel engine` replaces `doppel browser` (the old name still works). That profile is the only one that can use appshots and Computer history, because ChatGPT only accepts those from its own signed app. The in-app browser works in every instance.
-]]></description>
-            <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.2.0/Doppel-2.2.0-macOS.zip" length="8678054" type="application/octet-stream" sparkle:edSignature="UsrjvqU+0ar9ZdVEDva9uj4vi0ESQVW9G6m//efTPB7tYRjYahA2PPls8hMO9xIDrl/rJWFnnQYL9O1z+BeKBQ=="/>
         </item>
     </channel>
 </rss>
