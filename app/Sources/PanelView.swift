@@ -540,6 +540,9 @@ struct MenuContent: View {
         case .ready:
             return "Running instances close, update together and reopen. Save unfinished chats first, and choose Quit if an app asks."
         case .available:
+            if update.app == .claude {
+                return "Open Claude and choose Check for Updates in its app menu. After updating, click Check now in Doppel to rebuild your instances."
+            }
             return "Doppel downloads it from OpenAI and verifies it. Nothing closes until you restart."
         case .staleInstances:
             return "\(update.app.label) updated itself. Rebuilding closes the outdated instances and reopens them. Save unfinished chats first."
@@ -551,7 +554,7 @@ struct MenuContent: View {
     static func bannerButtonTitle(_ update: VendorUpdate) -> String {
         switch update.state {
         case .ready: return "Restart and Update"
-        case .available: return "Download"
+        case .available: return update.app == .claude ? "Open Claude" : "Download"
         case .staleInstances: return "Rebuild"
         }
     }

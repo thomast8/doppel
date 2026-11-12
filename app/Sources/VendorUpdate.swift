@@ -6,8 +6,7 @@ enum VendorUpdateState: String {
     /// The primary is current but managed instances were built from an older
     /// vendor build, which is what the vendor's own updater leaves behind when
     /// it installs a build on its own. There is nothing to download; the
-    /// instances are rebuilt from the app already installed. The only state a
-    /// Claude check ever offers, since Claude always updates itself.
+    /// instances are rebuilt from the app already installed.
     case staleInstances = "stale-instances"
 }
 
@@ -21,7 +20,7 @@ struct VendorUpdate: Equatable {
     let currentVersion: String
     let targetBuild: String
     let targetVersion: String
-    /// Instances known to be behind, reported only for `.staleInstances`.
+    /// Instances known to be behind the installed vendor app.
     let staleInstanceCount: Int
 
     init(app: InstanceApp = .chatgpt, state: VendorUpdateState, currentBuild: String, currentVersion: String,
@@ -48,9 +47,8 @@ struct VendorUpdate: Equatable {
         let currentBuild = String(fields[1]), feedBuild = String(fields[3])
         switch state {
         case .available, .ready:
-            // Doppel never downloads Claude, so a Claude line claiming one is
-            // not something to act on.
-            guard app == .chatgpt, isBuild(feedBuild, newerThan: currentBuild) else { return nil }
+            guard (app == .chatgpt || state == .available),
+                  isBuild(feedBuild, newerThan: currentBuild) else { return nil }
             return VendorUpdate(
                 app: app,
                 state: state,
@@ -58,7 +56,7 @@ struct VendorUpdate: Equatable {
                 currentVersion: String(fields[2]),
                 targetBuild: feedBuild,
                 targetVersion: String(fields[4]),
-                staleInstanceCount: 0)
+                staleInstanceCount: fields.count >= 7 ? Int(fields[6]) ?? 0 : 0)
         case .staleInstances:
             // A reconcile rebuilds the instances from the installed primary, so
             // the build to apply is the one already on this Mac rather than the
@@ -107,7 +105,7 @@ struct InstalledVendor: Equatable {
         // The leading state word is what identifies this as an update-check
         // line; without it a stray row could be read as a version.
         guard fields.count >= 3,
-              ["current", "available", "ready", "stale-instances"].contains(String(fields[0])),
+              ["current", "available", "ready", "stale-instances", "unchecked"].contains(String(fields[0])),
               VendorUpdate.isBuild(fields[1]),
               !fields[2].isEmpty
         else { return nil }

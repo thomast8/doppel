@@ -41,5 +41,5 @@ with tempfile.TemporaryDirectory(prefix='doppel-claude-syntax-') as scratch:
             # Syntax-check without executing vendor code or displaying source dumps.
             result = subprocess.run(['node', '--check', str(target)], capture_output=True)
             assert result.returncode == 0, f'Invalid patched JavaScript in {member.path}'
-assert (count, auth_count) == (15, 1)
+assert auth_count == 1 and count in patcher.CLAUDE_UPDATE_COUNTS, (count, auth_count)
 print('Claude patch QA passed: qualified calls, unsupported shapes and syntax of every changed vendor module')

@@ -2532,24 +2532,44 @@ update_metadata_value() {
     /usr/bin/plutil -extract "$key" raw "$metadata" 2>/dev/null || true
 }
 
-# --porcelain prints one tab-separated line, append-only across versions:
-#
-#   1 state           current | available | ready | stale-instances
-#   2 installed build
-#   3 installed version
-#   4 feed build
-#   5 feed version
-#   6 feed download URL
-#   7 instances built from an older build than the installed one
-#   8 instances built from a newer build than the installed one
-#
-# Columns 2-6 mean the same thing in every state; the state word is what says
-# whether anything is worth doing. Claude has no feed Doppel reads: its own
-# updater replaces the installed app, so columns 4-5 repeat the installed
-# version, column 6 is empty, and the state is only ever current or
-# stale-instances. A reconcile targets the installed build in
-# column 2, never the feed's, and only column 7 can produce one: an instance
-# ahead of the primary is reported, never rebuilt backwards.
+fetch_latest_claude_version() {
+    local current="$1" url response code latest
+    url="https://releases.claude.com/api/desktop/darwin/universal/squirrel/update"
+    if [[ "${DOPPEL_DEV:-0}" == 1 && -n "${DOPPEL_CLAUDE_UPDATE_URL:-}" ]]; then
+        url="$DOPPEL_CLAUDE_UPDATE_URL"
+    fi
+    # The feed requires a UUID. Use a fixed placeholder instead of sending a
+    # machine identifier. Claude applies its own rollout and update policies.
+    response="$(/usr/bin/curl -q --fail --silent --max-time 10 --max-filesize 1048576 \
+        --get --data-urlencode "device_id=00000000-0000-4000-8000-000000000000" \
+        --data-urlencode "version=$current" --data-urlencode "os_version=$(/usr/bin/sw_vers -productVersion)" \
+        --write-out $'\n%{http_code}' -- "$url")" || return 1
+    code="${response##*$'\n'}"
+    if [[ "$code" == 204 ]]; then
+        print -r -- "$current"
+        return
+    fi
+    [[ "$code" == 200 || ( "$code" == 000 && "${DOPPEL_DEV:-0}" == 1 ) ]] || return 1
+    latest="$(print -r -- "${response%$'\n'*}" | /usr/bin/python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    version = data.get("currentRelease") or data.get("version")
+    if not isinstance(version, str):
+        sys.exit(1)
+    print(version)
+except (ValueError, AttributeError):
+    sys.exit(1)
+')" || return 1
+    valid_source_build "$latest" || return 1
+    print -r -- "$latest"
+}
+
+# Porcelain columns are append-only: state, installed build and version, feed
+# build and version, download URL, then counts of instances behind and ahead.
+# Claude installs its own updates, so its URL is empty. If its feed is
+# unavailable, the feed columns repeat the installed version and the state is
+# unchecked unless there are older instances to rebuild from the installed app.
 cmd_update_check() {
     local porcelain=0
     [[ "${1:-}" == "--porcelain" ]] && porcelain=1
@@ -2559,29 +2579,38 @@ cmd_update_check() {
     local drift stale ahead
     current="$(primary_version)"
     current_short="$(primary_short_version)"
-    if [[ "$DOPPEL_APP_KIND" == claude ]]; then
-        latest_version="$current" latest_short="$current_short" latest_url=""
-    else
-        latest="$(fetch_latest_update)"
-        IFS=$'\t' read -r latest_version latest_short latest_url <<< "$latest"
-    fi
     update_state="current"
     stale=0
     ahead=0
-    if [[ "$DOPPEL_APP_KIND" == chatgpt ]] && (( latest_version > current )); then
-        update_state="available"
-        prepared="$(prepared_update_app "$latest_version")"
-        if validate_vendor_app "$prepared" "$latest_version"; then
-            update_state="ready"
+    if [[ "$DOPPEL_APP_KIND" == claude ]]; then
+        latest_url=""
+        if latest_version="$(fetch_latest_claude_version "$current")"; then
+            latest_short="$latest_version"
+            if source_build_is_newer "$latest_version" "$current"; then
+                update_state="available"
+            fi
+        else
+            latest_version="$current" latest_short="$current_short"
+            update_state="unchecked"
         fi
     else
-        # Nothing to download does not mean nothing to do: the vendor updater
-        # moves the primary alone, so the instances can be behind a primary that
-        # is itself current. Reported as its own state rather than folded into
-        # "available", because the fix is a rebuild from the installed app.
+        latest="$(fetch_latest_update)"
+        IFS=$'\t' read -r latest_version latest_short latest_url <<< "$latest"
+        if (( latest_version > current )); then
+            update_state="available"
+            prepared="$(prepared_update_app "$latest_version")"
+            if validate_vendor_app "$prepared" "$latest_version"; then
+                update_state="ready"
+            fi
+        fi
+    fi
+    if [[ "$DOPPEL_APP_KIND" == claude || "$update_state" == current ]]; then
+        # Count drift from the installed app even if Claude's feed is down.
+        # When Claude has a newer release, offer that first so one rebuild
+        # can catch the instances up after the vendor update.
         drift="$(instance_build_drift "$current")"
         IFS=$'\t' read -r stale ahead <<< "$drift"
-        if (( stale > 0 )); then
+        if (( stale > 0 )) && [[ "$update_state" != available ]]; then
             update_state="stale-instances"
         fi
     fi
@@ -2595,11 +2624,17 @@ cmd_update_check() {
         return 0
     fi
     if [[ "$update_state" == "stale-instances" ]]; then
-        print -r -- "$VENDOR_LABEL $current_short ($current) is up to date, but $stale managed instance(s) were built from an older version; run '$UPDATE_COMMAND apply' to rebuild them."
+        local installed_description="is installed."
+        [[ "$DOPPEL_APP_KIND" == claude ]] || installed_description="is up to date, but"
+        print -r -- "$VENDOR_LABEL $current_short ($current) $installed_description $stale managed instance(s) were built from an older version; run '$UPDATE_COMMAND apply' to rebuild them."
     elif [[ "$update_state" == "current" ]]; then
         print -r -- "$VENDOR_LABEL $current_short ($current) is up to date."
     elif [[ "$update_state" == "ready" ]]; then
         print -r -- "ChatGPT $latest_short ($latest_version) is downloaded and ready to install."
+    elif [[ "$update_state" == "unchecked" ]]; then
+        print -r -- "Could not check Claude for updates. $current_short ($current) is installed."
+    elif [[ "$DOPPEL_APP_KIND" == claude ]]; then
+        print -r -- "Claude $latest_short is available; $current_short is installed. Open Claude and choose Check for Updates."
     else
         print -r -- "ChatGPT $latest_short ($latest_version) is available; current is $current_short ($current)."
     fi

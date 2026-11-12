@@ -21,7 +21,7 @@ enum StatusMessages {
     static func offer(_ update: VendorUpdate) -> (title: String, body: String) {
         let action: String
         switch update.state {
-        case .available: action = "Download it"
+        case .available: action = update.app == .claude ? "Open Claude to update it" : "Download it"
         case .ready: action = "Restart and update"
         case .staleInstances: action = "Rebuild them"
         }

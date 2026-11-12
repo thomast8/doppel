@@ -646,7 +646,8 @@ final class InstanceStore: ObservableObject {
             // Only the CLI saying "current" means current. A line this version
             // cannot read, a state word added by a newer CLI than the app,
             // proves nothing either way.
-            if Self.resultFields(output).first == "current" {
+            let state = Self.resultFields(output).first
+            if state == "current" {
                 upToDateApps.insert(app)
             } else {
                 upToDateApps.remove(app)
@@ -654,7 +655,8 @@ final class InstanceStore: ObservableObject {
             guard let update = VendorUpdate.parse(output, app: app) else {
                 updates[app] = nil
                 if userInitiated && !upToDateApps.contains(app) {
-                    report(Self.unreadableUpdateCheckMessage, for: reportKey)
+                    report(state == "unchecked" ? "Could not check Claude for updates. Try again later."
+                           : Self.unreadableUpdateCheckMessage, for: reportKey)
                 }
                 return
             }
@@ -672,7 +674,15 @@ final class InstanceStore: ObservableObject {
             return
         }
         switch update.state {
-        case .available: prepareUpdate(update)
+        case .available:
+            if app == .claude {
+                if !NSWorkspace.shared.open(URL(fileURLWithPath: app.path)) {
+                    report("Could not open Claude. Open it from Applications and choose Check for Updates.",
+                           for: "update-check-claude")
+                }
+            } else {
+                prepareUpdate(update)
+            }
         case .ready, .staleInstances: applyUpdate(update)
         }
     }
