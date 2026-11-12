@@ -130,8 +130,7 @@ final class UpdateParsingTests: XCTestCase {
         expect(MenuContent.bannerButtonTitle(VendorUpdate.parse(ready)!) == "Restart and Update",
             "a prepared vendor update should still offer the restart")
 
-        // Claude updates itself, so its check only ever reports drift. Its
-        // builds are dotted and must compare as versions, not as text.
+        // Claude builds are dotted and must compare as versions, not as text.
         let claudeDrift = "stale-instances\t4.4212.0\t4.4212.0\t4.4212.0\t4.4212.0\t\t2\t0\n"
         expect(VendorUpdate.parse(claudeDrift, app: .claude) == VendorUpdate(
                 app: .claude, state: .staleInstances, currentBuild: "4.4212.0", currentVersion: "4.4212.0",
@@ -139,8 +138,14 @@ final class UpdateParsingTests: XCTestCase {
             "Claude instances left behind should be offered a rebuild")
         expect(VendorUpdate.parse("current\t4.4212.0\t4.4212.0\t4.4212.0\t4.4212.0\t\t0\t0\n", app: .claude) == nil,
                "a current Claude must not prompt")
-        expect(VendorUpdate.parse("available\t4.4212.0\t4.4212.0\t4.5000.0\t4.5000.0\t\t0\n", app: .claude) == nil,
-               "Doppel never downloads Claude, so a download offer for it is not acted on")
+        let claudeAvailable = "available\t4.4212.0\t4.4212.0\t4.5000.0\t4.5000.0\t\t2\n"
+        let claudeOffer = VendorUpdate.parse(claudeAvailable, app: .claude)
+        expect(claudeOffer?.targetVersion == "4.5000.0" && claudeOffer?.staleInstanceCount == 2,
+               "a Claude release offer should preserve the count of older clones")
+        expect(claudeOffer.map(MenuContent.bannerButtonTitle) == "Open Claude",
+               "a Claude release offer opens the vendor app")
+        expect(VendorUpdate.parse(claudeAvailable.replacingOccurrences(of: "available", with: "ready"), app: .claude) == nil,
+               "Doppel cannot stage a Claude release")
         expect(VendorUpdate.parse("stale-instances\t4.x.0\t4.x.0\t4.x.0\t4.x.0\t\t2\n", app: .claude) == nil,
                "a build that is not a version must not prompt")
         expect(VendorUpdate.isBuild("4.10.0", newerThan: "4.9.0"),

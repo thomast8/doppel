@@ -1,8 +1,8 @@
 #!/bin/zsh
 # The Claude update path. Claude's own updater replaces /Applications/Claude.app
 # on its own schedule and never touches the instances, so for Claude there is
-# nothing for Doppel to download: an update is the reconcile that rebuilds every
-# instance left on an older version from the app that is installed.
+# nothing for Doppel to download. Checks can report a newer vendor release,
+# and apply rebuilds instances from the app that is installed.
 #
 # Same shape as qa/update-reconcile.zsh, for the same reasons: the home and the
 # install root are throwaway, the instances are real clones of the installed
@@ -74,6 +74,16 @@ BUILD="$(/usr/bin/plutil -extract CFBundleVersion raw "$PRIMARY/Contents/Info.pl
 SHORT="$(/usr/bin/plutil -extract CFBundleShortVersionString raw "$PRIMARY/Contents/Info.plist")"
 PRIMARY_STAMP="$(app_stamp "$PRIMARY")"
 /bin/mkdir -p "$APPS"
+export DOPPEL_CLAUDE_UPDATE_URL="file://$SCRATCH/claude-release.json"
+print -r -- "{\"currentRelease\":\"$NEWER\"}" > "$SCRATCH/claude-release.json"
+ROW="$(claude update check --porcelain)"
+check "a newer release is offered before Claude updates itself" \
+    "$(field "$ROW" 1)/$(field "$ROW" 2)/$(field "$ROW" 4)" "available/$BUILD/$NEWER"
+print -r -- '{}' > "$SCRATCH/claude-release.json"
+ROW="$(claude update check --porcelain)"
+check "an unreadable feed preserves the installed version" \
+    "$(field "$ROW" 1)/$(field "$ROW" 2)" "unchecked/$BUILD"
+print -r -- "{\"currentRelease\":\"$BUILD\"}" > "$SCRATCH/claude-release.json"
 
 print -r -- "Doppel Claude update"
 print -r -- "  cli:     $CLI"
@@ -83,9 +93,10 @@ print -r -- ""
 print -r -- "instances built from the installed Claude need nothing"
 for name in "$BEHIND" "$CURRENT"; do
     slug="${${name:l}// /-}"
-    if ! claude create --name "$name" --tint 3B82F6 --install-to "$APPS" \
-        --profile-root "$SCRATCH/profile-$slug" --claude-config-dir "$SCRATCH/config-$slug" >/dev/null 2>&1; then
+    if ! output="$(claude create --name "$name" --tint 3B82F6 --install-to "$APPS" \
+        --profile-root "$SCRATCH/profile-$slug" --claude-config-dir "$SCRATCH/config-$slug" 2>&1)"; then
         print -u2 -r -- "  ✗ create failed; the rest of this file needs real clones"
+        print -u2 -r -- "$output"
         exit 1
     fi
 done
@@ -93,8 +104,8 @@ check "both clones record the installed version" \
     "$(source_build "$BEHIND_APP")/$(source_build "$CURRENT_APP")" "$BUILD/$BUILD"
 ROW="$(claude update check --porcelain)"
 check "the check reports nothing to do" "$(field "$ROW" 1)" "current"
-check "and reads the installed Claude, not a feed" \
-    "$(field "$ROW" 2)/$(field "$ROW" 3)/$(field "$ROW" 4)/$(field "$ROW" 5)" "$BUILD/$SHORT/$BUILD/$SHORT"
+check "and reports the installed and latest versions" \
+    "$(field "$ROW" 2)/$(field "$ROW" 3)/$(field "$ROW" 4)/$(field "$ROW" 5)" "$BUILD/$SHORT/$BUILD/$BUILD"
 check "with no instance counted as behind" "$(field "$ROW" 7)" "0"
 check "prepare has nothing to download" "$(claude update prepare)" "already current	$BUILD"
 BEHIND_STAMP="$(app_stamp "$BEHIND_APP")"
@@ -110,6 +121,10 @@ leave_behind
 ROW="$(claude update check --porcelain)"
 check "the check now reports drift" "$(field "$ROW" 1)" "stale-instances"
 check "and counts only the instance that is behind" "$(field "$ROW" 7)" "1"
+print -r -- '{}' > "$SCRATCH/claude-release.json"
+ROW="$(claude update check --porcelain)"
+check "a feed failure still offers to rebuild the outdated clone" "$(field "$ROW" 1)/$(field "$ROW" 7)" "stale-instances/1"
+print -r -- "{\"currentRelease\":\"$BUILD\"}" > "$SCRATCH/claude-release.json"
 HUMAN="$(claude update check)"
 [[ "$HUMAN" == "Claude $SHORT"*"1 managed instance(s) were built from an older version"*"doppel --app claude update apply"* ]] \
     && pass "and says so in the readable form" \

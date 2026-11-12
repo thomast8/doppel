@@ -122,7 +122,7 @@ struct SettingsView: View {
         let update = store.updates[app]
         let idle = app == .chatgpt
             ? "Doppel checks every six hours and updates every instance together."
-            : "Claude updates itself. Doppel checks every six hours and rebuilds the instances it left behind."
+            : "Doppel checks for Claude releases every six hours. Update in Claude, then rebuild your instances in Doppel."
         return BadgeRow(badge: StatusBadge(symbol: app == .chatgpt ? "arrow.down" : "arrow.triangle.2.circlepath",
                                            color: app == .chatgpt ? .blue : Design.claude,
                                            muted: update == nil),
@@ -170,8 +170,7 @@ struct SettingsView: View {
         for app in apps {
             let current = store.instances.filter { $0.appKind == app }
             guard !current.isEmpty else { continue }
-            let update = store.updates[app]
-            let stale = update?.state == .staleInstances ? update?.staleInstanceCount ?? 0 : 0
+            let stale = store.updates[app]?.staleInstanceCount ?? 0
             legend.append(HeroLegend(color: stale > 0 ? .orange : .green, label: "\(app.label) instances",
                                      value: "\(current.count - stale) of \(current.count) current"))
         }

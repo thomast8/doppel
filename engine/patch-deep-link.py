@@ -913,6 +913,8 @@ CLAUDE_AUTH = re.compile(
 CLAUDE_AUTH_MARKER = b't=globalThis.doppelClaude.prepareLogin(t);'
 CLAUDE_UPDATE_MARKER = b'(true/*Doppel: updates managed*/)'
 CLAUDE_UPDATE = re.compile(rb'(?<![\w$.])[\w$]+(?:\.[\w$]+)*\(\)\.autoUpdate\.disabled\b')
+# The legacy layout has 15 updater policy reads. Claude 5.1231.2 has 18.
+CLAUDE_UPDATE_COUNTS = (15, 18)
 
 
 def verify_claude(path: Path) -> str:
@@ -922,12 +924,14 @@ def verify_claude(path: Path) -> str:
         if not member.path.startswith('.vite/build/index') or not member.path.endswith('.js'):
             continue
         data = read_member(archive, member)
+        if CLAUDE_UPDATE.search(data):
+            raise PatchError('Claude still has unpatched updater controls')
         found = [data.count(marker) for marker in
                  (CLAUDE_BOOTSTRAP, CLAUDE_AUTH_MARKER, CLAUDE_UPDATE_MARKER)]
         if any(found):
             verify_member_integrity(member.entry, data)
         counts = [total + value for total, value in zip(counts, found)]
-    if counts != [1, 1, 15]:
+    if counts[:2] != [1, 1] or counts[2] not in CLAUDE_UPDATE_COUNTS:
         raise PatchError('Claude profile, authentication or updater patch is incomplete')
     return digest(archive.header_json)
 
@@ -954,7 +958,7 @@ def patch_claude(path: Path) -> str:
             verify_member_integrity(member.entry, original)
             replacements.append((member.path, data))
     # Fail closed when the vendor changes the control points we have qualified.
-    if (bootstrap_sites, auth_sites, update_sites) != (1, 1, 15):
+    if (bootstrap_sites, auth_sites) != (1, 1) or update_sites not in CLAUDE_UPDATE_COUNTS:
         raise PatchError('This Claude build has unsupported profile, authentication or updater controls')
     for name, data in replacements:
         archive = read_archive(path)
