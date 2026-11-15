@@ -107,12 +107,20 @@ if [[ "$UNIVERSAL" == "1" ]]; then
 else
     arch_flags=()
 fi
-/usr/bin/clang -fobjc-arc -O2 $arch_flags -framework Cocoa -framework ApplicationServices \
+# The clone's main executable is doppel-launcher, and Launch Services reads its
+# LC_BUILD_VERSION minos: a helper compiled without a deployment target
+# inherits the build host's SDK minimum, and one newer than the user's macOS
+# marks every clone launch-disabled (`open` fails with -10825). 13.0 matches
+# the vendor app's own minimum, so a clone runs wherever the vendor app does.
+/usr/bin/clang -fobjc-arc -O2 $arch_flags -mmacosx-version-min=13.0 \
+    -framework Cocoa -framework ApplicationServices \
     -framework AVFoundation -framework UserNotifications -framework Security \
     -o "$PAYLOAD/prebuilt/doppel-launcher" "$REPO_ROOT/engine/launcher/main.m"
-/usr/bin/clang -fobjc-arc -O2 $arch_flags -framework Cocoa \
+/usr/bin/clang -fobjc-arc -O2 $arch_flags -mmacosx-version-min=13.0 \
+    -framework Cocoa \
     -o "$PAYLOAD/prebuilt/doppel-alert" "$REPO_ROOT/engine/alert/main.m"
-/usr/bin/clang -fobjc-arc -O2 $arch_flags -framework Cocoa \
+/usr/bin/clang -fobjc-arc -O2 $arch_flags -mmacosx-version-min=13.0 \
+    -framework Cocoa \
     -o "$PAYLOAD/prebuilt/doppel-url-handler" "$REPO_ROOT/engine/url-handler/main.m"
 if [[ "$UNIVERSAL" == "1" ]]; then
     /usr/bin/swiftc -O -target arm64-apple-macos14.0 "$REPO_ROOT/engine/icon/main.swift" \
@@ -123,7 +131,8 @@ if [[ "$UNIVERSAL" == "1" ]]; then
         -output "$PAYLOAD/prebuilt/doppel-icon"
     /bin/rm -f "$PAYLOAD/prebuilt/doppel-icon."{arm64,x86_64}
 else
-    /usr/bin/swiftc -O "$REPO_ROOT/engine/icon/main.swift" -o "$PAYLOAD/prebuilt/doppel-icon"
+    /usr/bin/swiftc -O -target "$(uname -m)-apple-macos14.0" \
+        "$REPO_ROOT/engine/icon/main.swift" -o "$PAYLOAD/prebuilt/doppel-icon"
 fi
 /bin/chmod 755 "$PAYLOAD/prebuilt/"*
 

@@ -223,13 +223,21 @@ compile_helpers() {
     for pair in "launcher:doppel-launcher" "alert:doppel-alert" "url-handler:doppel-url-handler"; do
         src="$ENGINE_SRC/${pair%%:*}/main.m"
         bin="$BUILD_CACHE/${pair##*:}"
-        /usr/bin/clang -fobjc-arc -O2 -framework Cocoa -framework ApplicationServices \
-            -framework AVFoundation -framework UserNotifications -framework Security \
-            -framework CoreServices \
+        # A helper compiled without a deployment target inherits the build
+        # host's SDK minimum. The clone's main executable is doppel-launcher,
+        # and Launch Services reads its LC_BUILD_VERSION minos: one newer than
+        # the running macOS marks every clone launch-disabled and `open` fails
+        # with -10825. 13.0 matches the vendor app's own minimum, so a clone
+        # runs wherever the vendor app does.
+        /usr/bin/clang -fobjc-arc -O2 -mmacosx-version-min=13.0 \
+            -framework Cocoa -framework ApplicationServices \
+            -framework AVFoundation -framework UserNotifications \
+            -framework Security -framework CoreServices \
             -o "$bin" "$src" || \
             die "compiling ${pair##*:} failed"
     done
-    /usr/bin/swiftc -O "$ENGINE_SRC/icon/main.swift" -o "$BUILD_CACHE/doppel-icon" 2>/dev/null || \
+    /usr/bin/swiftc -O -target "$(uname -m)-apple-macos14.0" \
+        "$ENGINE_SRC/icon/main.swift" -o "$BUILD_CACHE/doppel-icon" 2>/dev/null || \
         die "compiling doppel-icon failed"
 }
 

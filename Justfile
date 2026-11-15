@@ -11,6 +11,9 @@ test:
 qa-plist:
     ./qa/plist-value.zsh
 
+qa-helper-minos:
+    ./qa/helper-minos.zsh
+
 qa:
     ./qa/deep-link.zsh
     ./qa/e2e.zsh
