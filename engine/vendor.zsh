@@ -61,3 +61,16 @@ exec "$dir/node" "$dir/doppel-node-repl.cjs" "$dir/node_repl-vendor" "$@"
 LAUNCH
     /bin/chmod 755 "$bin/node_repl"
 }
+
+# Reads a plist key that may legitimately be absent. Some macOS builds print
+# plutil's extraction error on stdout, so a captured `$(plutil ... 2>/dev/null)`
+# held the error sentence rather than empty output, and "is this key set?"
+# tests could not tell a missing key from a present one. Nothing is printed
+# unless extraction succeeded; the status still reports failure for callers
+# that check it.
+plist_value() {
+    local value
+    value="$(/usr/bin/plutil -extract "$2" raw "$1" 2>/dev/null)" && \
+        { print -r -- "$value"; return 0 }
+    return 1
+}

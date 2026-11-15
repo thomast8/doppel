@@ -129,10 +129,6 @@ fail_closed() {
     exit 1
 }
 
-plist_value() {
-    /usr/bin/plutil -extract "$2" raw "$1" 2>/dev/null
-}
-
 sha256_file() {
     /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'
 }
@@ -246,7 +242,7 @@ apply_icon_catalog() {
     local vendor_catalog="$app/Contents/Resources/Doppel/assets/vendor-Assets.car"
     local icon_name
     icon_name="$(plist_value "$info" DoppelVendorIconName)"
-    /usr/bin/plutil -remove CFBundleIconName "$info" 2>/dev/null || true
+    /usr/bin/plutil -remove CFBundleIconName "$info" >/dev/null 2>&1 || true
     [[ "$DOPPEL_APP_KIND" == claude && -n "$icon_name" && -f "$vendor_catalog" ]] || return 0
     /bin/cp "$vendor_catalog" "$catalog" || fail_closed "Restoring the vendor asset catalog failed."
     if [[ "${DOPPEL_TINT:-}" =~ '^#?[0-9A-Fa-f]{6}$' && -x "$ICON_HELPER" ]]; then
@@ -318,7 +314,24 @@ source_executable_hash() {
     sha256_file "$PRIMARY_APP/Contents/MacOS/$PRIMARY_EXECUTABLE"
 }
 
+# The health check is a long chain of boolean guards, and the bare failure
+# message used to give no hint which one refused. With DOPPEL_HEALTH_TRACE=1,
+# every evaluated check is xtraced (with line numbers) into the engine's state
+# directory, so the last line before `return 1` names the failing condition.
 instance_is_healthy() {
+    if [[ "${DOPPEL_HEALTH_TRACE:-0}" != "1" ]]; then
+        instance_is_healthy_checks "$@"
+        return
+    fi
+    (
+        exec 2>>"$STATE_ROOT/health-trace.log"
+        PS4='+health:%L: '
+        set -x
+        instance_is_healthy_checks "$@"
+    )
+}
+
+instance_is_healthy_checks() {
     local app="$1"
     local expected_version="$2"
     local expected_hash="$3"
@@ -389,9 +402,9 @@ patch_plist() {
         /usr/bin/plutil -replace CFBundleName -string "$DOPPEL_DISPLAY_NAME" "$info"
     fi
     /usr/bin/plutil -replace CFBundleExecutable -string "$PRIMARY_EXECUTABLE" "$info"
-    /usr/bin/plutil -remove CFBundleIconName "$info" 2>/dev/null || true
-    /usr/bin/plutil -remove NSDockTilePlugIn "$info" 2>/dev/null || true
-    /usr/bin/plutil -remove LSHasLocalizedDisplayName "$info" 2>/dev/null || true
+    /usr/bin/plutil -remove CFBundleIconName "$info" >/dev/null 2>&1 || true
+    /usr/bin/plutil -remove NSDockTilePlugIn "$info" >/dev/null 2>&1 || true
+    /usr/bin/plutil -remove LSHasLocalizedDisplayName "$info" >/dev/null 2>&1 || true
     /usr/bin/plutil -replace BundleSigningBaseName -string "${DOPPEL_SIGNING_BASE_NAME:-Doppel}" "$info"
     /usr/bin/plutil -replace CrProductDirName -string "$DOPPEL_BUNDLE_ID" "$info"
     if [[ "$DOPPEL_APP_KIND" == claude ]]; then
@@ -418,7 +431,7 @@ patch_plist() {
     /usr/bin/plutil -replace LSEnvironment.CODEX_SPARKLE_ENABLED -string "false" "$info"
     else
         /usr/bin/plutil -replace LSEnvironment.CLAUDE_CONFIG_DIR -string "$AGENT_HOME" "$info"
-        /usr/bin/plutil -remove CFBundleURLTypes.1 "$info" 2>/dev/null || true
+        /usr/bin/plutil -remove CFBundleURLTypes.1 "$info" >/dev/null 2>&1 || true
     fi
     # The packaged app otherwise hardcodes codex:// both when it creates an
     # OAuth callback and when it registers with Launch Services. The cloned
@@ -440,7 +453,7 @@ patch_plist() {
         /usr/bin/plutil -replace DoppelPinnedRequirement -string \
             "identifier \"$DOPPEL_BUNDLE_ID\" and certificate leaf H\"$SIGN_LEAF_SHA1\"" "$info"
     else
-        /usr/bin/plutil -remove DoppelPinnedRequirement "$info" 2>/dev/null || true
+        /usr/bin/plutil -remove DoppelPinnedRequirement "$info" >/dev/null 2>&1 || true
     fi
     /usr/bin/plutil -replace DoppelEngineVersion -string "$ENGINE_VERSION" "$info"
     /usr/bin/plutil -replace DoppelSourceBundleVersion -string "$version" "$info"
@@ -666,7 +679,7 @@ build_instance() {
     /usr/bin/codesign --verify --deep --strict "$target" >/dev/null 2>&1 || \
         fail_closed "The staged instance bundle failed signature verification."
     instance_is_healthy "$target" "$version" "$executable_hash" || \
-        fail_closed "The staged instance bundle failed its health check."
+        fail_closed "The staged instance bundle failed its health check. Re-run with DOPPEL_HEALTH_TRACE=1 to record a per-check trace in the engine log."
     log_message "Built and verified instance $version"
 }
 
@@ -928,8 +941,7 @@ profile_root_is_primary_default() {
     for candidate in "$HOME/Library/Application Support/Codex"; do
         [[ "$root" == "${candidate:A}" ]] && return 0
     done
-    product="$(/usr/bin/plutil -extract CFBundleName raw \
-        "$PRIMARY_APP/Contents/Info.plist" 2>/dev/null || true)"
+    product="$(plist_value "$PRIMARY_APP/Contents/Info.plist" CFBundleName || true)"
     if [[ -n "$product" ]]; then
         candidate="$HOME/Library/Application Support/$product"
         [[ "$root" == "${candidate:A}" ]] && return 0
@@ -1152,13 +1164,18 @@ launch_instance() {
     staging="$STATE_ROOT/Staging/$DOPPEL_DISPLAY_NAME.$version.$timestamp.$$.app"
     # A failed or interrupted build must not leave a 1.7GB copy behind. After a
     # successful install the path has been moved into place, so this is a no-op.
-    trap '/bin/rm -rf "$staging"' EXIT
+    # The path is held in a global because an EXIT trap runs after this
+    # function's locals are gone; referencing the local `staging` there only
+    # produced a `parameter not set` error under `set -u` and deleted nothing,
+    # so every failed build stranded its staged copy on disk.
+    DOPPEL_STAGING_CLEANUP="$staging"
+    trap '[[ -n "${DOPPEL_STAGING_CLEANUP:-}" ]] && /bin/rm -rf "$DOPPEL_STAGING_CLEANUP"' EXIT
     if [[ "${DOPPEL_INSTALL_ONLY:-0}" != "1" ]]; then
         # Keep the app directory macOS launched; stage on its filesystem so
         # replacing Contents cannot turn into a cross-volume copy and removal.
         staging_root="$(/usr/bin/mktemp -d "${app:h}/.doppel-rebuild.XXXXXXXX")" || \
             fail_closed "A staging directory beside the instance could not be created."
-        trap '/bin/rm -rf "$staging_root"' EXIT
+        DOPPEL_STAGING_CLEANUP="$staging_root"
         staging="$staging_root/${app:t}"
     fi
     build_instance "$staging" "$version" "$executable_hash"
