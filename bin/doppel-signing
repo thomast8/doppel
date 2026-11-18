@@ -28,9 +28,13 @@ die() { print -u2 -r -- "doppel-signing: $1"; exit 1 }
 # trusted chain, and a locally created self-signed certificate is untrusted by
 # design (trusting it would need an admin prompt). codesign signs with it
 # regardless, so the certificate's presence is the real test.
+#
+# `security` exits 44 when nothing matches. Under `set -e` with PIPE_FAIL that
+# would abort every caller on the one answer `status` and `setup` most need to
+# hear, so a failed lookup is read as "absent" rather than as an error.
 identity_sha1() {
     /usr/bin/security find-certificate -c "$IDENTITY_NAME" -Z "$KEYCHAIN" 2>/dev/null | \
-        /usr/bin/awk '/^SHA-1 hash:/ {print $3; exit}'
+        /usr/bin/awk '/^SHA-1 hash:/ {print $3; exit}' || true
 }
 
 cmd_status() {
