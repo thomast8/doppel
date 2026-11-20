@@ -6,6 +6,19 @@
         <description>Signed Doppel releases</description>
         <language>en</language>
         <item>
+            <title>2.3.2</title>
+            <pubDate>Fri, 20 Nov 2026 20:55:59 +0000</pubDate>
+            <link>https://github.com/thomast8/doppel</link>
+            <sparkle:version>47</sparkle:version>
+            <sparkle:shortVersionString>2.3.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Doppel 2.3.2
+
+Doppel can rebuild managed instances from Claude Desktop 6.28899.2. If Doppel previously reported that this Claude build was incompatible, open Doppel, choose **Check now**, then choose **Rebuild**.
+]]></description>
+            <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.3.2/Doppel-2.3.2-macOS.zip" length="8739355" type="application/octet-stream" sparkle:edSignature="GWDteJMqWdaH3fxIKr/HesLBJDupAKjDkKjBjuq809cjqAOiiQDNGajKNcQeJtxP1g3E9L3o3d/cqZ/s4LA9AQ=="/>
+        </item>
+        <item>
             <title>2.3.1</title>
             <pubDate>Thu, 12 Nov 2026 11:26:24 +0000</pubDate>
             <link>https://github.com/thomast8/doppel</link>
@@ -34,19 +47,6 @@ This release also fixes rebuilding instances from Claude Desktop 5.1231.2.
 - Tinted Claude icons now follow dark mode, with a dark tile and a tinted star. An existing Claude instance picks up the new icon the next time it is rebuilt.
 ]]></description>
             <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.3.0/Doppel-2.3.0-macOS.zip" length="8737221" type="application/octet-stream" sparkle:edSignature="0fMBq2db7VLzWQMqh3bzd+Nu3a4rz39qfoKi0oKILO8xYxFINK/WKsIHt7nBd2eiMU6oLqULBM8zOa2QcSlBBg=="/>
-        </item>
-        <item>
-            <title>2.2.1</title>
-            <pubDate>Fri, 06 Nov 2026 09:05:28 +0000</pubDate>
-            <link>https://github.com/thomast8/doppel</link>
-            <sparkle:version>44</sparkle:version>
-            <sparkle:shortVersionString>2.2.1</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <description sparkle:format="markdown"><![CDATA[# Doppel 2.2.1
-
-- The in-app browser works in your ChatGPT instances again. ChatGPT 26.1029 changed how its computer-use tool starts, and every browser request from an instance failed with "native pipe closed before response". Instances rebuild themselves with the fix the next time they open.
-]]></description>
-            <enclosure url="https://github.com/thomast8/doppel/releases/download/v2.2.1/Doppel-2.2.1-macOS.zip" length="8678821" type="application/octet-stream" sparkle:edSignature="IlOm71d4g1pN1CTRocQyOfiq5xg1fFKgfQFsiTVU9W/A5qkEoNZsjNIj5Uonheb6SV8ZujD85owPTGBdUlzCDg=="/>
         </item>
     </channel>
 </rss>
