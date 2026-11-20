@@ -914,7 +914,8 @@ CLAUDE_AUTH_MARKER = b't=globalThis.doppelClaude.prepareLogin(t);'
 CLAUDE_UPDATE_MARKER = b'(true/*Doppel: updates managed*/)'
 CLAUDE_UPDATE = re.compile(rb'(?<![\w$.])[\w$]+(?:\.[\w$]+)*\(\)\.autoUpdate\.disabled\b')
 # The legacy layout has 15 updater policy reads. Claude 5.1231.2 has 18.
-CLAUDE_UPDATE_COUNTS = (15, 18)
+# Claude 6.28899.2 adds an updater policy check before calling checkForUpdates.
+CLAUDE_UPDATE_COUNTS = (15, 18, 19)
 
 
 def verify_claude(path: Path) -> str:
