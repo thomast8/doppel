@@ -223,13 +223,21 @@ compile_helpers() {
     for pair in "launcher:doppel-launcher" "alert:doppel-alert" "url-handler:doppel-url-handler"; do
         src="$ENGINE_SRC/${pair%%:*}/main.m"
         bin="$BUILD_CACHE/${pair##*:}"
-        /usr/bin/clang -fobjc-arc -O2 -framework Cocoa -framework ApplicationServices \
-            -framework AVFoundation -framework UserNotifications -framework Security \
-            -framework CoreServices \
+        # A helper compiled without a deployment target inherits the build
+        # host's SDK minimum. The clone's main executable is doppel-launcher,
+        # and Launch Services reads its LC_BUILD_VERSION minos: one newer than
+        # the running macOS marks every clone launch-disabled and `open` fails
+        # with -10825. 13.0 matches the vendor app's own minimum, so a clone
+        # runs wherever the vendor app does.
+        /usr/bin/clang -fobjc-arc -O2 -mmacosx-version-min=13.0 \
+            -framework Cocoa -framework ApplicationServices \
+            -framework AVFoundation -framework UserNotifications \
+            -framework Security -framework CoreServices \
             -o "$bin" "$src" || \
             die "compiling ${pair##*:} failed"
     done
-    /usr/bin/swiftc -O "$ENGINE_SRC/icon/main.swift" -o "$BUILD_CACHE/doppel-icon" 2>/dev/null || \
+    /usr/bin/swiftc -O -target "$(uname -m)-apple-macos14.0" \
+        "$ENGINE_SRC/icon/main.swift" -o "$BUILD_CACHE/doppel-icon" 2>/dev/null || \
         die "compiling doppel-icon failed"
 }
 
@@ -586,7 +594,7 @@ primary_data_paths() {
     print -r -- "$HOME/.claude"
     print -r -- "$HOME/Library/Application Support/Claude"
     local product
-    product="$(/usr/bin/plutil -extract CFBundleName raw "$PRIMARY_APP/Contents/Info.plist" 2>/dev/null)" || product=""
+    product="$(plist_value "$PRIMARY_APP/Contents/Info.plist" CFBundleName)" || product=""
     if [[ -n "$product" ]]; then
         print -r -- "$HOME/Library/Application Support/$product"
         print -r -- "$HOME/Library/Caches/$product"
@@ -871,8 +879,7 @@ profile_root_is_primary_default() {
     for candidate in "$HOME/Library/Application Support/Codex"; do
         [[ "$root" == "${candidate:A}" ]] && return 0
     done
-    product="$(/usr/bin/plutil -extract CFBundleName raw \
-        "$PRIMARY_APP/Contents/Info.plist" 2>/dev/null || true)"
+    product="$(plist_value "$PRIMARY_APP/Contents/Info.plist" CFBundleName || true)"
     if [[ -n "$product" ]]; then
         candidate="$HOME/Library/Application Support/$product"
         [[ "$root" == "${candidate:A}" ]] && return 0
@@ -1113,8 +1120,7 @@ require_vendor_compatible_profile() {
         die "'$name' does not have absolute profile paths and cannot use the official engine"
     [[ -d "$app" ]] || \
         die "'$name' has no installed Doppel engine to establish profile compatibility; rebuild it before assigning the official engine"
-    source_build="$(/usr/bin/plutil -extract DoppelSourceBundleVersion raw \
-        "$app/Contents/Info.plist" 2>/dev/null || true)"
+    source_build="$(plist_value "$app/Contents/Info.plist" DoppelSourceBundleVersion || true)"
     official_build="$(primary_version)"
     [[ "$source_build" == "$official_build" && "$official_build" == <1-> ]] || \
         die "'$name' was built from ChatGPT ${source_build:-unknown}, but the official engine is $official_build. Rebuild the profile first so Electron never opens it with a mismatched version."
@@ -1125,10 +1131,8 @@ require_compatible_transparent_router_profile() {
     require_vendor_compatible_profile "$dir"
     app="$(app_path_for "$dir")"
     name="$(config_value "$dir" DOPPEL_DISPLAY_NAME)"
-    engine_version="$(/usr/bin/plutil -extract DoppelEngineVersion raw \
-        "$app/Contents/Info.plist" 2>/dev/null || true)"
-    recorded_router_hash="$(/usr/bin/plutil -extract DoppelRouterSHA256 raw \
-        "$app/Contents/Info.plist" 2>/dev/null || true)"
+    engine_version="$(plist_value "$app/Contents/Info.plist" DoppelEngineVersion || true)"
+    recorded_router_hash="$(plist_value "$app/Contents/Info.plist" DoppelRouterSHA256 || true)"
     actual_router_hash="$(/usr/bin/shasum -a 256 \
         "$app/Contents/Resources/Doppel/bin/doppel" 2>/dev/null | /usr/bin/awk '{print $1}')"
     [[ "$engine_version" == <1-> ]] && (( engine_version >= IAB_ROUTER_ENGINE_MIN )) && \
@@ -1148,8 +1152,7 @@ require_transparent_router_profile() {
     name="$(config_value "$dir" DOPPEL_DISPLAY_NAME)"
     expected_router_hash="$(/usr/bin/shasum -a 256 "$DOPPEL_CLI_PATH" 2>/dev/null | \
         /usr/bin/awk '{print $1}')"
-    recorded_router_hash="$(/usr/bin/plutil -extract DoppelRouterSHA256 raw \
-        "$app/Contents/Info.plist" 2>/dev/null || true)"
+    recorded_router_hash="$(plist_value "$app/Contents/Info.plist" DoppelRouterSHA256 || true)"
     [[ -n "$expected_router_hash" && "$recorded_router_hash" == "$expected_router_hash" ]] || \
         die "'$name' is not ready for transparent Official engine routing. Rebuild the profile before assigning or launching the official engine."
 }
@@ -2382,17 +2385,17 @@ prepare_rebuild_primary() {
 # MARK: - Primary-first coordinated updates
 
 primary_version() {
-    /usr/bin/plutil -extract CFBundleVersion raw "$PRIMARY_APP/Contents/Info.plist" 2>/dev/null || true
+    plist_value "$PRIMARY_APP/Contents/Info.plist" CFBundleVersion || true
 }
 
 primary_short_version() {
-    /usr/bin/plutil -extract CFBundleShortVersionString raw "$PRIMARY_APP/Contents/Info.plist" 2>/dev/null || true
+    plist_value "$PRIMARY_APP/Contents/Info.plist" CFBundleShortVersionString || true
 }
 
 # The vendor build a managed instance's app was cloned from. Empty when the app
 # is missing or predates the marker.
 instance_source_build() {
-    /usr/bin/plutil -extract DoppelSourceBundleVersion raw "$1/Contents/Info.plist" 2>/dev/null || true
+    plist_value "$1/Contents/Info.plist" DoppelSourceBundleVersion || true
 }
 
 # How many installed instances were built from a vendor build other than the one
@@ -2480,8 +2483,8 @@ validate_vendor_app() {
     local app="$1" expected_version="${2:-}" info actual_version
     info="$app/Contents/Info.plist"
     [[ -d "$app" && -f "$info" ]] || return 1
-    [[ "$(/usr/bin/plutil -extract CFBundleIdentifier raw "$info" 2>/dev/null)" == "$PRIMARY_BUNDLE_ID" ]] || return 1
-    actual_version="$(/usr/bin/plutil -extract CFBundleVersion raw "$info" 2>/dev/null)"
+    [[ "$(plist_value "$info" CFBundleIdentifier)" == "$PRIMARY_BUNDLE_ID" ]] || return 1
+    actual_version="$(plist_value "$info" CFBundleVersion || true)"
     if [[ "$DOPPEL_APP_KIND" == claude ]]; then
         [[ "$actual_version" =~ '^[0-9]+(\.[0-9]+){1,3}$' ]] || return 1
     else
@@ -2529,7 +2532,7 @@ prepared_update_app() {
 update_metadata_value() {
     local version="$1" key="$2" metadata
     metadata="$UPDATE_ROOT/Prepared/$version/update.plist"
-    /usr/bin/plutil -extract "$key" raw "$metadata" 2>/dev/null || true
+    plist_value "$metadata" "$key" || true
 }
 
 fetch_latest_claude_version() {
@@ -2861,9 +2864,9 @@ verify_managed_instance() {
     [[ -x "$app/Contents/MacOS/$PRIMARY_EXECUTABLE" && -f "$info" ]] || return 1
     [[ "$(instance_source_build "$app")" == "$expected_version" ]] || return 1
     if [[ "$DOPPEL_APP_KIND" == claude ]]; then
-        [[ -n "$(/usr/bin/plutil -extract LSEnvironment.CLAUDE_CONFIG_DIR raw "$info" 2>/dev/null)" ]] || return 1
+        [[ -n "$(plist_value "$info" LSEnvironment.CLAUDE_CONFIG_DIR)" ]] || return 1
     else
-        [[ "$(/usr/bin/plutil -extract LSEnvironment.CODEX_SPARKLE_ENABLED raw "$info" 2>/dev/null)" == "false" ]] || return 1
+        [[ "$(plist_value "$info" LSEnvironment.CODEX_SPARKLE_ENABLED)" == "false" ]] || return 1
     fi
     "$app/Contents/MacOS/$PRIMARY_EXECUTABLE" --doppel-verify >/dev/null 2>&1 || return 1
     return 0
@@ -3429,7 +3432,7 @@ permission_rows_for_dir() {
     [[ -d "$app" ]] || return 0
     name="$(config_value "$dir" DOPPEL_DISPLAY_NAME)"
     slug="${dir:t}"
-    engine="$(/usr/bin/plutil -extract DoppelEngineVersion raw "$app/Contents/Info.plist" 2>/dev/null || true)"
+    engine="$(plist_value "$app/Contents/Info.plist" DoppelEngineVersion || true)"
     # Engines before 22 signed the launcher without the vendor's device
     # entitlements, so its microphone and camera requests were silently denied
     # by tccd: no prompt, no System Settings row, status forever not-requested.
@@ -3518,7 +3521,7 @@ cmd_permissions_request() {
     dir="$(instance_dir_for "$name")"
     app="$(app_path_for "$dir")"
     [[ -d "$app" ]] || die "'$name' is not installed"
-    engine="$(/usr/bin/plutil -extract DoppelEngineVersion raw "$app/Contents/Info.plist" 2>/dev/null || true)"
+    engine="$(plist_value "$app/Contents/Info.plist" DoppelEngineVersion || true)"
     if [[ -z "$permission" ]]; then
         # The bulk request includes microphone and camera whenever they are
         # not-requested, and a pre-22 launcher has no device entitlements, so
@@ -3815,8 +3818,7 @@ native_tools_status() {
     if [[ "$command" == */Contents/Resources/codex_chronicle* ]]; then
         chronicle_state="running"
         chronicle_app="${command%%/Contents/Resources/codex_chronicle*}"
-        chronicle_host="$(/usr/bin/plutil -extract CFBundleDisplayName raw \
-            "$chronicle_app/Contents/Info.plist" 2>/dev/null || true)"
+        chronicle_host="$(plist_value "$chronicle_app/Contents/Info.plist" CFBundleDisplayName || true)"
         [[ -n "$chronicle_host" ]] || chronicle_host="${chronicle_app:t:r}"
     fi
 

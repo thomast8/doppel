@@ -8,6 +8,12 @@ test:
     python3 ./qa/claude-sessions.py
     ./qa/release-notes.zsh
 
+qa-plist:
+    ./qa/plist-value.zsh
+
+qa-helper-minos:
+    ./qa/helper-minos.zsh
+
 qa:
     ./qa/deep-link.zsh
     ./qa/e2e.zsh
