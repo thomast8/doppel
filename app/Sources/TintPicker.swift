@@ -103,7 +103,10 @@ private struct Swatch: View {
                             .shadow(radius: 1)
                     }
                 }
-                .frame(height: 26)
+                // Pinned on both axes to match OriginalSwatch above. The
+                // circle already draws at 26 either way; this keeps the
+                // button's hit area the same width as the shape.
+                .frame(width: 26, height: 26)
                 .padding(2)
                 .overlay {
                     if isSelected {
